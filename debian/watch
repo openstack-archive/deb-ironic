@@ -1,0 +1,2 @@
+version=3
+https://github.com/openstack/ironic/tags .*/v(\d[\d\.]+)\.tar\.gz

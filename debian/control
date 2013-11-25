@@ -1,0 +1,142 @@
+Source: ironic
+Section: net
+Priority: extra
+Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
+Uploaders: Julien Danjou <acid@debian.org>,
+           Thomas Goirand <zigo@debian.org>,
+           Mehdi Abaakouk <sileht@sileht.net>
+Build-Depends: debhelper (>= 9),
+               openstack-pkg-tools (>= 8~),
+               po-debconf,
+               python-all (>= 2.6.6-3~),
+               python-pbr (>= 0.5.21),
+               python-setuptools
+Build-Depends-Indep: python-amqplib,
+                     python-anyjson (>= 0.3.3),
+                     python-babel (>= 1.3),
+                     python-eventlet (>= 0.13.0),
+                     python-fixtures (>= 0.3.14),
+                     python-glanceclient (>= 1:0.10.0),
+                     python-greenlet (>= 0.3.2),
+                     python-iso8601 (>= 0.1.8),
+                     python-jinja2,
+                     python-json-patch (>= 1.1),
+                     python-keystoneclient (>= 1:0.4.1),
+                     python-kombu (>= 2.4.8),
+                     python-lxml,
+                     python-migrate,
+                     python-mock (>= 1.0),
+                     python-mysqldb,
+                     python-netaddr,
+                     python-neutronclient (>= 2.3.0),
+                     python-oslo.config,
+                     python-paramiko (>= 1.8.0),
+                     python-pecan,
+                     python-psycopg2,
+                     python-pyghmi,
+                     python-six (>= 1.4.1),
+                     python-sphinx,
+                     python-sphinxcontrib-pecanwsme,
+                     python-sqlalchemy,
+                     python-stevedore (>= 0.10),
+                     python-subunit,
+                     python-testtools (>= 0.9.32),
+                     python-webob (>= 1.2.3),
+                     python-wsme (>= 0.5b6),
+                     testrepository (>= 0.0.17),
+                     websockify (>= 0.5.1)
+Standards-Version: 3.9.4
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/ironic.git;a=summary
+Vcs-Git: git://anonscm.debian.org/openstack/ironic.git
+Homepage: http://github.com/openstack/ironic
+
+Package: python-ironic
+Architecture: all
+Section: python
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: python-amqplib,
+         python-anyjson (>= 0.3.3),
+         python-eventlet (>= 0.13.0),
+         python-glanceclient (>= 1:0.10.0),
+         python-greenlet (>= 0.3.2),
+         python-iso8601 (>= 0.1.8),
+         python-jinja2,
+         python-json-patch (>= 1.1),
+         python-keystoneclient (>= 1:0.4.1),
+         python-kombu (>= 2.4.8),
+         python-lxml,
+         python-migrate,
+         python-netaddr,
+         python-neutronclient (>= 2.3.0),
+         python-oslo.config,
+         python-paramiko (>= 1.8.0),
+         python-pecan,
+         python-pyghmi,
+         python-six (>= 1.4.1),
+         python-sqlalchemy,
+         python-stevedore (>= 0.10),
+         python-webob (>= 1.2.3),
+         python-wsme (>= 0.5b6),
+         websockify (>= 0.5.1)
+         ${misc:Depends},
+         ${python:Depends}
+Suggests: python-suds (>= 0.4.0)
+Conflicts: python-cjson
+Description: bare metal hypervisor API for OpenStack - Python lib
+ Ironic provision bare metal machines instead of virtual machines. It is a fork
+ of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
+ API and a set of plugins which interact with the bare metal hypervisors. By
+ default, it will use PXE and IPMI in concert to provision and turn on/off
+ machines, but Ironic also supports vendor-specific plugins which may implement
+ additional functionality.
+ .
+ This package provides the Ironic Python library.
+
+Package: ironic-common
+Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: adduser,
+         dbconfig-common,
+         python-ironic (= ${binary:Version}),
+         sqlite3,
+         ${misc:Depends},
+         ${python:Depends}
+Description: bare metal hypervisor API for OpenStack - common files
+ Ironic provision bare metal machines instead of virtual machines. It is a fork
+ of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
+ API and a set of plugins which interact with the bare metal hypervisors. By
+ default, it will use PXE and IPMI in concert to provision and turn on/off
+ machines, but Ironic also supports vendor-specific plugins which may implement
+ additional functionality.
+ .
+ This package provides the Ironic common files.
+
+Package: ironic-api
+Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: ironic-common, ${misc:Depends}, ${python:Depends}
+Description: bare metal hypervisor API for OpenStack - API server
+ Ironic provision bare metal machines instead of virtual machines. It is a fork
+ of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
+ API and a set of plugins which interact with the bare metal hypervisors. By
+ default, it will use PXE and IPMI in concert to provision and turn on/off
+ machines, but Ironic also supports vendor-specific plugins which may implement
+ additional functionality.
+ .
+ This package provides the Ironic API server. The ironic-api service provides a
+ RESTful API that supports JSON and XML.
+
+Package: ironic-conductor
+Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: ironic-common, ${misc:Depends}, ${python:Depends}
+Description: bare metal hypervisor API for OpenStack - conductor
+ Ironic provision bare metal machines instead of virtual machines. It is a fork
+ of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
+ API and a set of plugins which interact with the bare metal hypervisors. By
+ default, it will use PXE and IPMI in concert to provision and turn on/off
+ machines, but Ironic also supports vendor-specific plugins which may implement
+ additional functionality.
+ .
+ This package provides the Ironic Conductore service. It is used to shield
+ database access.

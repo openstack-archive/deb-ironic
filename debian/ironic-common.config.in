@@ -1,0 +1,14 @@
+#!/bin/sh
+
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONF=/etc/ironic/ironic.conf
+
+#PKGOS-INCLUDE#
+
+pkgos_var_user_group ironic
+pkgos_dbc_read_conf -pkg ironic-common ${CONF} database connection ironic $@
+
+exit 0

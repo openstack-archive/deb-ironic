@@ -1,0 +1,27 @@
+#!/bin/sh
+
+set -e
+
+if [ "${1}" = "purge" ] ; then
+	if [ -r /usr/share/debconf/confmodule ] ; then
+		. /usr/share/debconf/confmodule
+		db_get ironic/configure_db || true
+		if [ "$RET" = "true" ] ; then
+			if [ -f /usr/share/dbconfig-common/dpkg/postrm ] ; then
+				. /usr/share/dbconfig-common/dpkg/postrm
+				dbc_go ironic-common $@
+			else
+				rm -f /etc/dbconfig-common/ironic-common.conf
+				if which ucf >/dev/null 2>&1; then
+					ucf --purge /etc/dbconfig-common/ironic-common.conf
+					ucfr --purge nova-common /etc/dbconfig-common/ironic-common.conf
+				fi
+			fi
+		fi
+	fi
+	rm -rf /var/log/ironic
+	rm -f /etc/ironic/ironic.conf
+	[ -d /etc/ironic ] && rmdir --ignore-fail-on-non-empty /etc/ironic || true
+fi
+
+#DEBHELPER#

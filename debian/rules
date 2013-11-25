@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+
+include /usr/share/openstack-pkg-tools/pkgos.make
+
+export OSLO_PACKAGE_VERSION=$(VERSION)
+
+%:
+	dh $@ --with python2 --buildsystem=python_distutils
+
+override_dh_auto_clean:
+	dh_auto_clean -O--buildsystem=python_distutils
+	rm -f debian/ironic-common.config debian/ironic-common.postinst
+
+override_dh_auto_build:
+	dh_auto_build
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-common.config
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-common.postinst
+#	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-api.config
+#	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-api.postinst
+
+override_dh_auto_install:
+	dh_auto_install -O--buildsystem=python_distutils
+	install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
