@@ -101,6 +101,7 @@ Depends: adduser,
          python-ironic (= ${binary:Version}),
          sqlite3,
          ${misc:Depends},
+         ${ostack-lsb-base},
          ${python:Depends}
 Description: bare metal hypervisor API for OpenStack - common files
  Ironic provision bare metal machines instead of virtual machines. It is a fork
@@ -115,7 +116,7 @@ Description: bare metal hypervisor API for OpenStack - common files
 Package: ironic-api
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ironic-common, ${misc:Depends}, ${python:Depends}
+Depends: ironic-common, ${misc:Depends}, ${ostack-lsb-base}, ${python:Depends}
 Description: bare metal hypervisor API for OpenStack - API server
  Ironic provision bare metal machines instead of virtual machines. It is a fork
  of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
@@ -130,7 +131,7 @@ Description: bare metal hypervisor API for OpenStack - API server
 Package: ironic-conductor
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: ironic-common, ${misc:Depends}, ${python:Depends}
+Depends: ironic-common, ${misc:Depends}, ${ostack-lsb-base}, ${python:Depends}
 Description: bare metal hypervisor API for OpenStack - conductor
  Ironic provision bare metal machines instead of virtual machines. It is a fork
  of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
