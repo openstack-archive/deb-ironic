@@ -14,6 +14,7 @@ Build-Depends: debhelper (>= 9),
 Build-Depends-Indep: python-amqplib,
                      python-anyjson (>= 0.3.3),
                      python-babel (>= 1.3),
+                     python-coverage (>= 3.6),
                      python-eventlet (>= 0.13.0),
                      python-fixtures (>= 0.3.14),
                      python-glanceclient (>= 1:0.10.0),
@@ -24,7 +25,7 @@ Build-Depends-Indep: python-amqplib,
                      python-keystoneclient (>= 1:0.4.1),
                      python-kombu (>= 2.4.8),
                      python-lxml,
-                     python-migrate,
+                     python-migrate (>= 0.8.2),
                      python-mock (>= 1.0),
                      python-mysqldb,
                      python-netaddr,
@@ -65,7 +66,7 @@ Depends: python-amqplib,
          python-keystoneclient (>= 1:0.4.1),
          python-kombu (>= 2.4.8),
          python-lxml,
-         python-migrate,
+         python-migrate (>= 0.8.2),
          python-netaddr,
          python-neutronclient (>= 2.3.0),
          python-oslo.config,
@@ -140,3 +141,17 @@ Description: bare metal hypervisor API for OpenStack - conductor
  .
  This package provides the Ironic Conductore service. It is used to shield
  database access.
+
+Package: ironic-doc
+Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: ${misc:Depends}, ${sphinxdoc:Depends}
+Description: bare metal hypervisor API for OpenStack - doc
+ Ironic provision bare metal machines instead of virtual machines. It is a fork
+ of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
+ API and a set of plugins which interact with the bare metal hypervisors. By
+ default, it will use PXE and IPMI in concert to provision and turn on/off
+ machines, but Ironic also supports vendor-specific plugins which may implement
+ additional functionality.
+ .
+ This package provides the Ironic documentation.

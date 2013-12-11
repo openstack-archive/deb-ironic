@@ -5,11 +5,12 @@ include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
-	dh $@ --with python2 --buildsystem=python_distutils
+	dh $@ --with python2,sphinxdoc --buildsystem=python_distutils
 
 override_dh_auto_clean:
 	dh_auto_clean -O--buildsystem=python_distutils
 	rm -f debian/ironic-common.config debian/ironic-common.postinst
+	rm -rf doc/build
 
 override_dh_auto_build:
 	dh_auto_build
@@ -21,3 +22,15 @@ override_dh_auto_build:
 override_dh_auto_install:
 	dh_auto_install -O--buildsystem=python_distutils
 	install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
+
+override_dh_installdocs:
+	PYTHONPATH=$(CURDIR) sphinx-build doc/source doc/build
+	dh_installdocs -O--buildsystem=python_distutils
+	mkdir -p debian/ironic-doc/usr/share/doc/ironic-doc/html
+	cp -auxf doc/build/* debian/ironic-doc/usr/share/doc/ironic-doc/html
+
+# This is a workaround to avoid FTBFS, though a real fix should be found.
+override_dh_sphinxdoc:
+	mkdir -p $(CURDIR)/debian/ironic-doc/usr/share/doc/ironic-doc/html/_static
+	touch $(CURDIR)/debian/ironic-doc/usr/share/doc/ironic-doc/html/_static/toggle.js
+	dh_sphinxdoc -O--buildsystem=python_distutils
