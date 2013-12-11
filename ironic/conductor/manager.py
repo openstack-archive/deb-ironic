@@ -44,6 +44,7 @@ from ironic.common import exception
 from ironic.common import service
 from ironic.common import states
 from ironic.conductor import task_manager
+from ironic.conductor import utils
 from ironic.db import api as dbapi
 from ironic.objects import base as objects_base
 from ironic.openstack.common import excutils
@@ -54,10 +55,25 @@ MANAGER_TOPIC = 'ironic.conductor_manager'
 
 LOG = log.getLogger(__name__)
 
-cfg.CONF.register_opt(cfg.StrOpt('api_url',
-                      default=None,
-                      help='Url of Ironic API service. If not set Ironic can '
-                      'get current value from Keystone service catalog.'))
+conductor_opts = [
+        cfg.StrOpt('api_url',
+                   default=None,
+                   help=('Url of Ironic API service. If not set Ironic can '
+                         'get current value from Keystone service catalog.')),
+        cfg.IntOpt('heartbeat_interval',
+                   default=10,
+                   help='Seconds between conductor heart beats.'),
+        cfg.IntOpt('heartbeat_timeout',
+                   default=60,
+                   help='Maximum time since the last check-in of a conductor'),
+        cfg.IntOpt('sync_power_state_interval',
+                   default=60,
+                   help='Interval between syncing the node power state to the '
+                        'database, in seconds.'),
+]
+
+CONF = cfg.CONF
+CONF.register_opts(conductor_opts, 'conductor')
 
 
 class ConductorManager(service.PeriodicService):
@@ -138,7 +154,7 @@ class ConductorManager(service.PeriodicService):
             if 'instance_uuid' in delta:
                 task.driver.power.validate(node_obj)
                 node_obj['power_state'] = \
-                        task.driver.power.get_power_state(task, node_id)
+                        task.driver.power.get_power_state(task, node_obj)
 
                 if node_obj['power_state'] != states.POWER_OFF:
                     raise exception.NodeInWrongPowerState(
@@ -172,57 +188,7 @@ class ConductorManager(service.PeriodicService):
                     % {'node': node_id, 'state': new_state})
 
         with task_manager.acquire(context, node_id, shared=False) as task:
-            node = task.node
-            try:
-                task.driver.power.validate(node)
-                curr_state = task.driver.power.get_power_state(task, node)
-            except Exception as e:
-                with excutils.save_and_reraise_exception():
-                    node['last_error'] = \
-                        _("Failed to change power state to '%(target)s'. "
-                          "Error: %(error)s") % {
-                            'target': new_state, 'error': e}
-                    node.save(context)
-
-            if curr_state == new_state:
-                # Neither the ironic service nor the hardware has erred. The
-                # node is, for some reason, already in the requested state,
-                # though we don't know why. eg, perhaps the user previously
-                # requested the node POWER_ON, the network delayed those IPMI
-                # packets, and they are trying again -- but the node finally
-                # responds to the first request, and so the second request
-                # gets to this check and stops.
-                # This isn't an error, so we'll clear last_error field
-                # (from previous operation), log a warning, and return.
-                node['last_error'] = None
-                node.save(context)
-                LOG.warn(_("Not going to change_node_power_state because "
-                           "current state = requested state = '%(state)s'.")
-                           % {'state': curr_state})
-                return
-
-            # Set the target_power_state and clear any last_error, since we're
-            # starting a new operation. This will expose to other processes
-            # and clients that work is in progress.
-            node['target_power_state'] = new_state
-            node['last_error'] = None
-            node.save(context)
-
-            # take power action
-            try:
-                task.driver.power.set_power_state(task, node, new_state)
-            except Exception as e:
-                with excutils.save_and_reraise_exception():
-                    node['last_error'] = \
-                        _("Failed to change power state to '%(target)s'. "
-                          "Error: %(error)s") % {
-                            'target': new_state, 'error': e}
-            else:
-                # success!
-                node['power_state'] = new_state
-            finally:
-                node['target_power_state'] = states.NOSTATE
-                node.save(context)
+            utils.node_power_action(task, task.node, new_state)
 
     # NOTE(deva): There is a race condition in the RPC API for vendor_passthru.
     # Between the validate_vendor_action and do_vendor_action calls, it's
@@ -359,6 +325,36 @@ class ConductorManager(service.PeriodicService):
             finally:
                 node.save(context)
 
-    @periodic_task.periodic_task
+    @periodic_task.periodic_task(spacing=CONF.conductor.heartbeat_interval)
     def _conductor_service_record_keepalive(self, context):
         self.dbapi.touch_conductor(self.host)
+
+    @periodic_task.periodic_task(
+            spacing=CONF.conductor.sync_power_state_interval)
+    def _sync_power_states(self, context):
+        # TODO(deva): add filter by conductor<->instance mapping
+        filters = {'reserved': False}
+        node_list = self.dbapi.get_nodeinfo_list(filters=filters)
+        for node_id, in node_list:
+            try:
+                with task_manager.acquire(context, node_id) as task:
+                    node = task.node
+                    power_state = task.driver.power.get_power_state(task, node)
+                    if power_state != node['power_state']:
+                        # NOTE(deva): don't log a warning the first time we
+                        #             sync a node's power state
+                        if node['power_state'] is not None:
+                            LOG.warning(_("During sync_power_state, node "
+                                "%(node)s out of sync. Expected: %(old)s. "
+                                "Actual: %(new)s. Updating DB.") %
+                                {'node': node['uuid'],
+                                 'old': node['power_state'],
+                                 'new': power_state})
+                        node['power_state'] = power_state
+                        node.save(context)
+
+            except (exception.NodeLocked, exception.NodeNotFound):
+                # NOTE(deva): if an instance is deleted during sync,
+                #             or locked by another process,
+                #             silently ignore it and continue
+                continue

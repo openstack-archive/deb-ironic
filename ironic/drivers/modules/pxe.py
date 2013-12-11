@@ -32,6 +32,7 @@ from ironic.common import keystone
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
+from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
 from ironic.openstack.common import context
@@ -58,6 +59,11 @@ pxe_opts = [
     cfg.IntOpt('pxe_deploy_timeout',
                 help='Timeout for PXE deployments. Default: 0 (unlimited)',
                 default=0),
+    # TODO(sjing): when adding neutron-port configuration, use this option
+    # instead of assuming tftp server is on $my_ip
+    cfg.StrOpt('tftp_server',
+               default='$my_ip',
+               help='IP address of Ironic compute node\'s tftp server'),
     cfg.StrOpt('tftp_root',
                default='/tftpboot',
                help='Ironic compute node\'s tftp root path'),
@@ -141,7 +147,7 @@ def _build_pxe_config(node, pxe_info):
     """
     LOG.debug(_("Building PXE config for deployment %s.") % node['id'])
 
-    ironic_api = CONF.api_url or keystone.get_service_url()
+    ironic_api = CONF.conductor.api_url or keystone.get_service_url()
 
     deploy_key = utils.random_alnum(32)
     ctx = context.get_admin_context()
@@ -461,6 +467,8 @@ class PXEDeploy(base.DeployInterface):
         _create_pxe_config(task, node, pxe_info)
         _cache_images(node, pxe_info)
 
+        manager_utils.node_power_action(task, node, states.REBOOT)
+
         return states.DEPLOYING
 
     @task_manager.require_exclusive_lock
@@ -495,6 +503,8 @@ class PXEDeploy(base.DeployInterface):
                 os.path.join(CONF.pxe.tftp_root, node['instance_uuid']))
 
         _destroy_images(d_info)
+
+        manager_utils.node_power_action(task, node, states.POWER_OFF)
 
         return states.DELETED
 

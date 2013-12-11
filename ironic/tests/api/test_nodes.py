@@ -16,15 +16,18 @@
 Tests for the API /nodes/ methods.
 """
 
+import datetime
+
 import mock
 from testtools.matchers import HasLength
 import webtest.app
 
 from ironic.common import exception
 from ironic.common import states
+from ironic.common import utils
 from ironic.conductor import rpcapi
 from ironic import objects
-from ironic.openstack.common import uuidutils
+from ironic.openstack.common import timeutils
 from ironic.tests.api import base
 from ironic.tests.db import utils as dbutils
 
@@ -39,19 +42,19 @@ class TestListNodes(base.FunctionalTest):
     def _create_association_test_nodes(self):
         #create some unassociated nodes
         unassociated_nodes = []
-        for id in xrange(3):
+        for id in range(3):
             ndict = dbutils.get_test_node(id=id,
-                                          uuid=uuidutils.generate_uuid())
+                                          uuid=utils.generate_uuid())
             node = self.dbapi.create_node(ndict)
             unassociated_nodes.append(node['uuid'])
 
         #created some associated nodes
         associated_nodes = []
-        for id in xrange(3, 7):
+        for id in range(3, 7):
             ndict = dbutils.get_test_node(
                         id=id,
-                        uuid=uuidutils.generate_uuid(),
-                        instance_uuid=uuidutils.generate_uuid())
+                        uuid=utils.generate_uuid(),
+                        instance_uuid=utils.generate_uuid())
             node = self.dbapi.create_node(ndict)
             associated_nodes.append(node['uuid'])
         return {'associated': associated_nodes,
@@ -92,9 +95,9 @@ class TestListNodes(base.FunctionalTest):
 
     def test_many(self):
         nodes = []
-        for id in xrange(5):
+        for id in range(5):
             ndict = dbutils.get_test_node(id=id,
-                                          uuid=uuidutils.generate_uuid())
+                                          uuid=utils.generate_uuid())
             node = self.dbapi.create_node(ndict)
             nodes.append(node['uuid'])
         data = self.get_json('/nodes')
@@ -104,7 +107,7 @@ class TestListNodes(base.FunctionalTest):
         self.assertEqual(sorted(nodes), sorted(uuids))
 
     def test_links(self):
-        uuid = uuidutils.generate_uuid()
+        uuid = utils.generate_uuid()
         ndict = dbutils.get_test_node(id=1, uuid=uuid)
         self.dbapi.create_node(ndict)
         data = self.get_json('/nodes/1')
@@ -116,9 +119,9 @@ class TestListNodes(base.FunctionalTest):
 
     def test_collection_links(self):
         nodes = []
-        for id in xrange(5):
+        for id in range(5):
             ndict = dbutils.get_test_node(id=id,
-                                          uuid=uuidutils.generate_uuid())
+                                          uuid=utils.generate_uuid())
             node = self.dbapi.create_node(ndict)
             nodes.append(node['uuid'])
         data = self.get_json('/nodes/?limit=3')
@@ -138,9 +141,10 @@ class TestListNodes(base.FunctionalTest):
         ndict = dbutils.get_test_node()
         self.dbapi.create_node(ndict)
 
-        for id in xrange(2):
+        for id in range(2):
             pdict = dbutils.get_test_port(id=id, node_id=ndict['id'],
-                                          uuid=uuidutils.generate_uuid())
+                                          uuid=utils.generate_uuid(),
+                                          address='52:54:00:cf:2d:3%s' % id)
             self.dbapi.create_port(pdict)
 
         data = self.get_json('/nodes/%s/ports' % ndict['uuid'])
@@ -200,8 +204,8 @@ class TestListNodes(base.FunctionalTest):
         # in the available list.
 
     def test_node_by_instance_uuid(self):
-        ndict = dbutils.get_test_node(uuid=uuidutils.generate_uuid(),
-                                      instance_uuid=uuidutils.generate_uuid())
+        ndict = dbutils.get_test_node(uuid=utils.generate_uuid(),
+                                      instance_uuid=utils.generate_uuid())
         node = self.dbapi.create_node(ndict)
         instance_uuid = node['instance_uuid']
 
@@ -212,10 +216,10 @@ class TestListNodes(base.FunctionalTest):
                          data['nodes'][0]["instance_uuid"])
 
     def test_node_by_instance_uuid_wrong_uuid(self):
-        ndict = dbutils.get_test_node(uuid=uuidutils.generate_uuid(),
-                                      instance_uuid=uuidutils.generate_uuid())
+        ndict = dbutils.get_test_node(uuid=utils.generate_uuid(),
+                                      instance_uuid=utils.generate_uuid())
         self.dbapi.create_node(ndict)
-        wrong_uuid = uuidutils.generate_uuid()
+        wrong_uuid = utils.generate_uuid()
 
         data = self.get_json('/nodes?instance_uuid=%s' % wrong_uuid)
 
@@ -288,8 +292,8 @@ class TestListNodes(base.FunctionalTest):
         self.assertIn('associated=true', data['next'])
 
     def test_detail_with_instance_uuid(self):
-        ndict = dbutils.get_test_node(uuid=uuidutils.generate_uuid(),
-                                      instance_uuid=uuidutils.generate_uuid())
+        ndict = dbutils.get_test_node(uuid=utils.generate_uuid(),
+                                      instance_uuid=utils.generate_uuid())
         node = self.dbapi.create_node(ndict)
         instance_uuid = node['instance_uuid']
 
@@ -321,14 +325,16 @@ class TestPatch(base.FunctionalTest):
 
     def test_update_ok(self):
         self.mock_update_node.return_value = self.node
-
+        self.mock_update_node.return_value.updated_at = \
+                                   "2013-12-03T06:20:41.184720+00:00"
         response = self.patch_json('/nodes/%s' % self.node['uuid'],
                                    [{'path': '/instance_uuid',
                                      'value': 'fake instance uuid',
                                      'op': 'replace'}])
         self.assertEqual(response.content_type, 'application/json')
         self.assertEqual(response.status_code, 200)
-
+        self.assertEqual(self.mock_update_node.return_value.updated_at,
+                         timeutils.parse_isotime(response.json['updated_at']))
         self.mock_update_node.assert_called_once_with(mock.ANY, mock.ANY)
 
     def test_update_state(self):
@@ -403,7 +409,7 @@ class TestPatch(base.FunctionalTest):
                           [{'path': '/extra/non-existent', 'op': 'remove'}])
 
     def test_update_state_in_progress(self):
-        ndict = dbutils.get_test_node(id=99, uuid=uuidutils.generate_uuid(),
+        ndict = dbutils.get_test_node(id=99, uuid=utils.generate_uuid(),
                                       target_power_state=states.POWER_OFF)
         node = self.dbapi.create_node(ndict)
         self.assertRaises(webtest.app.AppError, self.patch_json,
@@ -434,12 +440,19 @@ class TestPost(base.FunctionalTest):
         super(TestPost, self).setUp()
         cdict = dbutils.get_test_chassis()
         self.chassis = self.dbapi.create_chassis(cdict)
+        self.addCleanup(timeutils.clear_time_override)
 
     def test_create_node(self):
         ndict = dbutils.get_test_node()
+        t1 = datetime.datetime(2000, 1, 1, 0, 0)
+        timeutils.set_time_override(t1)
         self.post_json('/nodes', ndict)
         result = self.get_json('/nodes/%s' % ndict['uuid'])
         self.assertEqual(ndict['uuid'], result['uuid'])
+        self.assertFalse(result['updated_at'])
+        return_created_at = timeutils.parse_isotime(
+                result['created_at']).replace(tzinfo=None)
+        self.assertEqual(t1, return_created_at)
 
     def test_create_node_valid_extra(self):
         ndict = dbutils.get_test_node(extra={'foo': 123})
@@ -494,7 +507,8 @@ class TestPost(base.FunctionalTest):
     def test_post_ports_subresource(self):
         ndict = dbutils.get_test_node()
         self.post_json('/nodes', ndict)
-        pdict = dbutils.get_test_port()
+        pdict = dbutils.get_test_port(node_id=None)
+        pdict['node_uuid'] = ndict['uuid']
         response = self.post_json('/nodes/ports', pdict,
                                   expect_errors=True)
         self.assertEqual(response.status_int, 403)

@@ -20,8 +20,9 @@
 import six
 
 from ironic.common import exception
+from ironic.common import utils as ironic_utils
 from ironic.db import api as dbapi
-from ironic.openstack.common import uuidutils
+
 from ironic.tests.db import base
 from ironic.tests.db import utils
 
@@ -49,8 +50,9 @@ class DbPortTestCase(base.DbTestCase):
 
     def test_get_port_list(self):
         uuids = []
-        for i in xrange(1, 6):
-            n = utils.get_test_port(id=i, uuid=uuidutils.generate_uuid())
+        for i in range(1, 6):
+            n = utils.get_test_port(id=i, uuid=ironic_utils.generate_uuid(),
+                                    address='52:54:00:cf:2d:3%s' % i)
             self.dbapi.create_port(n)
             uuids.append(six.text_type(n['uuid']))
         res = self.dbapi.get_port_list()

@@ -34,7 +34,6 @@ from ironic.openstack.common.db.sqlalchemy import session as db_session
 from ironic.openstack.common.db.sqlalchemy import utils as db_utils
 from ironic.openstack.common import log
 from ironic.openstack.common import timeutils
-from ironic.openstack.common import uuidutils
 
 CONF = cfg.CONF
 CONF.import_opt('connection',
@@ -75,7 +74,7 @@ def add_identity_filter(query, value):
     """
     if utils.is_int_like(value):
         return query.filter_by(id=value)
-    elif uuidutils.is_uuid_like(value):
+    elif utils.is_uuid_like(value):
         return query.filter_by(uuid=value)
     else:
         raise exception.InvalidIdentity(identity=value)
@@ -97,7 +96,7 @@ def add_filter_by_many_identities(query, model, values):
     value = values[0]
     if utils.is_int_like(value):
         return query.filter(getattr(model, 'id').in_(values)), 'id'
-    elif uuidutils.is_uuid_like(value):
+    elif utils.is_uuid_like(value):
         return query.filter(getattr(model, 'uuid').in_(values)), 'uuid'
     else:
         raise exception.InvalidIdentity(identity=value)
@@ -179,9 +178,32 @@ class Connection(api.Connection):
     def __init__(self):
         pass
 
-    @objects.objectify(objects.Node)
-    def get_nodes(self, columns):
-        pass
+    def get_nodeinfo_list(self, columns=None, filters=None, limit=None,
+                          marker=None, sort_key=None, sort_dir=None):
+        # list-ify columns and filters default values because it is bad form
+        # to include a mutable list in function definitions.
+        if filters is None:
+            filters = []
+        if columns is None:
+            columns = [models.Node.id]
+        else:
+            columns = [getattr(models.Node, c) for c in columns]
+
+        query = model_query(*columns, base_model=models.Node)
+        if 'associated' in filters:
+            if filters['associated']:
+                query = query.filter(models.Node.instance_uuid != None)
+            else:
+                query = query.filter(models.Node.instance_uuid == None)
+        if 'reserved' in filters:
+            if filters['reserved']:
+                query = query.filter(models.Node.reservation != None)
+            else:
+                query = query.filter(models.Node.reservation == None)
+        if 'driver' in filters:
+            query = query.filter(models.Node.driver == filters['driver'])
+        return _paginate_query(models.Node, limit, marker,
+                               sort_key, sort_dir, query)
 
     @objects.objectify(objects.Node)
     def get_node_list(self, limit=None, marker=None,
@@ -259,7 +281,7 @@ class Connection(api.Connection):
     def create_node(self, values):
         # ensure defaults are present for new nodes
         if not values.get('uuid'):
-            values['uuid'] = uuidutils.generate_uuid()
+            values['uuid'] = utils.generate_uuid()
         if not values.get('power_state'):
             values['power_state'] = states.NOSTATE
         if not values.get('provision_state'):
@@ -290,7 +312,7 @@ class Connection(api.Connection):
 
     @objects.objectify(objects.Node)
     def get_node_by_instance(self, instance):
-        if not uuidutils.is_uuid_like(instance):
+        if not utils.is_uuid_like(instance):
             raise exception.InvalidUUID(uuid=instance)
 
         query = model_query(models.Node).\
@@ -321,7 +343,7 @@ class Connection(api.Connection):
 
             # Get node ID, if an UUID was supplied. The ID is
             # required for deleting all ports, attached to the node.
-            if uuidutils.is_uuid_like(node_id):
+            if utils.is_uuid_like(node_id):
                 node_id = node_ref['id']
 
             port_query = model_query(models.Port, session=session)
@@ -378,7 +400,7 @@ class Connection(api.Connection):
     @objects.objectify(objects.Port)
     def create_port(self, values):
         if not values.get('uuid'):
-            values['uuid'] = uuidutils.generate_uuid()
+            values['uuid'] = utils.generate_uuid()
         if not values.get('extra'):
             values['extra'] = '{}'
         port = models.Port()
@@ -435,7 +457,7 @@ class Connection(api.Connection):
     @objects.objectify(objects.Chassis)
     def create_chassis(self, values):
         if not values.get('uuid'):
-            values['uuid'] = uuidutils.generate_uuid()
+            values['uuid'] = utils.generate_uuid()
         if not values.get('extra'):
             values['extra'] = '{}'
         chassis = models.Chassis()

@@ -21,6 +21,7 @@ import mock
 import os
 import tempfile
 
+from ironic.common import exception
 from ironic.drivers.modules import deploy_utils as utils
 from ironic.tests import base as tests_base
 
@@ -83,6 +84,8 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                      'notify']
         patch_list = [mock.patch.object(utils, name) for name in name_list]
         mock_list = [patcher.start() for patcher in patch_list]
+        for patcher in patch_list:
+            self.addCleanup(patcher.stop)
 
         parent_mock = mock.MagicMock()
         for mocker, name in zip(mock_list, name_list):
@@ -113,9 +116,6 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         self.assertEqual(calls_expected, parent_mock.mock_calls)
 
-        for patcher in patch_list:
-            patcher.stop()
-
     def test_always_logout_iscsi(self):
         """logout_iscsi() must be called once login_iscsi() is called."""
         address = '127.0.0.1'
@@ -136,6 +136,8 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                      'logout_iscsi', 'work_on_disk']
         patch_list = [mock.patch.object(utils, name) for name in name_list]
         mock_list = [patcher.start() for patcher in patch_list]
+        for patcher in patch_list:
+            self.addCleanup(patcher.stop)
 
         parent_mock = mock.MagicMock()
         for mocker, name in zip(mock_list, name_list):
@@ -159,9 +161,6 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         self.assertEqual(calls_expected, parent_mock.mock_calls)
 
-        for patcher in patch_list:
-            patcher.stop()
-
 
 class SwitchPxeConfigTestCase(tests_base.TestCase):
     def setUp(self):
@@ -169,11 +168,7 @@ class SwitchPxeConfigTestCase(tests_base.TestCase):
         (fd, self.fname) = tempfile.mkstemp()
         os.write(fd, _PXECONF_DEPLOY)
         os.close(fd)
-
-        def cleanup():
-            os.unlink(self.fname)
-
-        self.addCleanup(cleanup)
+        self.addCleanup(os.unlink, self.fname)
 
     def test_switch_pxe_config(self):
         utils.switch_pxe_config(self.fname,
@@ -205,3 +200,51 @@ class OtherFunctionTestCase(tests_base.TestCase):
         self.assertEqual(utils.get_image_mb('x'), 1)
         size = mb + 1
         self.assertEqual(utils.get_image_mb('x'), 2)
+
+
+class WorkOnDiskTestCase(tests_base.TestCase):
+
+    def setUp(self):
+        super(WorkOnDiskTestCase, self).setUp()
+        self.image_path = '/tmp/xyz/image'
+        self.root_mb = 128
+        self.swap_mb = 64
+        self.dev = '/dev/fake'
+        self.root_part = '/dev/fake-part1'
+        self.swap_part = '/dev/fake-part2'
+
+        self.mock_ibd = mock.patch.object(utils, 'is_block_device').start()
+        self.mock_mp = mock.patch.object(utils, 'make_partitions').start()
+        self.addCleanup(self.mock_ibd.stop)
+        self.addCleanup(self.mock_mp.stop)
+
+    def test_no_parent_device(self):
+        self.mock_ibd.return_value = False
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils.work_on_disk, self.dev, self.root_mb,
+                          self.swap_mb, self.image_path)
+        self.mock_ibd.assert_called_once_with(self.dev)
+        self.mock_mp.assert_not_called()
+
+    def test_no_root_partition(self):
+        self.mock_ibd.side_effect = [True, False]
+        calls = [mock.call(self.dev),
+                 mock.call(self.root_part)]
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils.work_on_disk, self.dev, self.root_mb,
+                          self.swap_mb, self.image_path)
+        self.assertEqual(self.mock_ibd.call_args_list, calls)
+        self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
+                                             self.swap_mb)
+
+    def test_no_swap_partition(self):
+        self.mock_ibd.side_effect = [True, True, False]
+        calls = [mock.call(self.dev),
+                 mock.call(self.root_part),
+                 mock.call(self.swap_part)]
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils.work_on_disk, self.dev, self.root_mb,
+                          self.swap_mb, self.image_path)
+        self.assertEqual(self.mock_ibd.call_args_list, calls)
+        self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
+                                             self.swap_mb)

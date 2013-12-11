@@ -22,13 +22,14 @@ import os
 import os.path
 import StringIO
 import tempfile
+import uuid
 
 import mock
 import netaddr
 from oslo.config import cfg
 
-from ironic.common import exception
 from ironic.common import utils
+from ironic.openstack.common import processutils
 from ironic.tests import base
 
 CONF = cfg.CONF
@@ -96,7 +97,7 @@ exit 1
 ''')
             fp.close()
             os.chmod(tmpfilename, 0o755)
-            self.assertRaises(exception.ProcessExecutionError,
+            self.assertRaises(processutils.ProcessExecutionError,
                               utils.execute,
                               tmpfilename, tmpfilename2, attempts=10,
                               process_input='foo',
@@ -115,14 +116,14 @@ exit 1
             os.unlink(tmpfilename2)
 
     def test_unknown_kwargs_raises_error(self):
-        self.assertRaises(exception.IronicException,
+        self.assertRaises(processutils.UnknownArgumentError,
                           utils.execute,
                           '/usr/bin/env', 'true',
                           this_is_not_a_valid_kwarg=True)
 
     def test_check_exit_code_boolean(self):
         utils.execute('/usr/bin/env', 'false', check_exit_code=False)
-        self.assertRaises(exception.ProcessExecutionError,
+        self.assertRaises(processutils.ProcessExecutionError,
                           utils.execute,
                           '/usr/bin/env', 'false', check_exit_code=True)
 
@@ -369,3 +370,22 @@ class IntLikeTestCase(base.TestCase):
         self.assertFalse(
             utils.is_int_like("0cc3346e-9fef-4445-abe6-5d2b2690ec64"))
         self.assertFalse(utils.is_int_like("a1"))
+
+
+class UUIDTestCase(base.TestCase):
+
+    def test_generate_uuid(self):
+        uuid_string = utils.generate_uuid()
+        self.assertTrue(isinstance(uuid_string, str))
+        self.assertEqual(len(uuid_string), 36)
+        # make sure there are 4 dashes
+        self.assertEqual(len(uuid_string.replace('-', '')), 32)
+
+    def test_is_uuid_like(self):
+        self.assertTrue(utils.is_uuid_like(str(uuid.uuid4())))
+
+    def test_id_is_uuid_like(self):
+        self.assertFalse(utils.is_uuid_like(1234567))
+
+    def test_name_is_uuid_like(self):
+        self.assertFalse(utils.is_uuid_like('zhongyueluo'))
