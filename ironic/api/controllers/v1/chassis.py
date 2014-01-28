@@ -30,6 +30,7 @@ from ironic.api.controllers.v1 import base
 from ironic.api.controllers.v1 import collection
 from ironic.api.controllers.v1 import link
 from ironic.api.controllers.v1 import node
+from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils
 from ironic.common import exception
 from ironic import objects
@@ -37,6 +38,10 @@ from ironic.openstack.common import excutils
 from ironic.openstack.common import log
 
 LOG = log.getLogger(__name__)
+
+
+class ChassisPatchType(types.JsonPatchType):
+    pass
 
 
 class Chassis(base.APIBase):
@@ -47,14 +52,13 @@ class Chassis(base.APIBase):
     a chassis.
     """
 
-    # NOTE: translate 'id' publicly to 'uuid' internally
-    uuid = wtypes.text
+    uuid = types.uuid
     "The UUID of the chassis"
 
     description = wtypes.text
     "The description of the chassis"
 
-    extra = {wtypes.text: utils.ValidTypes(wtypes.text, six.integer_types)}
+    extra = {wtypes.text: types.MultiType(wtypes.text, six.integer_types)}
     "The metadata of the chassis"
 
     links = [link.Link]
@@ -70,17 +74,10 @@ class Chassis(base.APIBase):
 
     @classmethod
     def convert_with_links(cls, rpc_chassis, expand=True):
-        fields = ['uuid', 'description'] if not expand else None
-        chassis = Chassis.from_rpc_object(rpc_chassis, fields)
-        chassis.links = [link.Link.make_link('self',
-                                             pecan.request.host_url,
-                                             'chassis', chassis.uuid),
-                         link.Link.make_link('bookmark',
-                                             pecan.request.host_url,
-                                             'chassis', chassis.uuid)
-                        ]
-
-        if expand:
+        chassis = Chassis(**rpc_chassis.as_dict())
+        if not expand:
+            chassis.unset_fields_except(['uuid', 'description'])
+        else:
             chassis.nodes = [link.Link.make_link('self',
                                                  pecan.request.host_url,
                                                  'chassis',
@@ -91,6 +88,13 @@ class Chassis(base.APIBase):
                                                  chassis.uuid + "/nodes",
                                                  bookmark=True)
                             ]
+        chassis.links = [link.Link.make_link('self',
+                                             pecan.request.host_url,
+                                             'chassis', chassis.uuid),
+                         link.Link.make_link('bookmark',
+                                             pecan.request.host_url,
+                                             'chassis', chassis.uuid)
+                        ]
         return chassis
 
 
@@ -124,7 +128,8 @@ class ChassisController(rest.RestController):
         'detail': ['GET'],
     }
 
-    def _get_chassis(self, marker, limit, sort_key, sort_dir):
+    def _get_chassis_collection(self, marker, limit, sort_key, sort_dir,
+                                expand=False, resource_url=None):
         limit = utils.validate_limit(limit)
         sort_dir = utils.validate_sort_dir(sort_dir)
         marker_obj = None
@@ -134,43 +139,60 @@ class ChassisController(rest.RestController):
         chassis = pecan.request.dbapi.get_chassis_list(limit, marker_obj,
                                                        sort_key=sort_key,
                                                        sort_dir=sort_dir)
-        return chassis
-
-    @wsme_pecan.wsexpose(ChassisCollection, wtypes.text,
-                         int, wtypes.text, wtypes.text)
-    def get_all(self, marker=None, limit=None, sort_key='id', sort_dir='asc'):
-        """Retrieve a list of chassis."""
-        chassis = self._get_chassis(marker, limit, sort_key, sort_dir)
         return ChassisCollection.convert_with_links(chassis, limit,
+                                                    url=resource_url,
+                                                    expand=expand,
                                                     sort_key=sort_key,
                                                     sort_dir=sort_dir)
 
-    @wsme_pecan.wsexpose(ChassisCollection, wtypes.text, int,
+    @wsme_pecan.wsexpose(ChassisCollection, types.uuid,
+                         int, wtypes.text, wtypes.text)
+    def get_all(self, marker=None, limit=None, sort_key='id', sort_dir='asc'):
+        """Retrieve a list of chassis.
+
+        :param marker: pagination marker for large data sets.
+        :param limit: maximum number of resources to return in a single result.
+        :param sort_key: column to sort results by. Default: id.
+        :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
+        """
+        return self._get_chassis_collection(marker, limit, sort_key, sort_dir)
+
+    @wsme_pecan.wsexpose(ChassisCollection, types.uuid, int,
                          wtypes.text, wtypes.text)
     def detail(self, marker=None, limit=None, sort_key='id', sort_dir='asc'):
-        """Retrieve a list of chassis with detail."""
+        """Retrieve a list of chassis with detail.
+
+        :param marker: pagination marker for large data sets.
+        :param limit: maximum number of resources to return in a single result.
+        :param sort_key: column to sort results by. Default: id.
+        :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
+        """
         # /detail should only work agaist collections
         parent = pecan.request.path.split('/')[:-1][-1]
         if parent != "chassis":
             raise exception.HTTPNotFound
 
-        chassis = self._get_chassis(marker, limit, sort_key, sort_dir)
+        expand = True
         resource_url = '/'.join(['chassis', 'detail'])
-        return ChassisCollection.convert_with_links(chassis, limit,
-                                                    url=resource_url,
-                                                    expand=True,
-                                                    sort_key=sort_key,
-                                                    sort_dir=sort_dir)
+        return self._get_chassis_collection(marker, limit, sort_key, sort_dir,
+                                            expand, resource_url)
 
-    @wsme_pecan.wsexpose(Chassis, wtypes.text)
-    def get_one(self, uuid):
-        """Retrieve information about the given chassis."""
-        rpc_chassis = objects.Chassis.get_by_uuid(pecan.request.context, uuid)
+    @wsme_pecan.wsexpose(Chassis, types.uuid)
+    def get_one(self, chassis_uuid):
+        """Retrieve information about the given chassis.
+
+        :param chassis_uuid: UUID of a chassis.
+        """
+        rpc_chassis = objects.Chassis.get_by_uuid(pecan.request.context,
+                                                  chassis_uuid)
         return Chassis.convert_with_links(rpc_chassis)
 
     @wsme_pecan.wsexpose(Chassis, body=Chassis)
     def post(self, chassis):
-        """Create a new chassis."""
+        """Create a new chassis.
+
+        :param chassis: a chassis within the request body.
+        """
         try:
             new_chassis = pecan.request.dbapi.create_chassis(chassis.as_dict())
         except Exception as e:
@@ -178,39 +200,35 @@ class ChassisController(rest.RestController):
                 LOG.exception(e)
         return Chassis.convert_with_links(new_chassis)
 
-    @wsme_pecan.wsexpose(Chassis, wtypes.text, body=[wtypes.text])
-    def patch(self, uuid, patch):
-        """Update an existing chassis."""
-        chassis = objects.Chassis.get_by_uuid(pecan.request.context, uuid)
-        chassis_dict = chassis.as_dict()
+    @wsme.validate(types.uuid, [ChassisPatchType])
+    @wsme_pecan.wsexpose(Chassis, types.uuid, body=[ChassisPatchType])
+    def patch(self, chassis_uuid, patch):
+        """Update an existing chassis.
 
-        utils.validate_patch(patch)
+        :param chassis_uuid: UUID of a chassis.
+        :param patch: a json PATCH document to apply to this chassis.
+        """
+        rpc_chassis = objects.Chassis.get_by_uuid(pecan.request.context,
+                                                  chassis_uuid)
         try:
-            patched_chassis = jsonpatch.apply_patch(chassis_dict,
-                                                    jsonpatch.JsonPatch(patch))
+            chassis = Chassis(**jsonpatch.apply_patch(rpc_chassis.as_dict(),
+                                                   jsonpatch.JsonPatch(patch)))
         except jsonpatch.JsonPatchException as e:
             LOG.exception(e)
             raise wsme.exc.ClientSideError(_("Patching Error: %s") % e)
 
-        defaults = objects.Chassis.get_defaults()
-        for key in defaults:
-            # Internal values that shouldn't be part of the patch
-            if key in ['id', 'updated_at', 'created_at']:
-                continue
+        # Update only the fields that have changed
+        for field in objects.Chassis.fields:
+            if rpc_chassis[field] != getattr(chassis, field):
+                rpc_chassis[field] = getattr(chassis, field)
 
-            # In case of a remove operation, add the missing fields back
-            # to the document with their default value
-            if key in chassis_dict and key not in patched_chassis:
-                patched_chassis[key] = defaults[key]
+        rpc_chassis.save()
+        return Chassis.convert_with_links(rpc_chassis)
 
-            # Update only the fields that have changed
-            if chassis[key] != patched_chassis[key]:
-                chassis[key] = patched_chassis[key]
+    @wsme_pecan.wsexpose(None, types.uuid, status_code=204)
+    def delete(self, chassis_uuid):
+        """Delete a chassis.
 
-        chassis.save()
-        return Chassis.convert_with_links(chassis)
-
-    @wsme_pecan.wsexpose(None, wtypes.text, status_code=204)
-    def delete(self, uuid):
-        """Delete a chassis."""
-        pecan.request.dbapi.destroy_chassis(uuid)
+        :param chassis_uuid: UUID of a chassis.
+        """
+        pecan.request.dbapi.destroy_chassis(chassis_uuid)

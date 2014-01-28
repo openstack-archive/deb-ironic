@@ -29,18 +29,17 @@ from ironic.common.glance_service import service_utils
 from ironic.common import image_service as service
 from ironic.common import images
 from ironic.common import keystone
+from ironic.common import paths
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
-from ironic.openstack.common import context
 from ironic.openstack.common import fileutils
 from ironic.openstack.common import lockutils
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import loopingcall
-
 
 pxe_opts = [
     cfg.StrOpt('deploy_kernel',
@@ -48,19 +47,18 @@ pxe_opts = [
     cfg.StrOpt('deploy_ramdisk',
                help='Default ramdisk image ID used in deployment phase'),
     cfg.StrOpt('net_config_template',
-               default='$pybasedir/ironic/net-dhcp.ubuntu.template',
+               default=paths.basedir_def('ironic/net-dhcp.ubuntu.template'),
                help='Template file for injected network config'),
     cfg.StrOpt('pxe_append_params',
                default='nofb nomodeset vga=normal',
                help='additional append parameters for baremetal PXE boot'),
     cfg.StrOpt('pxe_config_template',
-               default='$pybasedir/drivers/modules/pxe_config.template',
+               default=paths.basedir_def(
+                    'drivers/modules/pxe_config.template'),
                help='Template file for PXE configuration'),
     cfg.IntOpt('pxe_deploy_timeout',
                 help='Timeout for PXE deployments. Default: 0 (unlimited)',
                 default=0),
-    # TODO(sjing): when adding neutron-port configuration, use this option
-    # instead of assuming tftp server is on $my_ip
     cfg.StrOpt('tftp_server',
                default='$my_ip',
                help='IP address of Ironic compute node\'s tftp server'),
@@ -75,7 +73,12 @@ pxe_opts = [
                help='Directory where master tftp images are stored on disk'),
     cfg.StrOpt('instance_master_path',
                default='/var/lib/ironic/master_images',
-               help='Directory where master tftp images are stored on disk')
+               help='Directory where master tftp images are stored on disk'),
+    # NOTE(dekehn): Additional boot files options may be created in the event
+    #  other architectures require different boot files.
+    cfg.StrOpt('pxe_bootfile_name',
+               default='pxelinux.0',
+               help='Neutron bootfile DHCP parameter.'),
     ]
 
 LOG = logging.getLogger(__name__)
@@ -109,10 +112,10 @@ def _parse_driver_info(node):
     missing_info = []
     for label in d_info:
         if not d_info[label]:
-            missing_info.append(label)
+            missing_info.append("pxe_%s" % label)
     if missing_info:
         raise exception.InvalidParameterValue(_(
-                "Can not validate PXE bootloader. The following paramenters "
+                "Can not validate PXE bootloader. The following parameters "
                 "were not passed to ironic: %s") % missing_info)
 
     # Internal use only
@@ -133,7 +136,7 @@ def _parse_driver_info(node):
     return d_info
 
 
-def _build_pxe_config(node, pxe_info):
+def _build_pxe_config(node, pxe_info, ctx):
     """Build the PXE config file for a node
 
     This method builds the PXE boot configuration file for a node,
@@ -147,10 +150,12 @@ def _build_pxe_config(node, pxe_info):
     """
     LOG.debug(_("Building PXE config for deployment %s.") % node['id'])
 
-    ironic_api = CONF.conductor.api_url or keystone.get_service_url()
+    # NOTE: we should strip '/' from the end because this is intended for
+    # hardcoded ramdisk script
+    ironic_api = (CONF.conductor.api_url or
+                  keystone.get_service_url()).rstrip('/')
 
     deploy_key = utils.random_alnum(32)
-    ctx = context.get_admin_context()
     driver_info = node['driver_info']
     driver_info['pxe_deploy_key'] = deploy_key
     node['driver_info'] = driver_info
@@ -159,7 +164,7 @@ def _build_pxe_config(node, pxe_info):
     pxe_options = {
             'deployment_id': node['uuid'],
             'deployment_key': deploy_key,
-            'deployment_iscsi_iqn': "iqn-%s" % node['instance_uuid'],
+            'deployment_iscsi_iqn': "iqn-%s" % node.uuid,
             'deployment_aki_path': pxe_info['deploy_kernel'][1],
             'deployment_ari_path': pxe_info['deploy_ramdisk'][1],
             'aki_path': pxe_info['kernel'][1],
@@ -200,19 +205,29 @@ def _get_pxe_mac_path(mac):
         )
 
 
-def _get_pxe_config_file_path(instance_uuid):
+def _get_pxe_config_file_path(node_uuid):
     """Generate the path for an instances PXE config file."""
-    return os.path.join(CONF.pxe.tftp_root, instance_uuid, 'config')
+    return os.path.join(CONF.pxe.tftp_root, node_uuid, 'config')
 
 
-def _get_image_dir_path(d_info):
+def _get_pxe_bootfile_name():
+    """Returns the pxe_bootfile_name option."""
+    return CONF.pxe.pxe_bootfile_name
+
+
+def _get_image_dir_path(node_uuid):
     """Generate the dir for an instances disk."""
-    return os.path.join(CONF.pxe.images_path, d_info['instance_name'])
+    return os.path.join(CONF.pxe.images_path, node_uuid)
 
 
-def _get_image_file_path(d_info):
+def _get_image_file_path(node_uuid):
     """Generate the full path for an instances disk."""
-    return os.path.join(_get_image_dir_path(d_info), 'disk')
+    return os.path.join(_get_image_dir_path(node_uuid), 'disk')
+
+
+def _get_token_file_path(node_uuid):
+    """Generate the path for PKI token file."""
+    return os.path.join(CONF.pxe.tftp_root, 'token-' + node_uuid)
 
 
 @lockutils.synchronized('master_image', 'ironic-')
@@ -318,7 +333,7 @@ def _cache_tftp_images(ctx, node, pxe_info):
     """Fetch the necessary kernels and ramdisks for the instance."""
     d_info = _parse_driver_info(node)
     fileutils.ensure_tree(
-        os.path.join(CONF.pxe.tftp_root, node['instance_uuid']))
+        os.path.join(CONF.pxe.tftp_root, node.uuid))
     LOG.debug(_("Fetching kernel and ramdisk for instance %s") %
               d_info['instance_name'])
     for label in pxe_info:
@@ -345,8 +360,8 @@ def _cache_instance_image(ctx, node):
 
     """
     d_info = _parse_driver_info(node)
-    fileutils.ensure_tree(_get_image_dir_path(d_info))
-    image_path = _get_image_file_path(d_info)
+    fileutils.ensure_tree(_get_image_dir_path(node.uuid))
+    image_path = _get_image_file_path(node.uuid)
     uuid = d_info['image_source']
 
     LOG.debug(_("Fetching image %(ami)s for instance %(name)s") %
@@ -358,7 +373,7 @@ def _cache_instance_image(ctx, node):
     return (uuid, image_path)
 
 
-def _get_tftp_image_info(node):
+def _get_tftp_image_info(node, ctx):
     """Generate the paths for tftp files for this instance
 
     Raises IronicException if
@@ -377,23 +392,21 @@ def _get_tftp_image_info(node):
     for label in image_info:
         image_info[label][0] = str(d_info[label]).split('/')[-1]
         image_info[label][1] = os.path.join(CONF.pxe.tftp_root,
-                                            node['instance_uuid'], label)
+                                            node.uuid, label)
 
-    ctx = context.get_admin_context()
     glance_service = service.Service(version=1, context=ctx)
     iproperties = glance_service.show(d_info['image_source'])['properties']
     for label in ('kernel', 'ramdisk'):
         image_info[label] = [None, None]
         image_info[label][0] = str(iproperties[label + '_id']).split('/')[-1]
         image_info[label][1] = os.path.join(CONF.pxe.tftp_root,
-                                            node['instance_uuid'], label)
+                                            node.uuid, label)
 
     return image_info
 
 
-def _cache_images(node, pxe_info):
+def _cache_images(node, pxe_info, ctx):
     """Prepare all the images for this instance."""
-    ctx = context.get_admin_context()
     #TODO(ghe):parallized downloads
 
     #TODO(ghe): Embedded image client in ramdisk
@@ -408,13 +421,40 @@ def _cache_images(node, pxe_info):
     # _inject_into_image(d_info, network_info, injected_files, admin_password)
 
 
-def _destroy_images(d_info):
+def _destroy_images(d_info, node_uuid):
     """Delete instance's image file."""
     image_uuid = service_utils.parse_image_ref(d_info['image_source'])[0]
-    utils.unlink_without_raise(_get_image_file_path(d_info))
-    utils.rmtree_without_raise(_get_image_dir_path(d_info))
+    utils.unlink_without_raise(_get_image_file_path(node_uuid))
+    utils.rmtree_without_raise(_get_image_dir_path(node_uuid))
     master_image = os.path.join(CONF.pxe.instance_master_path, image_uuid)
     _unlink_master_image(master_image)
+
+
+def _create_token_file(task, node):
+    """Save PKI token to file."""
+    token_file_path = _get_token_file_path(node['uuid'])
+    token = task.context.auth_token
+    if token:
+        utils.write_to_file(token_file_path, token)
+    else:
+        utils.unlink_without_raise(token_file_path)
+
+
+def _destroy_token_file(node):
+    """Delete PKI token file."""
+    token_file_path = _get_token_file_path(node['uuid'])
+    utils.unlink_without_raise(token_file_path)
+
+
+def _dhcp_options_for_instance():
+    """Retrives the DHCP PXE boot options."""
+    return [{'opt_name': 'bootfile-name',
+             'opt_value': _get_pxe_bootfile_name()},
+            {'opt_name': 'server-ip-address',
+             'opt_value': CONF.pxe.tftp_server},
+            {'opt_name': 'tftp-server',
+             'opt_value': CONF.pxe.tftp_server}
+            ]
 
 
 def _create_pxe_config(task, node, pxe_info):
@@ -422,17 +462,23 @@ def _create_pxe_config(task, node, pxe_info):
     tftp booting.
     """
     fileutils.ensure_tree(os.path.join(CONF.pxe.tftp_root,
-                                       node['instance_uuid']))
+                                       node.uuid))
     fileutils.ensure_tree(os.path.join(CONF.pxe.tftp_root,
                                        'pxelinux.cfg'))
 
-    pxe_config_file_path = _get_pxe_config_file_path(node['instance_uuid'])
-    pxe_config = _build_pxe_config(node, pxe_info)
+    pxe_config_file_path = _get_pxe_config_file_path(node.uuid)
+    pxe_config = _build_pxe_config(node, pxe_info, task.context)
     utils.write_to_file(pxe_config_file_path, pxe_config)
     for port in _get_node_mac_addresses(task, node):
         mac_path = _get_pxe_mac_path(port)
         utils.unlink_without_raise(mac_path)
         utils.create_link_without_raise(pxe_config_file_path, mac_path)
+
+
+def _update_neutron(task, node):
+    """Send the DHCP BOOT options to Neutron for this node."""
+    # FIXME: just a stub for the moment.
+    pass
 
 
 class PXEDeploy(base.DeployInterface):
@@ -461,12 +507,10 @@ class PXEDeploy(base.DeployInterface):
         :param node: the Node to act upon.
         :returns: deploy state DEPLOYING.
         """
-
-        pxe_info = _get_tftp_image_info(node)
-
-        _create_pxe_config(task, node, pxe_info)
-        _cache_images(node, pxe_info)
-
+        # TODO(yuriyz): more secure way needed for pass auth token
+        #               to deploy ramdisk
+        _create_token_file(task, node)
+        _update_neutron(task, node)
         manager_utils.node_power_action(task, node, states.REBOOT)
 
         return states.DEPLOYING
@@ -482,10 +526,22 @@ class PXEDeploy(base.DeployInterface):
         :param node: the Node to act upon.
         :returns: deploy state DELETED.
         """
-        #FIXME(ghe): Possible error to get image info if eliminated from glance
-        # Retrieve image info and store in db
-        # If we keep master images, no need to get the info, we may ignore this
-        pxe_info = _get_tftp_image_info(node)
+        manager_utils.node_power_action(task, node, states.POWER_OFF)
+
+        return states.DELETED
+
+    def prepare(self, task, node):
+        # TODO(deva): optimize this if rerun on existing files
+        pxe_info = _get_tftp_image_info(node, task.context)
+        _create_pxe_config(task, node, pxe_info)
+        _cache_images(node, pxe_info, task.context)
+
+    def clean_up(self, task, node):
+        # FIXME(ghe): Possible error to get image info if eliminated from
+        #             glance. Retrieve image info and store in db.
+        #             If we keep master images, no need to get the info,
+        #             and we may ignore this.
+        pxe_info = _get_tftp_image_info(node, task.context)
         d_info = _parse_driver_info(node)
         for label in pxe_info:
             (uuid, path) = pxe_info[label]
@@ -494,19 +550,19 @@ class PXEDeploy(base.DeployInterface):
             _unlink_master_image(master_path)
 
         utils.unlink_without_raise(_get_pxe_config_file_path(
-                node['instance_uuid']))
+                node.uuid))
         for port in _get_node_mac_addresses(task, node):
             mac_path = _get_pxe_mac_path(port)
             utils.unlink_without_raise(mac_path)
 
         utils.rmtree_without_raise(
-                os.path.join(CONF.pxe.tftp_root, node['instance_uuid']))
+                os.path.join(CONF.pxe.tftp_root, node.uuid))
 
-        _destroy_images(d_info)
+        _destroy_images(d_info, node.uuid)
+        _destroy_token_file(node)
 
-        manager_utils.node_power_action(task, node, states.POWER_OFF)
-
-        return states.DELETED
+    def take_over(self, task, node):
+        _update_neutron(task, node)
 
 
 class PXERescue(base.RescueInterface):
@@ -535,9 +591,9 @@ class VendorPassthru(base.VendorInterface):
                   'port': kwargs.get('port', '3260'),
                   'iqn': kwargs.get('iqn'),
                   'lun': kwargs.get('lun', '1'),
-                  'image_path': _get_image_file_path(d_info),
+                  'image_path': _get_image_file_path(node.uuid),
                   'pxe_config_path': _get_pxe_config_file_path(
-                                                    node['instance_uuid']),
+                                                    node.uuid),
                   'root_mb': 1024 * int(d_info['root_gb']),
                   'swap_mb': int(d_info['swap_mb'])
 
@@ -566,34 +622,56 @@ class VendorPassthru(base.VendorInterface):
         return True
 
     def _continue_deploy(self, task, node, **kwargs):
+        """Resume a deployment upon getting POST data from deploy ramdisk.
+
+        This method raises no exceptions because it is intended to be
+        invoked asynchronously as a callback from the deploy ramdisk.
+        """
+
+        def _set_failed_state(msg):
+            node.provision_state = states.DEPLOYFAIL
+            node.target_provision_state = states.NOSTATE
+            node.save(task.context)
+            try:
+                manager_utils.node_power_action(task, node, states.POWER_OFF)
+            except Exception:
+                msg = (_('Node %s failed to power off while handling deploy '
+                         'failure. This may be a serious condition. Node '
+                         'should be removed from Ironic or put in maintenance '
+                         'mode until the problem is resolved.') % node.uuid)
+                LOG.error(msg)
+            finally:
+                # NOTE(deva): node_power_action() erases node.last_error
+                #             so we need to set it again here.
+                node.last_error = msg
+                node.save(task.context)
+
+        # remove cached keystone token immediately
+        _destroy_token_file(node)
+
         params = self._get_deploy_info(node, **kwargs)
-        ctx = task.context
-        node_id = node['uuid']
+        ramdisk_error = kwargs.get('error')
 
-        err_msg = kwargs.get('error')
-        if err_msg:
-            LOG.error(_('Node %(node_id)s deploy error message: %(error)s') %
-                        {'node_id': node_id, 'error': err_msg})
+        if ramdisk_error:
+            LOG.error(_('Error returned from PXE deploy ramdisk: %s')
+                    % ramdisk_error)
+            _set_failed_state(_('Failure in PXE deploy ramdisk.'))
+            return
 
-        LOG.info(_('start deployment for node %(node_id)s, '
-                   'params %(params)s') %
-                   {'node_id': node_id, 'params': params})
+        LOG.info(_('Continuing deployment for node %(node)s, params '
+                   '%(params)s') % {'node': node.uuid, 'params': params})
 
         try:
-            node['provision_state'] = states.DEPLOYING
-            node.save(ctx)
             deploy_utils.deploy(**params)
-        except Exception as e:
-            LOG.error(_('deployment to node %s failed') % node_id)
-            node['provision_state'] = states.DEPLOYFAIL
-            node.save(ctx)
-            raise exception.InstanceDeployFailure(_(
-                    'Deploy error: "%(error)s" for node %(node_id)s') %
-                     {'error': e.message, 'node_id': node_id})
+        except Exception:
+            # NOTE(deva): deploy() already logs any failure
+            #             so we don't need to log it again here.
+            _set_failed_state(_('PXE driver failed to continue deployment.'))
         else:
-            LOG.info(_('deployment to node %s done') % node_id)
-            node['provision_state'] = states.DEPLOYDONE
-            node.save(ctx)
+            LOG.info(_('Deployment to node %s done') % node.uuid)
+            node.provision_state = states.ACTIVE
+            node.target_provision_state = states.NOSTATE
+            node.save(task.context)
 
     def vendor_passthru(self, task, node, **kwargs):
         method = kwargs['method']
@@ -604,6 +682,6 @@ class VendorPassthru(base.VendorInterface):
                         kwargs.get('persistent'))
 
         elif method == 'pass_deploy_info':
-            ctx = context.get_admin_context()
-            with task_manager.acquire(ctx, node['uuid'], shared=False) as cdt:
-                self._continue_deploy(cdt, node, **kwargs)
+            ctx = task.context
+            with task_manager.acquire(ctx, node['uuid']) as inner_task:
+                self._continue_deploy(inner_task, node, **kwargs)

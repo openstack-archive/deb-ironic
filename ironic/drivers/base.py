@@ -33,19 +33,25 @@ class BaseDriver(object):
     the interfaces are appropriate.
     """
 
+    core_interfaces = []
+    standard_interfaces = []
+
     power = None
+    core_interfaces.append('power')
     """`Core` attribute for managing power state.
 
     A reference to an instance of :class:PowerInterface.
     """
 
     deploy = None
+    core_interfaces.append('deploy')
     """`Core` attribute for managing deployments.
 
     A reference to an instance of :class:DeployInterface.
     """
 
     console = None
+    standard_interfaces.append('console')
     """`Standard` attribute for managing console access.
 
     A reference to an instance of :class:ConsoleInterface.
@@ -53,6 +59,7 @@ class BaseDriver(object):
     """
 
     rescue = None
+    standard_interfaces.append('rescue')
     """`Standard` attribute for accessing rescue features.
 
     A reference to an instance of :class:RescueInterface.
@@ -91,8 +98,10 @@ class DeployInterface(object):
     def deploy(self, task, node):
         """Perform a deployment to a node.
 
-        Given a node with complete metadata, deploy the indicated image
-        to the node.
+        Perform the necessary work to deploy an image onto the specified node.
+        This method will be called after prepare(), which may have already
+        performed any preparatory steps, such as pre-caching some data for the
+        node.
 
         :param task: a TaskManager instance.
         :param node: the Node to act upon.
@@ -109,6 +118,65 @@ class DeployInterface(object):
         :param task: a TaskManager instance.
         :param node: the Node to act upon.
         :returns: status of the deploy. One of ironic.common.states.
+        """
+
+    @abc.abstractmethod
+    def prepare(self, task, node):
+        """Prepare the deployment environment for this node.
+
+        If preparation of the deployment environment ahead of time is possible,
+        this method should be implemented by the driver.
+
+        If implemented, this method must be idempotent. It may be called
+        multiple times for the same node on the same conductor, and it may be
+        called by multiple conductors in parallel. Therefore, it must not
+        require an exclusive lock.
+
+        This method is called before `deploy`.
+
+        :param task: a TaskManager instance.
+        :param node: the Node for which to prepare a deployment environment
+                     on this Conductor.
+        """
+
+    @abc.abstractmethod
+    def clean_up(self, task, node):
+        """Clean up the deployment environment for this node.
+
+        If preparation of the deployment environment ahead of time is possible,
+        this method should be implemented by the driver. It should erase
+        anything cached by the `prepare` method.
+
+        If implemented, this method must be idempotent. It may be called
+        multiple times for the same node on the same conductor, and it may be
+        called by multiple conductors in parallel. Therefore, it must not
+        require an exclusive lock.
+
+        This method is called before `tear_down`.
+
+        :param task: a TaskManager instance.
+        :param node: the Node whose deployment environment should be cleaned up
+                     on this Conductor.
+        """
+
+    @abc.abstractmethod
+    def take_over(self, task, node):
+        """Take over management of this node from a dead conductor.
+
+        If conductors' hosts maintain a static relationship to nodes, this
+        method should be implemented by the driver to allow conductors to
+        perform the necessary work during the remapping of nodes to conductors
+        when a conductor joins or leaves the cluster.
+
+        For example, the PXE driver has an external dependency:
+            Neutron must forward DHCP BOOT requests to a conductor which has
+            prepared the tftpboot environment for the given node. When a
+            conductor goes offline, another conductor must change this setting
+            in Neutron as part of remapping that node's control to itself.
+            This is performed within the `takeover` method.
+
+        :param task: a TaskManager instance.
+        :param node: the Node which is now being managed by this Conductor.
         """
 
 

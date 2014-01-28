@@ -28,6 +28,7 @@ import mock
 import netaddr
 from oslo.config import cfg
 
+from ironic.common import exception
 from ironic.common import utils
 from ironic.openstack.common import processutils
 from ironic.tests import base
@@ -304,6 +305,19 @@ class GenericUtilsTestCase(base.TestCase):
         self.assertFalse(utils.is_valid_mac("AA BB CC DD EE FF"))
         self.assertFalse(utils.is_valid_mac("AA-BB-CC-DD-EE-FF"))
 
+    def test_validate_and_normalize_mac(self):
+        mac = 'AA:BB:CC:DD:EE:FF'
+        with mock.patch.object(utils, 'is_valid_mac') as m_mock:
+            m_mock.return_value = True
+            self.assertEqual(mac.lower(),
+                             utils.validate_and_normalize_mac(mac))
+
+    def test_validate_and_normalize_mac_invalid_format(self):
+        with mock.patch.object(utils, 'is_valid_mac') as m_mock:
+            m_mock.return_value = False
+            self.assertRaises(exception.InvalidMAC,
+                              utils.validate_and_normalize_mac, 'invalid-mac')
+
     def test_safe_rstrip(self):
         value = '/test/'
         rstripped_value = '/test'
@@ -376,7 +390,7 @@ class UUIDTestCase(base.TestCase):
 
     def test_generate_uuid(self):
         uuid_string = utils.generate_uuid()
-        self.assertTrue(isinstance(uuid_string, str))
+        self.assertIsInstance(uuid_string, str)
         self.assertEqual(len(uuid_string), 36)
         # make sure there are 4 dashes
         self.assertEqual(len(uuid_string.replace('-', '')), 32)

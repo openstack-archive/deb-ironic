@@ -16,11 +16,10 @@
 #    under the License.
 
 import jsonpatch
-import six
-
+from oslo.config import cfg
 import pecan
 from pecan import rest
-
+import six
 import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
@@ -29,148 +28,168 @@ from ironic.api.controllers.v1 import base
 from ironic.api.controllers.v1 import collection
 from ironic.api.controllers.v1 import link
 from ironic.api.controllers.v1 import port
-from ironic.api.controllers.v1 import state
-from ironic.api.controllers.v1 import utils
+from ironic.api.controllers.v1 import types
+from ironic.api.controllers.v1 import utils as api_utils
 from ironic.common import exception
+from ironic.common import states as ir_states
 from ironic import objects
 from ironic.openstack.common import excutils
 from ironic.openstack.common import log
 
+CONF = cfg.CONF
+CONF.import_opt('heartbeat_timeout', 'ironic.conductor.manager',
+                group='conductor')
 
 LOG = log.getLogger(__name__)
 
 
-class NodePowerState(state.State):
-    @classmethod
-    def convert_with_links(cls, rpc_node, expand=True):
-        power_state = NodePowerState()
-        # FIXME(lucasagomes): this request could potentially take a
-        # while. It's dependent upon the driver talking to the hardware. At
-        # least with IPMI, this often times out, and even fails after 3
-        # retries at a statistically significant frequency....
-        power_state.current = pecan.request.rpcapi.get_node_power_state(
-                                                         pecan.request.context,
-                                                         rpc_node.uuid)
-        url_arg = '%s/state/power' % rpc_node.uuid
-        power_state.links = [link.Link.make_link('self',
-                                                 pecan.request.host_url,
-                                                 'nodes', url_arg),
-                             link.Link.make_link('bookmark',
-                                                 pecan.request.host_url,
-                                                 'nodes', url_arg,
-                                                 bookmark=True)
-                            ]
-        if expand:
-            power_state.target = rpc_node.target_power_state
-            # TODO(lucasagomes): get_next_power_available_states
-            power_state.available = []
-        return power_state
+class NodePatchType(types.JsonPatchType):
 
+    @staticmethod
+    def internal_attrs():
+        defaults = types.JsonPatchType.internal_attrs()
+        return defaults + ['/last_error', '/maintenance', '/power_state',
+                           '/provision_state', '/target_power_state',
+                           '/target_provision_state']
 
-class NodePowerStateController(rest.RestController):
-
-    # GET nodes/<uuid>/state/power
-    @wsme_pecan.wsexpose(NodePowerState, wtypes.text)
-    def get(self, node_id):
-        node = objects.Node.get_by_uuid(pecan.request.context, node_id)
-        return NodePowerState.convert_with_links(node)
-
-    # PUT nodes/<uuid>/state/power
-    @wsme_pecan.wsexpose(NodePowerState, wtypes.text, wtypes.text,
-                         status_code=202)
-    def put(self, node_id, target):
-        """Set the power state of the machine."""
-        node = objects.Node.get_by_uuid(pecan.request.context, node_id)
-        if node.target_power_state is not None:
-            raise wsme.exc.ClientSideError(_("Power operation for node %s is "
-                                             "already in progress.") %
-                                              node['uuid'], status_code=409)
-        #TODO(lucasagomes): Test if target is a valid state and if it's able
-        # to transition to the target state from the current one
-
-        # Note that there is a race condition. The node state(s) could change
-        # by the time the RPC call is made and the TaskManager manager gets a
-        # lock.
-        pecan.request.rpcapi.change_node_power_state(pecan.request.context,
-                                                     node, target)
-        return NodePowerState.convert_with_links(node, expand=False)
-
-
-class NodeProvisionState(state.State):
-    @classmethod
-    def convert_with_links(cls, rpc_node, expand=True):
-        provision_state = NodeProvisionState()
-        provision_state.current = rpc_node.provision_state
-        url_arg = '%s/state/provision' % rpc_node.uuid
-        provision_state.links = [link.Link.make_link('self',
-                                                     pecan.request.host_url,
-                                                     'nodes', url_arg),
-                                 link.Link.make_link('bookmark',
-                                                     pecan.request.host_url,
-                                                     'nodes', url_arg,
-                                                     bookmark=True)
-                                ]
-        if expand:
-            provision_state.target = rpc_node.target_provision_state
-            # TODO(lucasagomes): get_next_provision_available_states
-            provision_state.available = []
-        return provision_state
-
-
-class NodeProvisionStateController(rest.RestController):
-
-    # GET nodes/<uuid>/state/provision
-    @wsme_pecan.wsexpose(NodeProvisionState, wtypes.text)
-    def get(self, node_id):
-        node = objects.Node.get_by_uuid(pecan.request.context, node_id)
-        provision_state = NodeProvisionState.convert_with_links(node)
-        return provision_state
-
-    # PUT nodes/<uuid>/state/provision
-    @wsme_pecan.wsexpose(NodeProvisionState, wtypes.text, wtypes.text,
-                         status_code=202)
-    def put(self, node_id, target):
-        """Set the provision state of the machine."""
-        #TODO(lucasagomes): Test if target is a valid state and if it's able
-        # to transition to the target state from the current one
-        # TODO(lucasagomes): rpcapi.start_provision_state_change()
-        raise NotImplementedError()
+    @staticmethod
+    def mandatory_attrs():
+        return ['/chassis_uuid', '/driver']
 
 
 class NodeStates(base.APIBase):
     """API representation of the states of a node."""
 
-    power = NodePowerState
-    "The current power state of the node"
+    power_state = wtypes.text
 
-    provision = NodeProvisionState
-    "The current provision state of the node"
+    provision_state = wtypes.text
+
+    target_power_state = wtypes.text
+
+    target_provision_state = wtypes.text
+
+    last_error = wtypes.text
 
     @classmethod
-    def convert_with_links(cls, rpc_node):
+    def convert(cls, rpc_node):
+        attr_list = ['last_error', 'power_state', 'provision_state',
+                     'target_power_state', 'target_provision_state']
         states = NodeStates()
-        states.power = NodePowerState.convert_with_links(rpc_node,
-                                                         expand=False)
-        states.provision = NodeProvisionState.convert_with_links(rpc_node,
-                                                                 expand=False)
+        for attr in attr_list:
+            setattr(states, attr, getattr(rpc_node, attr))
         return states
 
 
 class NodeStatesController(rest.RestController):
 
-    power = NodePowerStateController()
-    "Expose the power controller action as a sub-element of state"
+    _custom_actions = {
+        'power': ['PUT'],
+        'provision': ['PUT'],
+    }
 
-    provision = NodeProvisionStateController()
-    "Expose the provision controller action as a sub-element of state"
+    @wsme_pecan.wsexpose(NodeStates, types.uuid)
+    def get(self, node_uuid):
+        """List the states of the node.
 
-    # GET nodes/<uuid>/state
-    @wsme_pecan.wsexpose(NodeStates, wtypes.text)
-    def get(self, node_id):
-        """List or update the state of a node."""
-        node = objects.Node.get_by_uuid(pecan.request.context, node_id)
-        state = NodeStates.convert_with_links(node)
-        return state
+        :param node_uuid: UUID of a node.
+        """
+        # NOTE(lucasagomes): All these state values come from the
+        # DB. Ironic counts with a periodic task that verify the current
+        # power states of the nodes and update the DB accordingly.
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        return NodeStates.convert(rpc_node)
+
+    @wsme_pecan.wsexpose(NodeStates, types.uuid, wtypes.text, status_code=202)
+    def power(self, node_uuid, target):
+        """Set the power state of the node.
+
+        :param node_uuid: UUID of a node.
+        :param target: The desired power state of the node.
+        :raises: ClientSideError (HTTP 409) if a power operation is
+                 already in progress.
+        :raises: InvalidStateRequested (HTTP 400) if the requested target
+                 state is not valid.
+
+        """
+        # TODO(lucasagomes): Test if it's able to transition to the
+        #                    target state from the current one
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        topic = pecan.request.rpcapi.get_topic_for(rpc_node)
+
+        if rpc_node.target_power_state is not None:
+            raise wsme.exc.ClientSideError(_("Power operation for node %s is "
+                                             "already in progress.") %
+                                              rpc_node['uuid'],
+                                              status_code=409)
+        # Note that there is a race condition. The node state(s) could change
+        # by the time the RPC call is made and the TaskManager manager gets a
+        # lock.
+        if target in [ir_states.POWER_ON,
+                      ir_states.POWER_OFF,
+                      ir_states.REBOOT]:
+            pecan.request.rpcapi.change_node_power_state(
+                    pecan.request.context, node_uuid, target, topic)
+        else:
+            raise exception.InvalidStateRequested(state=target, node=node_uuid)
+
+        # FIXME(lucasagomes): Currently WSME doesn't support returning
+        # the Location header. Once it's implemented we should use the
+        # Location to point to the /states subresource of the node so
+        # that clients will know how to track the status of the request
+        # https://bugs.launchpad.net/wsme/+bug/1233687
+        return NodeStates.convert(rpc_node)
+
+    @wsme_pecan.wsexpose(None, types.uuid, wtypes.text, status_code=202)
+    def provision(self, node_uuid, target):
+        """Asynchronous trigger the provisioning of the node.
+
+        This will set the target provision state of the node, and a
+        background task will begin which actually applies the state
+        change. This call will return a 202 (Accepted) indicating the
+        request was accepted and is in progress; the client should
+        continue to GET the status of this node to observe the status
+        of the requested action.
+
+        :param node_uuid: UUID of a node.
+        :param target: The desired provision state of the node.
+        :raises: ClientSideError (HTTP 409) if the node is already being
+                 provisioned.
+        :raises: ClientSideError (HTTP 400) if the node is already in
+                 the requested state.
+        :raises: InvalidStateRequested (HTTP 400) if the requested target
+                 state is not valid.
+
+        """
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        topic = pecan.request.rpcapi.get_topic_for(rpc_node)
+
+        if rpc_node.target_provision_state is not None:
+            msg = _('Node %s is already being provisioned.') % rpc_node['uuid']
+            LOG.exception(msg)
+            raise wsme.exc.ClientSideError(msg, status_code=409)  # Conflict
+
+        if target == rpc_node.provision_state:
+            msg = (_("Node %(node)s is already in the '%(state)s' state.") %
+                   {'node': rpc_node['uuid'], 'state': target})
+            LOG.exception(msg)
+            raise wsme.exc.ClientSideError(msg, status_code=400)
+        # Note that there is a race condition. The node state(s) could change
+        # by the time the RPC call is made and the TaskManager manager gets a
+        # lock.
+
+        if target == ir_states.ACTIVE:
+            pecan.request.rpcapi.do_node_deploy(
+                    pecan.request.context, node_uuid, topic)
+        elif target == ir_states.DELETED:
+            pecan.request.rpcapi.do_node_tear_down(
+                    pecan.request.context, node_uuid, topic)
+        else:
+            raise exception.InvalidStateRequested(state=target, node=node_uuid)
+        # FIXME(lucasagomes): Currently WSME doesn't support returning
+        # the Location header. Once it's implemented we should use the
+        # Location to point to the /states subresource of this node so
+        # that clients will know how to track the status of the request
+        # https://bugs.launchpad.net/wsme/+bug/1233687
 
 
 class Node(base.APIBase):
@@ -180,9 +199,34 @@ class Node(base.APIBase):
     between the internal object model and the API representation of a node.
     """
 
-    # NOTE: translate 'id' publicly to 'uuid' internally
-    uuid = wtypes.text
-    instance_uuid = wtypes.text
+    _chassis_uuid = None
+
+    def _get_chassis_uuid(self):
+        return self._chassis_uuid
+
+    def _set_chassis_uuid(self, value):
+        if value and self._chassis_uuid != value:
+            try:
+                chassis = objects.Chassis.get_by_uuid(pecan.request.context,
+                                                      value)
+                self._chassis_uuid = chassis.uuid
+                # NOTE(lucasagomes): Create the chassis_id attribute on-the-fly
+                #                    to satisfy the api -> rpc object
+                #                    conversion.
+                self.chassis_id = chassis.id
+            except exception.ChassisNotFound as e:
+                # Change error code because 404 (NotFound) is inappropriate
+                # response for a POST request to create a Port
+                e.code = 400  # BadRequest
+                raise e
+        elif value == wtypes.Unset:
+            self._chassis_uuid = wtypes.Unset
+
+    uuid = types.uuid
+    "Unique UUID for this node"
+
+    instance_uuid = types.uuid
+    "The UUID of the instance in nova-compute"
 
     power_state = wtypes.text
     "Represent the current (not transition) power state of the node"
@@ -197,27 +241,31 @@ class Node(base.APIBase):
     provision_state = wtypes.text
     "Represent the current (not transition) provision state of the node"
 
+    maintenance = wsme.wsattr(bool, default=False)
+    "Indicates whether the node is in maintenance mode."
+
     target_provision_state = wtypes.text
     "The user modified desired provision state of the node."
 
-    # NOTE: allow arbitrary dicts for driver_info and extra so that drivers
-    #       and vendors can expand on them without requiring API changes.
-    # NOTE: translate 'driver_info' internally to 'management_configuration'
-    driver = wtypes.text
+    driver = wsme.wsattr(wtypes.text, mandatory=True)
+    "The driver responsible for controlling the node"
 
-    driver_info = {wtypes.text: utils.ValidTypes(wtypes.text,
-                                                 six.integer_types)}
+    driver_info = {wtypes.text: types.MultiType(wtypes.text,
+                                                six.integer_types)}
+    "This node's driver configuration"
 
-    extra = {wtypes.text: utils.ValidTypes(wtypes.text, six.integer_types)}
+    extra = {wtypes.text: types.MultiType(wtypes.text, six.integer_types)}
+    "This node's meta data"
 
     # NOTE: properties should use a class to enforce required properties
     #       current list: arch, cpus, disk, ram, image
-    properties = {wtypes.text: utils.ValidTypes(wtypes.text,
-                                                six.integer_types)}
+    properties = {wtypes.text: types.MultiType(wtypes.text,
+                                               six.integer_types)}
+    "The physical characteristics of this node"
 
-    # NOTE: translate 'chassis_id' to a link to the chassis resource
-    #       and accept a chassis uuid when creating a node.
-    chassis_id = utils.ValidTypes(wtypes.text, six.integer_types)
+    chassis_uuid = wsme.wsproperty(types.uuid, _get_chassis_uuid,
+                                   _set_chassis_uuid)
+    "The UUID of the chassis this node belongs"
 
     links = [link.Link]
     "A list containing a self link and associated node links"
@@ -230,20 +278,30 @@ class Node(base.APIBase):
         for k in self.fields:
             setattr(self, k, kwargs.get(k))
 
+        # NOTE(lucasagomes): chassis_uuid is not part of objects.Node.fields
+        #                    because it's an API-only attribute
+        self.fields.append('chassis_uuid')
+        setattr(self, 'chassis_uuid', kwargs.get('chassis_id', None))
+
     @classmethod
     def convert_with_links(cls, rpc_node, expand=True):
-        minimum_fields = ['uuid', 'power_state', 'target_power_state',
-                          'provision_state', 'target_provision_state',
-                          'last_error',
-                          'instance_uuid']
-        fields = minimum_fields if not expand else None
-        node = Node.from_rpc_object(rpc_node, fields)
+        node = Node(**rpc_node.as_dict())
+        if not expand:
+            except_list = ['instance_uuid', 'power_state',
+                           'provision_state', 'uuid']
+            node.unset_fields_except(except_list)
+        else:
+            node.ports = [link.Link.make_link('self', pecan.request.host_url,
+                                              'nodes', node.uuid + "/ports"),
+                          link.Link.make_link('bookmark',
+                                              pecan.request.host_url,
+                                              'nodes', node.uuid + "/ports",
+                                              bookmark=True)
+                         ]
 
-        # translate id -> uuid
-        if node.chassis_id and isinstance(node.chassis_id, six.integer_types):
-            chassis_obj = objects.Chassis.get_by_uuid(pecan.request.context,
-                                                      node.chassis_id)
-            node.chassis_id = chassis_obj.uuid
+        # NOTE(lucasagomes): The numeric ID should not be exposed to
+        #                    the user, it's internal only.
+        node.chassis_id = wtypes.Unset
 
         node.links = [link.Link.make_link('self', pecan.request.host_url,
                                           'nodes', node.uuid),
@@ -252,14 +310,6 @@ class Node(base.APIBase):
                                           'nodes', node.uuid,
                                           bookmark=True)
                      ]
-        if expand:
-            node.ports = [link.Link.make_link('self', pecan.request.host_url,
-                                              'nodes', node.uuid + "/ports"),
-                          link.Link.make_link('bookmark',
-                                              pecan.request.host_url,
-                                              'nodes', node.uuid + "/ports",
-                                              bookmark=True)
-                         ]
         return node
 
 
@@ -289,25 +339,32 @@ class NodeVendorPassthruController(rest.RestController):
     appropriate driver, no introspection will be made in the message body.
     """
 
-    @wsme_pecan.wsexpose(wtypes.text, wtypes.text, wtypes.text,
+    @wsme_pecan.wsexpose(wtypes.text, types.uuid, wtypes.text,
                          body=wtypes.text,
                          status_code=202)
-    def post(self, node_id, method, data):
+    def post(self, node_uuid, method, data):
+        """Call a vendor extension.
+
+        :param node_uuid: UUID of a node.
+        :param method: name of the method in vendor driver.
+        :param data: body of data to supply to the specified method.
+        """
         # Raise an exception if node is not found
-        objects.Node.get_by_uuid(pecan.request.context, node_id)
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        topic = pecan.request.rpcapi.get_topic_for(rpc_node)
 
         # Raise an exception if method is not specified
         if not method:
             raise wsme.exc.ClientSideError(_("Method not specified"))
 
         return pecan.request.rpcapi.vendor_passthru(
-                pecan.request.context, node_id, method, data)
+                pecan.request.context, node_uuid, method, data, topic)
 
 
 class NodesController(rest.RestController):
     """REST controller for Nodes."""
 
-    state = NodeStatesController()
+    states = NodeStatesController()
     "Expose the state controller action as a sub-element of nodes"
 
     vendor_passthru = NodeVendorPassthruController()
@@ -318,28 +375,30 @@ class NodesController(rest.RestController):
 
     _custom_actions = {
         'detail': ['GET'],
+        'validate': ['GET'],
     }
 
     def __init__(self, from_chassis=False):
         self._from_chassis = from_chassis
 
-    def _get_nodes(self, chassis_id, instance_uuid, associated, marker, limit,
-                   sort_key, sort_dir):
-        if self._from_chassis and not chassis_id:
+    def _get_nodes_collection(self, chassis_uuid, instance_uuid, associated,
+                              marker, limit, sort_key, sort_dir,
+                              expand=False, resource_url=None):
+        if self._from_chassis and not chassis_uuid:
             raise exception.InvalidParameterValue(_(
                   "Chassis id not specified."))
 
-        limit = utils.validate_limit(limit)
-        sort_dir = utils.validate_sort_dir(sort_dir)
+        limit = api_utils.validate_limit(limit)
+        sort_dir = api_utils.validate_sort_dir(sort_dir)
 
         marker_obj = None
         if marker:
             marker_obj = objects.Node.get_by_uuid(pecan.request.context,
                                                   marker)
 
-        if chassis_id:
-            nodes = pecan.request.dbapi.get_nodes_by_chassis(chassis_id, limit,
-                                                             marker_obj,
+        if chassis_uuid:
+            nodes = pecan.request.dbapi.get_nodes_by_chassis(chassis_uuid,
+                                                             limit, marker_obj,
                                                              sort_key=sort_key,
                                                              sort_dir=sort_dir)
         elif instance_uuid:
@@ -352,7 +411,14 @@ class NodesController(rest.RestController):
             nodes = pecan.request.dbapi.get_node_list(limit, marker_obj,
                                                       sort_key=sort_key,
                                                       sort_dir=sort_dir)
-        return nodes
+
+        parameters = {'sort_key': sort_key, 'sort_dir': sort_dir}
+        if associated:
+            parameters['associated'] = associated.lower()
+        return NodeCollection.convert_with_links(nodes, limit,
+                                                 url=resource_url,
+                                                 expand=expand,
+                                                 **parameters)
 
     def _get_nodes_by_instance(self, instance_uuid):
         """Retrieve a node by its instance uuid.
@@ -380,140 +446,144 @@ class NodesController(rest.RestController):
                     "can only be true or false.") % associated)
         return nodes
 
-    def _convert_chassis_uuid_to_id(self, node_dict):
-        # NOTE(lucasagomes): translate uuid -> id, used internally to
-        #                    tune performance
-        if node_dict['chassis_id']:
-            chassis_obj = objects.Chassis.get_by_uuid(pecan.request.context,
-                                                      node_dict['chassis_id'])
-            node_dict['chassis_id'] = chassis_obj.id
-
-    @wsme_pecan.wsexpose(NodeCollection, wtypes.text, wtypes.text,
-               wtypes.text, wtypes.text, int, wtypes.text, wtypes.text)
-    def get_all(self, chassis_id=None, instance_uuid=None, associated=None,
+    @wsme_pecan.wsexpose(NodeCollection, types.uuid, types.uuid,
+               wtypes.text, types.uuid, int, wtypes.text, wtypes.text)
+    def get_all(self, chassis_uuid=None, instance_uuid=None, associated=None,
                 marker=None, limit=None, sort_key='id', sort_dir='asc'):
-        """Retrieve a list of nodes."""
-        nodes = self._get_nodes(chassis_id, instance_uuid, associated, marker,
-                                limit, sort_key, sort_dir)
+        """Retrieve a list of nodes.
 
-        parameters = {'sort_key': sort_key, 'sort_dir': sort_dir}
-        if associated:
-            parameters['associated'] = associated.lower()
-        return NodeCollection.convert_with_links(nodes, limit, **parameters)
+        :param chassis_uuid: Optional UUID of a chassis, to get only nodes for
+                           that chassis.
+        :param instance_uuid: Optional UUID of an instance, to find the node
+                              associated with that instance.
+        :param associated: Optional boolean whether to return a list of
+                           associated or unassociated nodes. May be combined
+                           with other parameters.
+        :param marker: pagination marker for large data sets.
+        :param limit: maximum number of resources to return in a single result.
+        :param sort_key: column to sort results by. Default: id.
+        :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
+        """
+        return self._get_nodes_collection(chassis_uuid, instance_uuid,
+                                          associated, marker, limit,
+                                          sort_key, sort_dir)
 
-    @wsme_pecan.wsexpose(NodeCollection, wtypes.text, wtypes.text,
-            wtypes.text, wtypes.text, int, wtypes.text, wtypes.text)
-    def detail(self, chassis_id=None, instance_uuid=None, associated=None,
+    @wsme_pecan.wsexpose(NodeCollection, types.uuid, types.uuid,
+            wtypes.text, types.uuid, int, wtypes.text, wtypes.text)
+    def detail(self, chassis_uuid=None, instance_uuid=None, associated=None,
                marker=None, limit=None, sort_key='id', sort_dir='asc'):
-        """Retrieve a list of nodes with detail."""
+        """Retrieve a list of nodes with detail.
+
+        :param chassis_uuid: Optional UUID of a chassis, to get only nodes for
+                           that chassis.
+        :param instance_uuid: Optional UUID of an instance, to find the node
+                              associated with that instance.
+        :param associated: Optional boolean whether to return a list of
+                           associated or unassociated nodes. May be combined
+                           with other parameters.
+        :param marker: pagination marker for large data sets.
+        :param limit: maximum number of resources to return in a single result.
+        :param sort_key: column to sort results by. Default: id.
+        :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
+        """
         # /detail should only work agaist collections
         parent = pecan.request.path.split('/')[:-1][-1]
         if parent != "nodes":
             raise exception.HTTPNotFound
 
-        nodes = self._get_nodes(chassis_id, instance_uuid, associated,
-                                marker, limit, sort_key, sort_dir)
+        expand = True
         resource_url = '/'.join(['nodes', 'detail'])
+        return self._get_nodes_collection(chassis_uuid, instance_uuid,
+                                          associated, marker, limit,
+                                          sort_key, sort_dir,
+                                          expand, resource_url)
 
-        parameters = {'sort_key': sort_key, 'sort_dir': sort_dir}
-        if associated:
-            parameters['associated'] = associated.lower()
-        return NodeCollection.convert_with_links(nodes, limit,
-                                                 url=resource_url,
-                                                 expand=True,
-                                                 **parameters)
+    @wsme_pecan.wsexpose(wtypes.text, types.uuid)
+    def validate(self, node_uuid):
+        """Validate the driver interfaces."""
+        # check if node exists
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        topic = pecan.request.rpcapi.get_topic_for(rpc_node)
+        return pecan.request.rpcapi.validate_driver_interfaces(
+                pecan.request.context, rpc_node.uuid, topic)
 
-    @wsme_pecan.wsexpose(Node, wtypes.text)
-    def get_one(self, uuid):
-        """Retrieve information about the given node."""
+    @wsme_pecan.wsexpose(Node, types.uuid)
+    def get_one(self, node_uuid):
+        """Retrieve information about the given node.
+
+        :param node_uuid: UUID of a node.
+        """
         if self._from_chassis:
             raise exception.OperationNotPermitted
 
-        rpc_node = objects.Node.get_by_uuid(pecan.request.context, uuid)
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
         return Node.convert_with_links(rpc_node)
 
     @wsme_pecan.wsexpose(Node, body=Node)
     def post(self, node):
-        """Create a new node."""
+        """Create a new node.
+
+        :param node: a node within the request body.
+        """
         if self._from_chassis:
             raise exception.OperationNotPermitted
 
-        node_dict = node.as_dict()
-        self._convert_chassis_uuid_to_id(node_dict)
-
         try:
-            new_node = pecan.request.dbapi.create_node(node_dict)
+            new_node = pecan.request.dbapi.create_node(node.as_dict())
         except Exception as e:
             with excutils.save_and_reraise_exception():
                 LOG.exception(e)
         return Node.convert_with_links(new_node)
 
-    @wsme_pecan.wsexpose(Node, wtypes.text, body=[wtypes.text])
-    def patch(self, uuid, patch):
-        """Update an existing node."""
+    @wsme.validate(types.uuid, [NodePatchType])
+    @wsme_pecan.wsexpose(Node, types.uuid, body=[NodePatchType])
+    def patch(self, node_uuid, patch):
+        """Update an existing node.
+
+        :param node_uuid: UUID of a node.
+        :param patch: a json PATCH document to apply to this node.
+        """
         if self._from_chassis:
             raise exception.OperationNotPermitted
 
-        node = objects.Node.get_by_uuid(pecan.request.context, uuid)
-        node_dict = node.as_dict()
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        topic = pecan.request.rpcapi.get_topic_for(rpc_node)
 
-        utils.validate_patch(patch)
-        patch_obj = jsonpatch.JsonPatch(patch)
-
-        # Prevent states from being updated
-        state_rel_path = ['/power_state', '/target_power_state',
-                          '/provision_state', '/target_provision_state']
-        if any(p['path'] in state_rel_path for p in patch_obj):
-            raise wsme.exc.ClientSideError(_("Changing states is not allowed "
-                                             "here; You must use the "
-                                             "nodes/%s/state interface.")
-                                             % uuid)
-
-        # Prevent node from being updated when there's a state
-        # change in progress
-        if any(node.get(tgt) for tgt in ["target_power_state",
-                                         "target_provision_state"]):
-            raise wsme.exc.ClientSideError(_("Can not update node %s while "
-                                             "a state transition is in "
-                                             "progress.") % uuid,
-                                             status_code=409)
+        # Check if node is transitioning state
+        if rpc_node['target_power_state'] or \
+             rpc_node['target_provision_state']:
+            msg = _("Node %s can not be updated while a state transition"
+                    "is in progress.")
+            raise wsme.exc.ClientSideError(msg % node_uuid, status_code=409)
 
         try:
-            patched_node = jsonpatch.apply_patch(node_dict, patch_obj)
+            node = Node(**jsonpatch.apply_patch(rpc_node.as_dict(),
+                                                jsonpatch.JsonPatch(patch)))
         except jsonpatch.JsonPatchException as e:
             LOG.exception(e)
             raise wsme.exc.ClientSideError(_("Patching Error: %s") % e)
 
+        # Update only the fields that have changed
+        for field in objects.Node.fields:
+            if rpc_node[field] != getattr(node, field):
+                rpc_node[field] = getattr(node, field)
+
         try:
-            self. _convert_chassis_uuid_to_id(patched_node)
-            defaults = objects.Node.get_defaults()
-            for key in defaults:
-                # Internal values that shouldn't be part of the patch
-                if key in ['id', 'updated_at', 'created_at']:
-                    continue
-
-                # In case of a remove operation, add the missing fields back
-                # to the document with their default value
-                if key in node_dict and key not in patched_node:
-                    patched_node[key] = defaults[key]
-
-                # Update only the fields that have changed
-                if node[key] != patched_node[key]:
-                    node[key] = patched_node[key]
-
-            node = pecan.request.rpcapi.update_node(pecan.request.context,
-                                                    node)
-
-        except exception.IronicException as e:
+            new_node = pecan.request.rpcapi.update_node(
+                    pecan.request.context, rpc_node, topic)
+        except Exception as e:
             with excutils.save_and_reraise_exception():
                 LOG.exception(e)
 
-        return Node.convert_with_links(node)
+        return Node.convert_with_links(new_node)
 
-    @wsme_pecan.wsexpose(None, wtypes.text, status_code=204)
-    def delete(self, node_id):
-        """Delete a node."""
+    @wsme_pecan.wsexpose(None, types.uuid, status_code=204)
+    def delete(self, node_uuid):
+        """Delete a node.
+
+        :param node_uuid: UUID of a node.
+        """
         if self._from_chassis:
             raise exception.OperationNotPermitted
 
-        pecan.request.dbapi.destroy_node(node_id)
+        pecan.request.dbapi.destroy_node(node_uuid)

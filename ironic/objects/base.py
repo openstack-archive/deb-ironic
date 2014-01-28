@@ -309,6 +309,13 @@ class IronicObject(object):
         """
         raise NotImplementedError(_("Cannot save anything in the base class"))
 
+    def obj_get_changes(self):
+        """Returns a dict of changed fields and their new values."""
+        changes = {}
+        for key in self.obj_what_changed():
+            changes[key] = self[key]
+        return changes
+
     def obj_what_changed(self):
         """Returns a set of fields that have been modified."""
         return self._changed_fields
@@ -376,13 +383,6 @@ class IronicObject(object):
         return dict((k, getattr(self, k))
                 for k in self.fields
                 if hasattr(self, k))
-
-    @classmethod
-    def get_defaults(cls):
-        """Return a dict of its fields with their default value."""
-        return dict((k, v(None))
-                    for k, v in cls.fields.iteritems()
-                    if k != "id" and callable(v))
 
 
 class ObjectListBase(object):

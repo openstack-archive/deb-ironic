@@ -15,12 +15,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import jsonpatch
-import six
+import datetime
 
+import jsonpatch
 import pecan
 from pecan import rest
-
+import six
 import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
@@ -36,6 +36,13 @@ from ironic.openstack.common import excutils
 from ironic.openstack.common import log
 
 LOG = log.getLogger(__name__)
+
+
+class PortPatchType(types.JsonPatchType):
+
+    @staticmethod
+    def mandatory_attrs():
+        return ['/address', '/node_uuid']
 
 
 class Port(base.APIBase):
@@ -73,7 +80,7 @@ class Port(base.APIBase):
     address = wsme.wsattr(types.macaddress, mandatory=True)
     "MAC Address for this port"
 
-    extra = {wtypes.text: api_utils.ValidTypes(wtypes.text, six.integer_types)}
+    extra = {wtypes.text: types.MultiType(wtypes.text, six.integer_types)}
     "This port's meta data"
 
     node_uuid = wsme.wsproperty(types.uuid, _get_node_uuid, _set_node_uuid,
@@ -111,6 +118,18 @@ class Port(base.APIBase):
                      ]
         return port
 
+    @classmethod
+    def sample(cls):
+        sample = cls(uuid='27e3153e-d5bf-4b7e-b517-fb518e17f34c',
+                     address='fe:54:00:77:07:d9',
+                     extra={'foo': 'bar'},
+                     created_at=datetime.datetime.utcnow(),
+                     updated_at=datetime.datetime.utcnow())
+        # NOTE(lucasagomes): node_uuid getter() method look at the
+        # _node_uuid variable
+        sample._node_uuid = '7ae81bb3-dec3-4289-8d6c-da80bd8001ae'
+        return sample
+
 
 class PortCollection(collection.Collection):
     """API representation of a collection of ports."""
@@ -130,6 +149,12 @@ class PortCollection(collection.Collection):
         collection.next = collection.get_next(limit, url=url, **kwargs)
         return collection
 
+    @classmethod
+    def sample(cls):
+        sample = cls()
+        sample.ports = [Port.sample()]
+        return sample
+
 
 class PortsController(rest.RestController):
     """REST controller for Ports."""
@@ -141,7 +166,8 @@ class PortsController(rest.RestController):
     def __init__(self, from_nodes=False):
         self._from_nodes = from_nodes
 
-    def _get_ports(self, node_uuid, marker, limit, sort_key, sort_dir):
+    def _get_ports_collection(self, node_uuid, marker, limit, sort_key,
+                              sort_dir, expand=False, resource_url=None):
         if self._from_nodes and not node_uuid:
             raise exception.InvalidParameterValue(_(
                   "Node id not specified."))
@@ -163,59 +189,68 @@ class PortsController(rest.RestController):
             ports = pecan.request.dbapi.get_port_list(limit, marker_obj,
                                                       sort_key=sort_key,
                                                       sort_dir=sort_dir)
-        return ports
 
-    def _check_address(self, port_dict):
-        try:
-            if pecan.request.dbapi.get_port(port_dict['address']):
-            # TODO(whaom) - create a custom SQLAlchemy type like
-            # db.sqlalchemy.types.IPAddress in Nova for mac
-            # with 'macaddr' postgres type for postgres dialect
-                raise wsme.exc.ClientSideError(_("MAC address already "
-                                                 "exists."))
-        except exception.PortNotFound:
-            pass
-
-    @wsme_pecan.wsexpose(PortCollection, wtypes.text, wtypes.text, int,
-                         wtypes.text, wtypes.text)
-    def get_all(self, node_uuid=None, marker=None, limit=None,
-                sort_key='id', sort_dir='asc'):
-        """Retrieve a list of ports."""
-        ports = self._get_ports(node_uuid, marker, limit, sort_key, sort_dir)
         return PortCollection.convert_with_links(ports, limit,
+                                                 url=resource_url,
+                                                 expand=expand,
                                                  sort_key=sort_key,
                                                  sort_dir=sort_dir)
 
-    @wsme_pecan.wsexpose(PortCollection, wtypes.text, wtypes.text, int,
+    @wsme_pecan.wsexpose(PortCollection, types.uuid, types.uuid, int,
+                         wtypes.text, wtypes.text)
+    def get_all(self, node_uuid=None, marker=None, limit=None,
+                sort_key='id', sort_dir='asc'):
+        """Retrieve a list of ports.
+
+        :param node_uuid: UUID of a node, to get only ports for that node.
+        :param marker: pagination marker for large data sets.
+        :param limit: maximum number of resources to return in a single result.
+        :param sort_key: column to sort results by. Default: id.
+        :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
+        """
+        return self._get_ports_collection(node_uuid, marker, limit,
+                                          sort_key, sort_dir)
+
+    @wsme_pecan.wsexpose(PortCollection, types.uuid, types.uuid, int,
                          wtypes.text, wtypes.text)
     def detail(self, node_uuid=None, marker=None, limit=None,
                 sort_key='id', sort_dir='asc'):
-        """Retrieve a list of ports."""
+        """Retrieve a list of ports with detail.
+
+        :param node_uuid: UUID of a node, to get only ports for that node.
+        :param marker: pagination marker for large data sets.
+        :param limit: maximum number of resources to return in a single result.
+        :param sort_key: column to sort results by. Default: id.
+        :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
+        """
         # NOTE(lucasagomes): /detail should only work agaist collections
         parent = pecan.request.path.split('/')[:-1][-1]
         if parent != "ports":
             raise exception.HTTPNotFound
 
-        ports = self._get_ports(node_uuid, marker, limit, sort_key, sort_dir)
+        expand = True
         resource_url = '/'.join(['ports', 'detail'])
-        return PortCollection.convert_with_links(ports, limit,
-                                                 url=resource_url,
-                                                 expand=True,
-                                                 sort_key=sort_key,
-                                                 sort_dir=sort_dir)
+        return self._get_ports_collection(node_uuid, marker, limit, sort_key,
+                                          sort_dir, expand, resource_url)
 
-    @wsme_pecan.wsexpose(Port, wtypes.text)
-    def get_one(self, uuid):
-        """Retrieve information about the given port."""
+    @wsme_pecan.wsexpose(Port, types.uuid)
+    def get_one(self, port_uuid):
+        """Retrieve information about the given port.
+
+        :param port_uuid: UUID of a port.
+        """
         if self._from_nodes:
             raise exception.OperationNotPermitted
 
-        rpc_port = objects.Port.get_by_uuid(pecan.request.context, uuid)
+        rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
         return Port.convert_with_links(rpc_port)
 
     @wsme_pecan.wsexpose(Port, body=Port)
     def post(self, port):
-        """Create a new port."""
+        """Create a new port.
+
+        :param port: a port within the request body.
+        """
         if self._from_nodes:
             raise exception.OperationNotPermitted
 
@@ -226,58 +261,40 @@ class PortsController(rest.RestController):
                 LOG.exception(e)
         return Port.convert_with_links(new_port)
 
-    @wsme_pecan.wsexpose(Port, wtypes.text, body=[wtypes.text])
-    def patch(self, uuid, patch):
-        """Update an existing port."""
+    @wsme.validate(types.uuid, [PortPatchType])
+    @wsme_pecan.wsexpose(Port, types.uuid, body=[PortPatchType])
+    def patch(self, port_uuid, patch):
+        """Update an existing port.
+
+        :param port_uuid: UUID of a port.
+        :param patch: a json PATCH document to apply to this port.
+        """
         if self._from_nodes:
             raise exception.OperationNotPermitted
 
-        port = objects.Port.get_by_uuid(pecan.request.context, uuid)
-        port_dict = port.as_dict()
-
-        api_utils.validate_patch(patch)
-
+        rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
         try:
-            patched_port = jsonpatch.apply_patch(port_dict,
-                                                 jsonpatch.JsonPatch(patch))
+            port = Port(**jsonpatch.apply_patch(rpc_port.as_dict(),
+                                                jsonpatch.JsonPatch(patch)))
         except jsonpatch.JsonPatchException as e:
             LOG.exception(e)
             raise wsme.exc.ClientSideError(_("Patching Error: %s") % e)
 
-        # Required fields
-        missing_attr = [attr for attr in ['address', 'node_id']
-                        if attr not in patched_port]
-        if missing_attr:
-            msg = _("Attribute(s): %s can not be removed")
-            raise wsme.exc.ClientSideError(msg % ', '.join(missing_attr))
+        # Update only the fields that have changed
+        for field in objects.Port.fields:
+            if rpc_port[field] != getattr(port, field):
+                rpc_port[field] = getattr(port, field)
 
-        # FIXME(lucasagomes): This block should not exist, address should
-        #                     be unique and validated at the db level.
-        if port_dict['address'] != patched_port['address']:
-            self._check_address(patched_port)
+        rpc_port.save()
+        return Port.convert_with_links(rpc_port)
 
-        defaults = objects.Port.get_defaults()
-        for key in defaults:
-            # Internal values that shouldn't be part of the patch
-            if key in ['id', 'updated_at', 'created_at']:
-                continue
+    @wsme_pecan.wsexpose(None, types.uuid, status_code=204)
+    def delete(self, port_uuid):
+        """Delete a port.
 
-            # In case of a remove operation, add the missing fields back
-            # to the document with their default value
-            if key in port_dict and key not in patched_port:
-                patched_port[key] = defaults[key]
-
-            # Update only the fields that have changed
-            if port[key] != patched_port[key]:
-                port[key] = patched_port[key]
-
-        port.save()
-        return Port.convert_with_links(port)
-
-    @wsme_pecan.wsexpose(None, wtypes.text, status_code=204)
-    def delete(self, port_id):
-        """Delete a port."""
+        :param port_uuid: UUID of a port.
+        """
         if self._from_nodes:
             raise exception.OperationNotPermitted
 
-        pecan.request.dbapi.destroy_port(port_id)
+        pecan.request.dbapi.destroy_port(port_uuid)

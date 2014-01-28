@@ -35,12 +35,19 @@ all active and cooperatively manage all nodes in the deployment.  Nodes are
 locked by each conductor when performing actions which change the state of that
 node; these locks are represented by the
 :py:class:`ironic.conductor.task_manager.TaskManager` class.
+
+A :py:class:`ironic.common.hash_ring.HashRing` is used to distribute nodes
+across the set of active conductors which support each node's driver.
+Rebalancing this ring can trigger various actions by each conductor, such as
+building or tearing down the TFTP environment for a node, notifying Neutron of
+a change, etc.
 """
 
 from oslo.config import cfg
 
 from ironic.common import driver_factory
 from ironic.common import exception
+from ironic.common import hash_ring as hash
 from ironic.common import service
 from ironic.common import states
 from ironic.conductor import task_manager
@@ -79,7 +86,7 @@ CONF.register_opts(conductor_opts, 'conductor')
 class ConductorManager(service.PeriodicService):
     """Ironic Conductor service main class."""
 
-    RPC_API_VERSION = '1.4'
+    RPC_API_VERSION = '1.7'
 
     def __init__(self, host, topic):
         serializer = objects_base.IronicObjectSerializer()
@@ -91,17 +98,22 @@ class ConductorManager(service.PeriodicService):
         self.dbapi = dbapi.get_instance()
 
         df = driver_factory.DriverFactory()
-        drivers = df.names
+        self.drivers = df.names
+        """List of driver names which this conductor supports."""
+
         try:
             self.dbapi.register_conductor({'hostname': self.host,
-                                           'drivers': drivers})
+                                           'drivers': self.drivers})
         except exception.ConductorAlreadyRegistered:
             LOG.warn(_("A conductor with hostname %(hostname)s "
                        "was previously registered. Updating registration")
                        % {'hostname': self.host})
             self.dbapi.unregister_conductor(self.host)
             self.dbapi.register_conductor({'hostname': self.host,
-                                           'drivers': drivers})
+                                           'drivers': self.drivers})
+
+        self.driver_rings = self._get_current_driver_rings()
+        """Consistent hash ring which maps drivers to conductors."""
 
     # TODO(deva): add stop() to call unregister_conductor
 
@@ -137,7 +149,7 @@ class ConductorManager(service.PeriodicService):
         :param node_obj: a changed (but not saved) node object.
 
         """
-        node_id = node_obj.get('uuid')
+        node_id = node_obj.uuid
         LOG.debug(_("RPC update_node called for node %s.") % node_id)
 
         delta = node_obj.obj_what_changed()
@@ -166,7 +178,7 @@ class ConductorManager(service.PeriodicService):
 
             return node_obj
 
-    def change_node_power_state(self, context, node_obj, new_state):
+    def change_node_power_state(self, context, node_id, new_state):
         """RPC method to encapsulate changes to a node's state.
 
         Perform actions such as power on, power off. It waits for the power
@@ -174,7 +186,7 @@ class ConductorManager(service.PeriodicService):
         the node with the new power state.
 
         :param context: an admin context.
-        :param node_obj: an RPC-style node object.
+        :param node_id: the id or uuid of a node.
         :param new_state: the desired power state of the node.
         :raises: InvalidParameterValue when the wrong state is specified
                  or the wrong driver info is specified.
@@ -182,7 +194,6 @@ class ConductorManager(service.PeriodicService):
                  wrong occurred during the power action.
 
         """
-        node_id = node_obj.get('uuid')
         LOG.debug(_("RPC change_node_power_state called for node %(node)s. "
                     "The desired new state is %(state)s.")
                     % {'node': node_id, 'state': new_state})
@@ -201,17 +212,23 @@ class ConductorManager(service.PeriodicService):
     def validate_vendor_action(self, context, node_id, driver_method, info):
         """Validate driver specific info or get driver status."""
 
-        LOG.debug(_("RPC call_driver called for node %s.") % node_id)
+        LOG.debug(_("RPC validate_vendor_action called for node %s.")
+                    % node_id)
         with task_manager.acquire(context, node_id, shared=True) as task:
-            if getattr(task.driver, 'vendor', None):
-                return task.driver.vendor.validate(task.node,
-                                                   method=driver_method,
-                                                   **info)
-            else:
-                raise exception.UnsupportedDriverExtension(
-                                        driver=task.node['driver'],
-                                        node=node_id,
-                                        extension='vendor passthru')
+            try:
+                if getattr(task.driver, 'vendor', None):
+                    return task.driver.vendor.validate(task.node,
+                                                       method=driver_method,
+                                                       **info)
+                else:
+                    raise exception.UnsupportedDriverExtension(
+                                            driver=task.node.driver,
+                                            extension='vendor passthru')
+            except Exception as e:
+                with excutils.save_and_reraise_exception():
+                    task.node.last_error = \
+                        _("Failed to validate vendor info. Error: %s") % e
+                    task.node.save(context)
 
     def do_vendor_action(self, context, node_id, driver_method, info):
         """Run driver action asynchronously."""
@@ -220,15 +237,14 @@ class ConductorManager(service.PeriodicService):
                 task.driver.vendor.vendor_passthru(task, task.node,
                                                   method=driver_method, **info)
 
-    def do_node_deploy(self, context, node_obj):
+    def do_node_deploy(self, context, node_id):
         """RPC method to initiate deployment to a node.
 
         :param context: an admin context.
-        :param node_obj: an RPC-style node object.
+        :param node_id: the id or uuid of a node.
         :raises: InstanceDeployFailure
 
         """
-        node_id = node_obj.get('uuid')
         LOG.debug(_("RPC do_node_deploy called for node %s.") % node_id)
 
         with task_manager.acquire(context, node_id, shared=False) as task:
@@ -238,6 +254,11 @@ class ConductorManager(service.PeriodicService):
                     "RPC do_node_deploy called for %(node)s, but provision "
                     "state is already %(state)s.") %
                     {'node': node_id, 'state': node['provision_state']})
+
+            if node.maintenance:
+                raise exception.InstanceDeployFailure(_(
+                    "RPC do_node_deploy called for %s, but node is in "
+                    "maintenance mode.") % node_id)
 
             try:
                 task.driver.deploy.validate(node)
@@ -254,11 +275,12 @@ class ConductorManager(service.PeriodicService):
                 node.save(context)
 
             try:
+                task.driver.deploy.prepare(task, node)
                 new_state = task.driver.deploy.deploy(task, node)
             except Exception as e:
                 with excutils.save_and_reraise_exception():
                     node['last_error'] = _("Failed to deploy. Error: %s") % e
-                    node['provision_state'] = states.ERROR
+                    node['provision_state'] = states.DEPLOYFAIL
                     node['target_provision_state'] = states.NOSTATE
             else:
                 # NOTE(deva): Some drivers may return states.DEPLOYING
@@ -271,15 +293,14 @@ class ConductorManager(service.PeriodicService):
             finally:
                 node.save(context)
 
-    def do_node_tear_down(self, context, node_obj):
+    def do_node_tear_down(self, context, node_id):
         """RPC method to tear down an existing node deployment.
 
         :param context: an admin context.
-        :param node_obj: an RPC-style node object.
+        :param node_id: the id or uuid of a node.
         :raises: InstanceDeployFailure
 
         """
-        node_id = node_obj.get('uuid')
         LOG.debug(_("RPC do_node_tear_down called for node %s.") % node_id)
 
         with task_manager.acquire(context, node_id, shared=False) as task:
@@ -307,6 +328,7 @@ class ConductorManager(service.PeriodicService):
                 node.save(context)
 
             try:
+                task.driver.deploy.clean_up(task, node)
                 new_state = task.driver.deploy.tear_down(task, node)
             except Exception as e:
                 with excutils.save_and_reraise_exception():
@@ -332,14 +354,31 @@ class ConductorManager(service.PeriodicService):
     @periodic_task.periodic_task(
             spacing=CONF.conductor.sync_power_state_interval)
     def _sync_power_states(self, context):
-        # TODO(deva): add filter by conductor<->instance mapping
         filters = {'reserved': False}
-        node_list = self.dbapi.get_nodeinfo_list(filters=filters)
-        for node_id, in node_list:
+        columns = ['id', 'uuid', 'driver']
+        node_list = self.dbapi.get_nodeinfo_list(columns=columns,
+                                                 filters=filters)
+        for (node_id, node_uuid, driver) in node_list:
+            # only sync power states for nodes mapped to this conductor
+            mapped_hosts = self.driver_rings[driver].get_hosts(node_uuid)
+            if self.host not in mapped_hosts:
+                continue
+
             try:
                 with task_manager.acquire(context, node_id) as task:
                     node = task.node
-                    power_state = task.driver.power.get_power_state(task, node)
+
+                    try:
+                        power_state = task.driver.power.get_power_state(task,
+                                                                        node)
+                    except Exception as e:
+                        #TODO(rloo): change to IronicException, after
+                        # https://bugs.launchpad.net/ironic/+bug/1267693
+                        LOG.debug(_("During sync_power_state, could not get "
+                            "power state for node %(node)s. Error: %(err)s.") %
+                            {'node': node.uuid, 'err': e})
+                        continue
+
                     if power_state != node['power_state']:
                         # NOTE(deva): don't log a warning the first time we
                         #             sync a node's power state
@@ -353,8 +392,92 @@ class ConductorManager(service.PeriodicService):
                         node['power_state'] = power_state
                         node.save(context)
 
-            except (exception.NodeLocked, exception.NodeNotFound):
-                # NOTE(deva): if an instance is deleted during sync,
-                #             or locked by another process,
-                #             silently ignore it and continue
+            except exception.NodeNotFound:
+                LOG.info(_("During sync_power_state, node %(node)s was not "
+                           "found and presumed deleted by another process.") %
+                           {'node': node_uuid})
                 continue
+            except exception.NodeLocked:
+                LOG.info(_("During sync_power_state, node %(node)s was "
+                           "already locked by another process. Skip.") %
+                           {'node': node_uuid})
+                continue
+
+    def _get_current_driver_rings(self):
+        """Build the current hash ring for this ConductorManager's drivers."""
+
+        ring = {}
+        d2c = self.dbapi.get_active_driver_dict()
+
+        for driver in self.drivers:
+            ring[driver] = hash.HashRing(d2c[driver])
+        return ring
+
+    def rebalance_node_ring(self):
+        """Perform any actions necessary when rebalancing the consistent hash.
+
+        This may trigger several actions, such as calling driver.deploy.prepare
+        for nodes which are now mapped to this conductor.
+
+        """
+        # TODO(deva): implement this
+        pass
+
+    def validate_driver_interfaces(self, context, node_id):
+        """Validate the `core` and `standardized` interfaces for drivers.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :returns: a dictionary containing the results of each
+                  interface validation.
+
+        """
+        LOG.debug(_('RPC validate_driver_interfaces called for node %s.') %
+                    node_id)
+        ret_dict = {}
+        with task_manager.acquire(context, node_id, shared=True) as task:
+            for iface_name in (task.driver.core_interfaces +
+                               task.driver.standard_interfaces):
+                iface = getattr(task.driver, iface_name, None)
+                result = reason = None
+                if iface:
+                    try:
+                        iface.validate(task.node)
+                        result = True
+                    except exception.InvalidParameterValue as e:
+                        result = False
+                        reason = str(e)
+                else:
+                    reason = _('not supported')
+
+                ret_dict[iface_name] = {}
+                ret_dict[iface_name]['result'] = result
+                if reason is not None:
+                    ret_dict[iface_name]['reason'] = reason
+        return ret_dict
+
+    def change_node_maintenance_mode(self, context, node_id, mode):
+        """Set node maintenance mode on or off.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param mode: True or False.
+        :raises: NodeMaintenanceFailure
+
+        """
+        LOG.debug(_("RPC change_node_maintenance_mode called for node %(node)s"
+                    " with maintanence mode: %(mode)s") % {'node': node_id,
+                                                           'mode': mode})
+
+        with task_manager.acquire(context, node_id, shared=True) as task:
+            node = task.node
+            if mode is not node.maintenance:
+                node.maintenance = mode
+                node.save(context)
+            else:
+                msg = _("The node is already in maintenance mode") if mode \
+                        else _("The node is not in maintenance mode")
+                raise exception.NodeMaintenanceFailure(node=node_id,
+                                                       reason=msg)
+
+            return node

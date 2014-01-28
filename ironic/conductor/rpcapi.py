@@ -19,9 +19,13 @@
 Client side of the conductor RPC API.
 """
 
+from oslo.config import cfg
+
+from ironic.common import hash_ring as hash
+from ironic.conductor import manager
+from ironic.db import api as dbapi
 from ironic.objects import base as objects_base
 import ironic.openstack.common.rpc.proxy
-from oslo.config import cfg
 
 # NOTE(max_lobur): This is temporary override for Oslo setting defined in
 # ironic.openstack.common.rpc.__init__.py. Should stay while Oslo is not fixed.
@@ -32,8 +36,6 @@ from oslo.config import cfg
 cfg.CONF.set_default('allowed_rpc_exception_modules',
                      ['ironic.common.exception',
                       'exceptions', ])
-
-MANAGER_TOPIC = 'ironic.conductor_manager'
 
 
 class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
@@ -46,34 +48,62 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
         1.1 - Added update_node and start_power_state_change.
         1.2 - Added vendor_passhthru.
         1.3 - Rename start_power_state_change to change_node_power_state.
-        1.4 - Add do_node_deploy and do_node_tear_down.
+        1.4 - Added do_node_deploy and do_node_tear_down.
+        1.5 - Added validate_driver_interfaces.
+        1.6 - change_node_power_state, do_node_deploy and do_node_tear_down
+              accept node id instead of node object.
+        1.7 - Added topic parameter to RPC methods.
+        1.8 - Added change_node_maintenance_mode.
 
     """
 
-    RPC_API_VERSION = '1.4'
+    RPC_API_VERSION = '1.7'
 
     def __init__(self, topic=None):
         if topic is None:
-            topic = MANAGER_TOPIC
+            topic = manager.MANAGER_TOPIC
+
+        # Initialize consistent hash ring
+        self.hash_rings = {}
+        d2c = dbapi.get_instance().get_active_driver_dict()
+        for driver in d2c.keys():
+            self.hash_rings[driver] = hash.HashRing(d2c[driver])
 
         super(ConductorAPI, self).__init__(
                 topic=topic,
                 serializer=objects_base.IronicObjectSerializer(),
                 default_version=self.RPC_API_VERSION)
 
-    def get_node_power_state(self, context, node_id):
+    def get_topic_for(self, node):
+        """Get the RPC topic for the conductor service which the node
+        is mapped to.
+
+        :param node: a node object.
+        :returns: an RPC topic string.
+
+        """
+        try:
+            ring = self.hash_rings[node.driver]
+            dest = ring.get_hosts(node.uuid)
+            return self.topic + "." + dest[0]
+        except KeyError:
+            return self.topic
+
+    def get_node_power_state(self, context, node_id, topic=None):
         """Ask a conductor for the node power state.
 
         :param context: request context.
         :param node_id: node id or uuid.
+        :param topic: RPC topic. Defaults to self.topic.
         :returns: power status.
 
         """
         return self.call(context,
                          self.make_msg('get_node_power_state',
-                                       node_id=node_id))
+                                       node_id=node_id),
+                         topic=topic or self.topic)
 
-    def update_node(self, context, node_obj):
+    def update_node(self, context, node_obj, topic=None):
         """Synchronously, have a conductor update the node's information.
 
         Update the node's information in the database and return a node object.
@@ -87,42 +117,51 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
 
         :param context: request context.
         :param node_obj: a changed (but not saved) node object.
+        :param topic: RPC topic. Defaults to self.topic.
         :returns: updated node object, including all fields.
 
         """
         return self.call(context,
                          self.make_msg('update_node',
-                                       node_obj=node_obj))
+                                       node_obj=node_obj),
+                         topic=topic or self.topic)
 
-    def change_node_power_state(self, context, node_obj, new_state):
+    def change_node_power_state(self, context, node_id, new_state, topic=None):
         """Asynchronously change power state of a node.
 
         :param context: request context.
-        :param node_obj: an RPC_style node object.
+        :param node_id: node id or uuid.
         :param new_state: one of ironic.common.states power state values
+        :param topic: RPC topic. Defaults to self.topic.
 
         """
         self.cast(context,
                   self.make_msg('change_node_power_state',
-                                node_obj=node_obj,
-                                new_state=new_state))
+                                node_id=node_id,
+                                new_state=new_state),
+                  topic=topic or self.topic)
 
-    def vendor_passthru(self, context, node_id, driver_method, info):
+    def vendor_passthru(self, context, node_id, driver_method, info,
+                        topic=None):
         """Pass vendor specific info to a node driver.
 
         :param context: request context.
         :param node_id: node id or uuid.
         :param driver_method: name of method for driver.
         :param info: info for node driver.
+        :param topic: RPC topic. Defaults to self.topic.
         :raises: InvalidParameterValue for parameter errors.
         :raises: UnsupportedDriverExtension for unsupported extensions.
 
         """
+        topic = topic or self.topic
+
         driver_data = self.call(context,
                                 self.make_msg('validate_vendor_action',
-                                node_id=node_id,
-                                driver_method=driver_method,
-                                info=info))
+                                    node_id=node_id,
+                                    driver_method=driver_method,
+                                    info=info),
+                                topic=topic)
 
         # this method can do nothing if 'driver_method' intended only
         # for obtain 'driver_data'
@@ -130,15 +169,17 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
                   self.make_msg('do_vendor_action',
                                 node_id=node_id,
                                 driver_method=driver_method,
-                                info=info))
+                                info=info),
+                  topic=topic)
 
         return driver_data
 
-    def do_node_deploy(self, context, node_obj):
+    def do_node_deploy(self, context, node_id, topic=None):
         """Signal to conductor service to perform a deployment.
 
         :param context: request context.
-        :param node_obj: an RPC style node obj.
+        :param node_id: node id or uuid.
+        :param topic: RPC topic. Defaults to self.topic.
 
         The node must already be configured and in the appropriate
         undeployed state before this method is called.
@@ -146,13 +187,15 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
         """
         self.cast(context,
                   self.make_msg('do_node_deploy',
-                                node_obj=node_obj))
+                                node_id=node_id),
+                  topic=topic or self.topic)
 
-    def do_node_tear_down(self, context, node_obj):
+    def do_node_tear_down(self, context, node_id, topic=None):
         """Signal to conductor service to tear down a deployment.
 
         :param context: request context.
-        :param node_obj: an RPC style node obj.
+        :param node_id: node id or uuid.
+        :param topic: RPC topic. Defaults to self.topic.
 
         The node must already be configured and in the appropriate
         deployed state before this method is called.
@@ -160,4 +203,35 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
         """
         self.cast(context,
                   self.make_msg('do_node_tear_down',
-                                node_obj=node_obj))
+                                node_id=node_id),
+                  topic=topic or self.topic)
+
+    def validate_driver_interfaces(self, context, node_id, topic=None):
+        """Validate the `core` and `standardized` interfaces for drivers.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param topic: RPC topic. Defaults to self.topic.
+        :returns: a dictionary containing the results of each
+                  interface validation.
+
+        """
+        return self.call(context,
+                         self.make_msg('validate_driver_interfaces',
+                                       node_id=node_id),
+                         topic=topic or self.topic)
+
+    def change_node_maintenance_mode(self, context, node_id, mode):
+        """Set node maintenance mode on or off.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param mode: True or False.
+        :returns: a node object.
+        :raises: NodeMaintenanceFailure.
+
+        """
+        return self.call(context,
+                         self.make_msg('change_node_maintenance_mode',
+                                       node_id=node_id,
+                                       mode=mode))

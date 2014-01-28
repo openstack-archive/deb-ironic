@@ -54,50 +54,27 @@ CONF.register_opts(utils_opts)
 
 LOG = logging.getLogger(__name__)
 
-# Used for looking up extensions of text
-# to their 'multiplied' byte amount
-BYTE_MULTIPLIERS = {
-    '': 1,
-    't': 1024 ** 4,
-    'g': 1024 ** 3,
-    'm': 1024 ** 2,
-    'k': 1024,
-}
+
+def _get_root_helper():
+    return 'sudo ironic-rootwrap %s' % CONF.rootwrap_config
 
 
 def execute(*cmd, **kwargs):
     """Convenience wrapper around oslo's execute() method."""
     if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
-        kwargs['root_helper'] = ' '.join(['sudo', 'ironic-rootwrap',
-                                          CONF.rootwrap_config])
-    return processutils.execute(*cmd, **kwargs)
+        kwargs['root_helper'] = _get_root_helper()
+    result = processutils.execute(*cmd, **kwargs)
+    LOG.debug(_('Execution completed, command line is "%s"'), ' '.join(cmd))
+    LOG.debug(_('Command stdout is: "%s"') % result[0])
+    LOG.debug(_('Command stderr is: "%s"') % result[1])
+    return result
 
 
 def trycmd(*args, **kwargs):
-    """A wrapper around execute() to more easily handle warnings and errors.
-
-    Returns an (out, err) tuple of strings containing the output of
-    the command's stdout and stderr.  If 'err' is not empty then the
-    command can be considered to have failed.
-
-    :discard_warnings   True | False. Defaults to False. If set to True,
-                        then for succeeding commands, stderr is cleared
-
-    """
-    discard_warnings = kwargs.pop('discard_warnings', False)
-
-    try:
-        out, err = execute(*args, **kwargs)
-        failed = False
-    except processutils.ProcessExecutionError as exn:
-        out, err = '', str(exn)
-        failed = True
-
-    if not failed and discard_warnings and err:
-        # Handle commands that output to stderr but otherwise succeed
-        err = ''
-
-    return out, err
+    """Convenience wrapper around oslo's trycmd() method."""
+    if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
+        kwargs['root_helper'] = _get_root_helper()
+    return processutils.trycmd(*args, **kwargs)
 
 
 def ssh_connect(connection):
@@ -200,11 +177,35 @@ def is_valid_boolstr(val):
 
 
 def is_valid_mac(address):
-    """Verify the format of a MAC addres."""
+    """Verify the format of a MAC address.
+
+    Check if a MAC address is valid and contains six octets. Accepts
+    colon-separated format only.
+
+    :param address: MAC address to be validated.
+    :returns: True if valid. False if not.
+
+    """
     m = "[0-9a-f]{2}(:[0-9a-f]{2}){5}$"
     if isinstance(address, six.string_types) and re.match(m, address.lower()):
         return True
     return False
+
+
+def validate_and_normalize_mac(address):
+    """Validate a MAC address and return normalized form.
+
+    Checks whether the supplied MAC address is formally correct and
+    normalize it to all lower case.
+
+    :param address: MAC address to be validated and normalized.
+    :returns: Normalized and validated MAC address.
+    :raises: InvalidMAC If the MAC address is not valid.
+
+    """
+    if not is_valid_mac(address):
+        raise exception.InvalidMAC(mac=address)
+    return address.lower()
 
 
 def is_valid_ipv4(address):

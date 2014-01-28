@@ -21,6 +21,7 @@
 
 import mock
 from oslo.config import cfg
+from testtools.matchers import HasLength
 
 from ironic.common import driver_factory
 from ironic.common import exception
@@ -120,11 +121,13 @@ class ManagerTestCase(base.DbTestCase):
 
         # create three nodes
         nodes = []
+        nodeinfo = []
         for i in range(0, 3):
             n = utils.get_test_node(id=i, uuid=ironic_utils.generate_uuid(),
                     driver='fake', power_state=states.POWER_OFF)
             self.dbapi.create_node(n)
             nodes.append(n['uuid'])
+            nodeinfo.append([i, n['uuid'], 'fake'])
 
         # lock the first node
         self.dbapi.reserve_nodes('fake-reserve', [nodes[0]])
@@ -136,7 +139,7 @@ class ManagerTestCase(base.DbTestCase):
                                    'get_nodeinfo_list') as get_fnl_mock:
                 # delete the second node
                 self.dbapi.destroy_node(nodes[1])
-                get_fnl_mock.return_value = [[n] for n in nodes]
+                get_fnl_mock.return_value = nodeinfo
                 self.service._sync_power_states(self.context)
             # check that get_power only called once, which updated third node
             get_power_mock.assert_called_once_with(mock.ANY, mock.ANY)
@@ -144,6 +147,40 @@ class ManagerTestCase(base.DbTestCase):
         n3 = self.dbapi.get_node(nodes[2])
         self.assertEqual(n1['power_state'], states.POWER_OFF)
         self.assertEqual(n3['power_state'], states.POWER_ON)
+
+    def test__sync_power_state_node_no_power_state(self):
+        self.service.start()
+
+        # create three nodes
+        nodes = []
+        for i in range(0, 3):
+            n = utils.get_test_node(id=i, uuid=ironic_utils.generate_uuid(),
+                    driver='fake', power_state=states.POWER_OFF)
+            self.dbapi.create_node(n)
+            nodes.append(n['uuid'])
+
+        # cannot get power state of node 2; only nodes 1 & 3 have
+        # their power states changed.
+        with mock.patch.object(self.driver.power,
+                               'get_power_state') as get_power_mock:
+            returns = [states.POWER_ON,
+                       exception.InvalidParameterValue("invalid"),
+                       states.POWER_ON]
+
+            def side_effect(*args):
+                result = returns.pop(0)
+                if isinstance(result, Exception):
+                    raise result
+                return result
+
+            get_power_mock.side_effect = side_effect
+            self.service._sync_power_states(self.context)
+            self.assertThat(returns, HasLength(0))
+
+        final = [states.POWER_ON, states.POWER_OFF, states.POWER_ON]
+        for i in range(0, 3):
+            n = self.dbapi.get_node(nodes[i])
+            self.assertEqual(n.power_state, final[i])
 
     def test_get_power_state(self):
         n = utils.get_test_node(driver='fake')
@@ -258,35 +295,43 @@ class ManagerTestCase(base.DbTestCase):
 
     def test_validate_vendor_action(self):
         n = utils.get_test_node(driver='fake')
-        self.dbapi.create_node(n)
+        node = self.dbapi.create_node(n)
         info = {'bar': 'baz'}
         self.assertTrue(self.service.validate_vendor_action(self.context,
                                                      n['uuid'], 'foo', info))
+        node.refresh(self.context)
+        self.assertIsNone(node.last_error)
 
     def test_validate_vendor_action_unsupported_method(self):
         n = utils.get_test_node(driver='fake')
-        self.dbapi.create_node(n)
+        node = self.dbapi.create_node(n)
         info = {'bar': 'baz'}
         self.assertRaises(exception.InvalidParameterValue,
                           self.service.validate_vendor_action,
                           self.context, n['uuid'], 'abc', info)
+        node.refresh(self.context)
+        self.assertIsNotNone(node.last_error)
 
     def test_validate_vendor_action_no_parameter(self):
         n = utils.get_test_node(driver='fake')
-        self.dbapi.create_node(n)
+        node = self.dbapi.create_node(n)
         info = {'fake': 'baz'}
         self.assertRaises(exception.InvalidParameterValue,
                           self.service.validate_vendor_action,
                           self.context, n['uuid'], 'foo', info)
+        node.refresh(self.context)
+        self.assertIsNotNone(node.last_error)
 
     def test_validate_vendor_action_unsupported(self):
         n = utils.get_test_node(driver='fake')
-        self.dbapi.create_node(n)
+        node = self.dbapi.create_node(n)
         info = {'bar': 'baz'}
         self.driver.vendor = None
         self.assertRaises(exception.UnsupportedDriverExtension,
                           self.service.validate_vendor_action,
                           self.context, n['uuid'], 'foo', info)
+        node.refresh(self.context)
+        self.assertIsNotNone(node.last_error)
 
     def test_do_node_deploy_invalid_state(self):
         # test node['provision_state'] is not NOSTATE
@@ -295,7 +340,14 @@ class ManagerTestCase(base.DbTestCase):
         node = self.dbapi.create_node(ndict)
         self.assertRaises(exception.InstanceDeployFailure,
                           self.service.do_node_deploy,
-                          self.context, node)
+                          self.context, node['uuid'])
+
+    def test_do_node_deploy_maintenance(self):
+        ndict = utils.get_test_node(driver='fake', maintenance=True)
+        node = self.dbapi.create_node(ndict)
+        self.assertRaises(exception.InstanceDeployFailure,
+                          self.service.do_node_deploy,
+                          self.context, node['uuid'])
 
     def test_do_node_deploy_driver_raises_error(self):
         # test when driver.deploy.deploy raises an exception
@@ -308,9 +360,9 @@ class ManagerTestCase(base.DbTestCase):
             deploy.side_effect = exception.InstanceDeployFailure('test')
             self.assertRaises(exception.InstanceDeployFailure,
                               self.service.do_node_deploy,
-                              self.context, node)
+                              self.context, node['uuid'])
             node.refresh(self.context)
-            self.assertEqual(node['provision_state'], states.ERROR)
+            self.assertEqual(node['provision_state'], states.DEPLOYFAIL)
             self.assertEqual(node['target_provision_state'], states.NOSTATE)
             self.assertIsNotNone(node['last_error'])
             deploy.assert_called_once()
@@ -324,7 +376,7 @@ class ManagerTestCase(base.DbTestCase):
         with mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy') \
                 as deploy:
             deploy.return_value = states.DEPLOYDONE
-            self.service.do_node_deploy(self.context, node)
+            self.service.do_node_deploy(self.context, node['uuid'])
             node.refresh(self.context)
             self.assertEqual(node['provision_state'], states.ACTIVE)
             self.assertEqual(node['target_provision_state'], states.NOSTATE)
@@ -340,7 +392,7 @@ class ManagerTestCase(base.DbTestCase):
         with mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy') \
                 as deploy:
             deploy.return_value = states.DEPLOYING
-            self.service.do_node_deploy(self.context, node)
+            self.service.do_node_deploy(self.context, node['uuid'])
             node.refresh(self.context)
             self.assertEqual(node['provision_state'], states.DEPLOYING)
             self.assertEqual(node['target_provision_state'], states.DEPLOYDONE)
@@ -354,7 +406,7 @@ class ManagerTestCase(base.DbTestCase):
         node = self.dbapi.create_node(ndict)
         self.assertRaises(exception.InstanceDeployFailure,
                           self.service.do_node_tear_down,
-                          self.context, node)
+                          self.context, node['uuid'])
 
     def test_do_node_tear_down_driver_raises_error(self):
         # test when driver.deploy.tear_down raises exception
@@ -367,7 +419,7 @@ class ManagerTestCase(base.DbTestCase):
             deploy.side_effect = exception.InstanceDeployFailure('test')
             self.assertRaises(exception.InstanceDeployFailure,
                               self.service.do_node_tear_down,
-                              self.context, node)
+                              self.context, node['uuid'])
             node.refresh(self.context)
             self.assertEqual(node['provision_state'], states.ERROR)
             self.assertEqual(node['target_provision_state'], states.NOSTATE)
@@ -383,7 +435,7 @@ class ManagerTestCase(base.DbTestCase):
         with mock.patch('ironic.drivers.modules.fake.FakeDeploy.tear_down') \
                 as deploy:
             deploy.return_value = states.DELETED
-            self.service.do_node_tear_down(self.context, node)
+            self.service.do_node_tear_down(self.context, node['uuid'])
             node.refresh(self.context)
             self.assertEqual(node['provision_state'], states.NOSTATE)
             self.assertEqual(node['target_provision_state'], states.NOSTATE)
@@ -399,9 +451,68 @@ class ManagerTestCase(base.DbTestCase):
         with mock.patch('ironic.drivers.modules.fake.FakeDeploy.tear_down') \
                 as deploy:
             deploy.return_value = states.DELETING
-            self.service.do_node_tear_down(self.context, node)
+            self.service.do_node_tear_down(self.context, node['uuid'])
             node.refresh(self.context)
             self.assertEqual(node['provision_state'], states.DELETING)
             self.assertEqual(node['target_provision_state'], states.DELETED)
             self.assertIsNone(node['last_error'])
             deploy.assert_called_once()
+
+    def test_validate_driver_interfaces(self):
+        ndict = utils.get_test_node(driver='fake')
+        node = self.dbapi.create_node(ndict)
+        ret = self.service.validate_driver_interfaces(self.context,
+                                                      node['uuid'])
+        expected = {'console': {'result': None, 'reason': 'not supported'},
+                    'rescue': {'result': None, 'reason': 'not supported'},
+                    'power': {'result': True},
+                    'deploy': {'result': True}}
+        self.assertEqual(expected, ret)
+
+    def test_validate_driver_interfaces_validation_fail(self):
+        ndict = utils.get_test_node(driver='fake')
+        node = self.dbapi.create_node(ndict)
+        with mock.patch('ironic.drivers.modules.fake.FakeDeploy.validate') \
+                as deploy:
+            reason = 'fake reason'
+            deploy.side_effect = exception.InvalidParameterValue(reason)
+            ret = self.service.validate_driver_interfaces(self.context,
+                                                          node['uuid'])
+            self.assertFalse(ret['deploy']['result'])
+            self.assertEqual(reason, ret['deploy']['reason'])
+
+    def test_maintenance_mode_on(self):
+        ndict = utils.get_test_node(driver='fake')
+        node = self.dbapi.create_node(ndict)
+        self.service.change_node_maintenance_mode(self.context, node.uuid,
+                                                  True)
+        node.refresh(self.context)
+        self.assertTrue(node.maintenance)
+
+    def test_maintenance_mode_off(self):
+        ndict = utils.get_test_node(driver='fake',
+                                    maintenance=True)
+        node = self.dbapi.create_node(ndict)
+        self.service.change_node_maintenance_mode(self.context, node.uuid,
+                                                  False)
+        node.refresh(self.context)
+        self.assertFalse(node.maintenance)
+
+    def test_maintenance_mode_on_failed(self):
+        ndict = utils.get_test_node(driver='fake',
+                                    maintenance=True)
+        node = self.dbapi.create_node(ndict)
+        self.assertRaises(exception.NodeMaintenanceFailure,
+                          self.service.change_node_maintenance_mode,
+                          self.context, node.uuid, True)
+        node.refresh(self.context)
+        self.assertTrue(node.maintenance)
+
+    def test_maintenance_mode_off_failed(self):
+        ndict = utils.get_test_node(driver='fake')
+        node = self.dbapi.create_node(ndict)
+        self.assertRaises(exception.NodeMaintenanceFailure,
+                          self.service.change_node_maintenance_mode,
+                          self.context, node.uuid, False)
+        node.refresh(self.context)
+        self.assertFalse(node.maintenance)

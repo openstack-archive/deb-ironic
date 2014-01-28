@@ -47,6 +47,8 @@ class Node(base.IronicObject):
             'provision_state': utils.str_or_none,
             'target_provision_state': utils.str_or_none,
 
+            'maintenance': bool,
+
             # Any error from the most recent (last) asynchronous transaction
             # that started but failed to finish.
             'last_error': utils.str_or_none,
@@ -84,10 +86,7 @@ class Node(base.IronicObject):
 
         :param context: Security context
         """
-        updates = {}
-        changes = self.obj_what_changed()
-        for field in changes:
-            updates[field] = self[field]
+        updates = self.obj_get_changes()
         self.dbapi.update_node(self.uuid, updates)
 
         self.obj_reset_changes()

@@ -24,13 +24,9 @@ SHOULD include dedicated exception logging.
 
 """
 
-import functools
-
 from oslo.config import cfg
 import six
 
-from ironic.common import safe_utils
-from ironic.openstack.common import excutils
 from ironic.openstack.common.gettextutils import _
 from ironic.openstack.common import log as logging
 
@@ -50,46 +46,6 @@ CONF.register_opts(exc_log_opts)
 def _cleanse_dict(original):
     """Strip all admin_password, new_pass, rescue_pass keys from a dict."""
     return dict((k, v) for k, v in original.iteritems() if not "_pass" in k)
-
-
-def wrap_exception(notifier=None, publisher_id=None, event_type=None,
-                   level=None):
-    """This decorator wraps a method to catch any exceptions that may
-    get thrown. It logs the exception as well as optionally sending
-    it to the notification system.
-    """
-    def inner(f):
-        def wrapped(self, context, *args, **kw):
-            # Don't store self or context in the payload, it now seems to
-            # contain confidential information.
-            try:
-                return f(self, context, *args, **kw)
-            except Exception as e:
-                with excutils.save_and_reraise_exception():
-                    if notifier:
-                        payload = dict(exception=e)
-                        call_dict = safe_utils.getcallargs(f, *args, **kw)
-                        cleansed = _cleanse_dict(call_dict)
-                        payload.update({'args': cleansed})
-
-                        # Use a temp vars so we don't shadow
-                        # our outer definitions.
-                        temp_level = level
-                        if not temp_level:
-                            temp_level = notifier.ERROR
-
-                        temp_type = event_type
-                        if not temp_type:
-                            # If f has multiple decorators, they must use
-                            # functools.wraps to ensure the name is
-                            # propagated.
-                            temp_type = f.__name__
-
-                        notifier.notify(context, publisher_id, temp_type,
-                                        temp_level, payload)
-
-        return functools.wraps(f)(wrapped)
-    return inner
 
 
 class IronicException(Exception):
@@ -162,9 +118,17 @@ class Invalid(IronicException):
     code = 400
 
 
-class InvalidState(IronicException):
-    message = _("Invalid resource state.")
+class Conflict(IronicException):
+    message = _('Conflict.')
     code = 409
+
+
+class InvalidState(Conflict):
+    message = _("Invalid resource state.")
+
+
+class MACAlreadyExists(Conflict):
+    message = _("A Port with MAC address %(mac)s already exists.")
 
 
 class InvalidCPUInfo(Invalid):
@@ -189,6 +153,10 @@ class InvalidIdentity(Invalid):
 
 class InvalidMAC(Invalid):
     message = _("Expected a MAC address but received %(mac)s.")
+
+
+class InvalidStateRequested(Invalid):
+    message = _("Invalid state '%(state)s' requested for node %(node)s.")
 
 
 class InstanceDeployFailure(IronicException):
@@ -283,6 +251,11 @@ class ExclusiveLockRequired(NotAuthorized):
                 "but the current context has a shared lock.")
 
 
+class NodeMaintenanceFailure(Invalid):
+    message = _("Failed to toggle maintenance-mode flag "
+                "for node %(node)s: %(reason)s")
+
+
 class NodeInUse(InvalidState):
     message = _("Unable to complete the requested action because node "
                 "%(node)s is currently in use by another process.")
@@ -290,12 +263,12 @@ class NodeInUse(InvalidState):
 
 class NodeInWrongPowerState(InvalidState):
     message = _("Can not change instance association while node "
-            "%(node)s is in power state %(pstate)s.")
+                "%(node)s is in power state %(pstate)s.")
 
 
 class NodeNotConfigured(InvalidState):
     message = _("Can not change power state because node %(node)s "
-            "is not fully configured.")
+                "is not fully configured.")
 
 
 class ChassisNotEmpty(Invalid):
@@ -320,8 +293,7 @@ class OrphanedObjectError(IronicException):
 
 
 class UnsupportedDriverExtension(Invalid):
-    message = _('Driver %(driver)s for node %(node)s does not '
-                'support %(extension)s.')
+    message = _('Driver %(driver)s does not support %(extension)s.')
 
 
 class IncompatibleObjectVersion(IronicException):
@@ -350,8 +322,8 @@ class CatalogFailure(IronicException):
 
 
 class CatalogNotFound(IronicException):
-    message = _("Attr %(attr)s with value %(value)s not found in keystone "
-                "service catalog.")
+    message = _("Service type %(service_type)s with endpoint type "
+                "%(endpoint_type)s not found in keystone service catalog.")
 
 
 class ServiceUnavailable(IronicException):

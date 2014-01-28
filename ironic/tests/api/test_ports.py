@@ -18,6 +18,7 @@ Tests for the API /ports/ methods.
 
 import datetime
 
+from oslo.config import cfg
 import webtest.app
 
 from ironic.common import utils
@@ -92,7 +93,7 @@ class TestListPorts(base.FunctionalTest):
         uuid = utils.generate_uuid()
         ndict = dbutils.get_test_port(id=1, uuid=uuid)
         self.dbapi.create_port(ndict)
-        data = self.get_json('/ports/1')
+        data = self.get_json('/ports/%s' % uuid)
         self.assertIn('links', data.keys())
         self.assertEqual(len(data['links']), 2)
         self.assertIn(uuid, data['links'][0]['href'])
@@ -108,6 +109,21 @@ class TestListPorts(base.FunctionalTest):
             port = self.dbapi.create_port(ndict)
             ports.append(port['uuid'])
         data = self.get_json('/ports/?limit=3')
+        self.assertEqual(len(data['ports']), 3)
+
+        next_marker = data['ports'][-1]['uuid']
+        self.assertIn(next_marker, data['next'])
+
+    def test_collection_links_default_limit(self):
+        cfg.CONF.set_override('max_limit', 3, 'api')
+        ports = []
+        for id in range(5):
+            ndict = dbutils.get_test_port(id=id,
+                                          uuid=utils.generate_uuid(),
+                                          address='52:54:00:cf:2d:3%s' % id)
+            port = self.dbapi.create_port(ndict)
+            ports.append(port['uuid'])
+        data = self.get_json('/ports')
         self.assertEqual(len(data['ports']), 3)
 
         next_marker = data['ports'][-1]['uuid']
@@ -141,15 +157,12 @@ class TestPatch(base.FunctionalTest):
         self.assertEqual(t1, return_updated_at)
 
     def test_update_byaddress(self):
-        extra = {'foo': 'bar'}
         response = self.patch_json('/ports/%s' % self.pdict['address'],
-                                   [{'path': '/extra/foo',
-                                     'value': 'bar',
-                                     'op': 'add'}])
+                                   [{'path': '/extra/foo', 'value': 'bar',
+                                     'op': 'add'}], expect_errors=True)
+        self.assertEqual(response.status_int, 400)
         self.assertEqual(response.content_type, 'application/json')
-        self.assertEqual(response.status_code, 200)
-        result = self.get_json('/ports/%s' % self.pdict['uuid'])
-        self.assertEqual(result['extra'], extra)
+        self.assertIn(self.pdict['address'], response.json['error_message'])
 
     def test_update_not_found(self):
         uuid = utils.generate_uuid()
@@ -163,7 +176,7 @@ class TestPatch(base.FunctionalTest):
         self.assertTrue(response.json['error_message'])
 
     def test_replace_singular(self):
-        address = 'AA:BB:CC:DD:EE:FF'
+        address = 'aa:bb:cc:dd:ee:ff'
         response = self.patch_json('/ports/%s' % self.pdict['uuid'],
                                    [{'path': '/address',
                                      'value': address, 'op': 'replace'}])
@@ -173,18 +186,21 @@ class TestPatch(base.FunctionalTest):
         self.assertEqual(result['address'], address)
 
     def test_replace_address_already_exist(self):
-        address = '11:22:33:AA:BB:CC'
-        pdict = post_get_test_port(address=address,
-                                   uuid=utils.generate_uuid())
-        self.post_json('/ports', pdict)
+        pdict1 = post_get_test_port(address='AA:AA:AA:AA:AA:AA',
+                                    uuid=utils.generate_uuid())
+        self.post_json('/ports', pdict1)
 
-        pdict = dbutils.get_test_port()
-        response = self.patch_json('/ports/%s' % pdict['uuid'],
+        pdict2 = post_get_test_port(address='BB:BB:BB:BB:BB:BB',
+                                    uuid=utils.generate_uuid())
+        self.post_json('/ports', pdict2)
+
+        response = self.patch_json('/ports/%s' % pdict1['uuid'],
                                    [{'path': '/address',
-                                     'value': address, 'op': 'replace'}],
+                                     'value': pdict2['address'],
+                                     'op': 'replace'}],
                                      expect_errors=True)
         self.assertEqual(response.content_type, 'application/json')
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 409)
         self.assertTrue(response.json['error_message'])
 
     def test_replace_nodeid_dont_exist(self):
@@ -217,7 +233,7 @@ class TestPatch(base.FunctionalTest):
     def test_remove_multi(self):
         extra = {"foo1": "bar1", "foo2": "bar2", "foo3": "bar3"}
         pdict = post_get_test_port(extra=extra,
-                                   address="AA:BB:CC:DD:EE:FF",
+                                   address="aa:bb:cc:dd:ee:ff",
                                    uuid=utils.generate_uuid())
         self.post_json('/ports', pdict)
 
@@ -279,15 +295,27 @@ class TestPatch(base.FunctionalTest):
                           '/ports/%s' % self.pdict['uuid'],
                           [{'path': '/uuid', 'op': 'remove'}])
 
-    def test_update_byaddress_with_hyphens_delimiter(self):
-        test_address = self.pdict['address'].replace(':', '-')
-        pdict = dbutils.get_test_port(address=test_address)
-        self.assertRaises(webtest.app.AppError,
-                          self.patch_json,
-                          '/ports/%s' % pdict['address'],
-                          [{'path': '/extra/foo',
-                          'value': 'bar',
-                          'op': 'add'}])
+    def test_update_address_invalid_format(self):
+        pdict = post_get_test_port(address="AA:BB:CC:DD:EE:FF",
+                                   uuid=utils.generate_uuid())
+        self.post_json('/ports', pdict)
+        response = self.patch_json('/ports/%s' % pdict['uuid'],
+                                   [{'path': '/address',
+                                     'value': 'invalid-format',
+                                     'op': 'replace'}],
+                                   expect_errors=True)
+        self.assertEqual(response.status_int, 400)
+        self.assertEqual(response.content_type, 'application/json')
+        self.assertTrue(response.json['error_message'])
+
+    def test_update_port_address_normalized(self):
+        new_address = 'AA:BB:CC:DD:EE:FF'
+        response = self.patch_json('/ports/%s' % self.pdict['uuid'],
+                                   [{'path': '/address', 'value': new_address,
+                                     'op': 'replace'}])
+        self.assertEqual(response.status_code, 200)
+        result = self.get_json('/ports/%s' % self.pdict['uuid'])
+        self.assertEqual(new_address.lower(), result['address'])
 
 
 class TestPost(base.FunctionalTest):
@@ -313,8 +341,8 @@ class TestPost(base.FunctionalTest):
     def test_create_port_generate_uuid(self):
         pdict = post_get_test_port()
         del pdict['uuid']
-        self.post_json('/ports', pdict)
-        result = self.get_json('/ports/%s' % pdict['address'])
+        response = self.post_json('/ports', pdict)
+        result = self.get_json('/ports/%s' % response.json['uuid'])
         self.assertEqual(pdict['address'], result['address'])
         self.assertTrue(utils.is_uuid_like(result['uuid']))
 
@@ -350,6 +378,13 @@ class TestPost(base.FunctionalTest):
         self.assertRaises(webtest.app.AppError, self.post_json, '/ports',
                           pdict)
 
+    def test_create_port_address_normalized(self):
+        address = 'AA:BB:CC:DD:EE:FF'
+        pdict = post_get_test_port(address=address)
+        self.post_json('/ports', pdict)
+        result = self.get_json('/ports/%s' % pdict['uuid'])
+        self.assertEqual(address.lower(), result['address'])
+
     def test_create_port_with_hyphens_delimiter(self):
         pdict = post_get_test_port()
         colonsMAC = pdict['address']
@@ -381,6 +416,18 @@ class TestPost(base.FunctionalTest):
         self.assertEqual(response.status_int, 400)
         self.assertTrue(response.json['error_message'])
 
+    def test_create_port_address_already_exist(self):
+        address = 'AA:AA:AA:11:22:33'
+        pdict = post_get_test_port(address=address)
+        self.post_json('/ports', pdict)
+        pdict['uuid'] = utils.generate_uuid()
+        response = self.post_json('/ports', pdict, expect_errors=True)
+        self.assertEqual(response.status_int, 409)
+        self.assertEqual(response.content_type, 'application/json')
+        error_msg = response.json['error_message']
+        self.assertTrue(error_msg)
+        self.assertIn(address, error_msg.upper())
+
 
 class TestDelete(base.FunctionalTest):
 
@@ -402,16 +449,8 @@ class TestDelete(base.FunctionalTest):
 
     def test_delete_port_byaddress(self):
         pdict = dbutils.get_test_port()
-        self.delete('/ports/%s' % pdict['address'])
-        response = self.get_json('/ports/%s' % pdict['uuid'],
-                                 expect_errors=True)
-        self.assertEqual(response.status_int, 404)
+        response = self.delete('/ports/%s' % pdict['address'],
+                               expect_errors=True)
+        self.assertEqual(response.status_int, 400)
         self.assertEqual(response.content_type, 'application/json')
-        self.assertTrue(response.json['error_message'])
-
-    def test_delete_port_byaddress_with_hyphens_delimiter(self):
-        pdict = dbutils.get_test_port()
-        pdict['address'] = pdict['address'].replace(':', '-')
-        self.assertRaises(webtest.app.AppError,
-                          self.delete,
-                          '/ports/%s' % pdict['address'])
+        self.assertIn(pdict['address'], response.json['error_message'])

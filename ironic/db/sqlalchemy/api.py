@@ -17,10 +17,10 @@
 
 """SQLAlchemy storage backend."""
 
+import collections
 import datetime
 
 from oslo.config import cfg
-
 from sqlalchemy.orm.exc import NoResultFound
 
 from ironic.common import exception
@@ -39,6 +39,9 @@ CONF = cfg.CONF
 CONF.import_opt('connection',
                 'ironic.openstack.common.db.sqlalchemy.session',
                 group='database')
+CONF.import_opt('heartbeat_timeout',
+                'ironic.conductor.manager',
+                group='conductor')
 
 LOG = log.getLogger(__name__)
 
@@ -358,11 +361,16 @@ class Connection(api.Connection):
         with session.begin():
             query = model_query(models.Node, session=session)
             query = add_identity_filter(query, node_id)
-
-            count = query.update(values, synchronize_session='fetch')
-            if count != 1:
+            try:
+                ref = query.with_lockmode('update').one()
+            except NoResultFound:
                 raise exception.NodeNotFound(node=node_id)
-            ref = query.one()
+
+            # Prevent instance_uuid overwriting
+            if values.get("instance_uuid") and ref.instance_uuid:
+                raise exception.NodeAssociated(node=node_id,
+                                instance=values['instance_uuid'])
+            ref.update(values)
         return ref
 
     @objects.objectify(objects.Port)
@@ -405,23 +413,26 @@ class Connection(api.Connection):
             values['extra'] = '{}'
         port = models.Port()
         port.update(values)
-        port.save()
+        try:
+            port.save()
+        except db_exc.DBDuplicateEntry:
+            raise exception.MACAlreadyExists(mac=values['address'])
         return port
 
     @objects.objectify(objects.Port)
     def update_port(self, port_id, values):
         session = get_session()
-        with session.begin():
-            query = model_query(models.Port, session=session)
-            query = add_port_filter(query, port_id)
-            try:
+        try:
+            with session.begin():
+                query = model_query(models.Port, session=session)
+                query = add_port_filter(query, port_id)
                 ref = query.one()
-            except NoResultFound:
-                raise exception.PortNotFound(port=port_id)
-            _check_port_change_forbidden(ref, session)
-
-            ref.update(values)
-
+                _check_port_change_forbidden(ref, session)
+                ref.update(values)
+        except NoResultFound:
+            raise exception.PortNotFound(port=port_id)
+        except db_exc.DBDuplicateEntry:
+            raise exception.MACAlreadyExists(mac=values['address'])
         return ref
 
     def destroy_port(self, port_id):
@@ -541,15 +552,18 @@ class Connection(api.Connection):
             if count == 0:
                 raise exception.ConductorNotFound(conductor=hostname)
 
-    def list_active_conductor_drivers(self, interval):
-        # TODO(deva): add configurable default 'interval', somewhere higher
-        #             up the code. This isn't a db-specific option.
+    def get_active_driver_dict(self, interval=None):
+        if interval is None:
+            interval = CONF.conductor.heartbeat_timeout
+
         limit = timeutils.utcnow() - datetime.timedelta(seconds=interval)
         result = model_query(models.Conductor).\
                     filter(models.Conductor.updated_at >= limit).\
                     all()
 
-        driver_set = set()
+        # build mapping of drivers to the set of hosts which support them
+        d2c = collections.defaultdict(set)
         for row in result:
-            driver_set.update(set(row['drivers']))
-        return list(driver_set)
+            for driver in row['drivers']:
+                d2c[driver].add(row['hostname'])
+        return d2c

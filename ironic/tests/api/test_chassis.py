@@ -18,6 +18,7 @@ Tests for the API /chassis/ methods.
 
 import datetime
 
+from oslo.config import cfg
 import webtest.app
 
 from ironic.common import utils
@@ -72,7 +73,7 @@ class TestListChassis(base.FunctionalTest):
         uuid = utils.generate_uuid()
         ndict = dbutils.get_test_chassis(id=1, uuid=uuid)
         self.dbapi.create_chassis(ndict)
-        data = self.get_json('/chassis/1')
+        data = self.get_json('/chassis/%s' % uuid)
         self.assertIn('links', data.keys())
         self.assertEqual(len(data['links']), 2)
         self.assertIn(uuid, data['links'][0]['href'])
@@ -87,6 +88,20 @@ class TestListChassis(base.FunctionalTest):
             ch = self.dbapi.create_chassis(ndict)
             chassis.append(ch['uuid'])
         data = self.get_json('/chassis/?limit=3')
+        self.assertEqual(len(data['chassis']), 3)
+
+        next_marker = data['chassis'][-1]['uuid']
+        self.assertIn(next_marker, data['next'])
+
+    def test_collection_links_default_limit(self):
+        cfg.CONF.set_override('max_limit', 3, 'api')
+        chassis = []
+        for id in range(5):
+            ndict = dbutils.get_test_chassis(id=id,
+                                             uuid=utils.generate_uuid())
+            ch = self.dbapi.create_chassis(ndict)
+            chassis.append(ch['uuid'])
+        data = self.get_json('/chassis')
         self.assertEqual(len(data['chassis']), 3)
 
         next_marker = data['chassis'][-1]['uuid']
@@ -117,12 +132,7 @@ class TestListChassis(base.FunctionalTest):
         self.assertEqual(len(data['nodes']), 1)
         self.assertIn('next', data.keys())
 
-    def test_nodes_subresource_noid(self):
-        cdict = dbutils.get_test_chassis()
-        self.dbapi.create_chassis(cdict)
-        ndict = dbutils.get_test_node(chassis_id=cdict['id'])
-        self.dbapi.create_node(ndict)
-        # No chassis id specified
+    def test_nodes_subresource_no_uuid(self):
         response = self.get_json('/chassis/nodes', expect_errors=True)
         self.assertEqual(response.status_int, 400)
 
@@ -292,7 +302,8 @@ class TestPost(base.FunctionalTest):
     def test_post_nodes_subresource(self):
         cdict = dbutils.get_test_chassis()
         self.post_json('/chassis', cdict)
-        ndict = dbutils.get_test_node(chassis_id=cdict['id'])
+        ndict = dbutils.get_test_node(chassis_id=None)
+        ndict['chassis_uuid'] = cdict['uuid']
         response = self.post_json('/chassis/nodes', ndict,
                                    expect_errors=True)
         self.assertEqual(response.status_int, 403)

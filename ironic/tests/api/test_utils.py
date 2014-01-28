@@ -16,7 +16,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import six
 import wsme
 
 from ironic.api.controllers.v1 import utils
@@ -48,74 +47,3 @@ class TestApiUtils(base.FunctionalTest):
         self.assertRaises(wsme.exc.ClientSideError,
                           utils.validate_sort_dir,
                           'fake-sort')
-
-    def test_validate_patch(self):
-        patch = [{'op': 'remove', 'value': 'bar', 'path': '/foo'}]
-        utils.validate_patch(patch)
-
-        patch = [{'op': 'add', 'value': 'bar', 'path': '/extra/foo'}]
-        utils.validate_patch(patch)
-
-        patch = [{'op': 'replace', 'value': 'bar', 'path': '/foo'}]
-        utils.validate_patch(patch)
-
-    def test_validate_patch_wrong_format(self):
-        # missing path
-        patch = [{'op': 'remove'}]
-        self.assertRaises(wsme.exc.ClientSideError,
-                          utils.validate_patch,
-                          patch)
-        # wrong op
-        patch = [{'op': 'foo', 'value': 'bar', 'path': '/foo'}]
-        self.assertRaises(wsme.exc.ClientSideError,
-                          utils.validate_patch,
-                          patch)
-
-    def test_validate_patch_wrong_path(self):
-        # non-alphanumeric characters
-        patch = [{'path': '/fo^o', 'op': 'remove'}]
-        self.assertRaises(wsme.exc.ClientSideError,
-                          utils.validate_patch,
-                          patch)
-        # empty path
-        patch = [{'path': '', 'op': 'remove'}]
-        self.assertRaises(wsme.exc.ClientSideError,
-                          utils.validate_patch,
-                          patch)
-
-        patch = [{'path': '/', 'op': 'remove'}]
-        self.assertRaises(wsme.exc.ClientSideError,
-                          utils.validate_patch,
-                          patch)
-
-    def test_validate_patch_uuid(self):
-        patch = [{'op': 'remove', 'path': '/uuid'}]
-        self.assertRaises(wsme.exc.ClientSideError,
-                          utils.validate_patch,
-                          patch)
-
-        patch = [{'op': 'replace',
-                  'value': '105f5cd9-ae67-480a-8c10-62040213b8fd',
-                  'path': '/uuid'}]
-        self.assertRaises(wsme.exc.ClientSideError,
-                          utils.validate_patch,
-                          patch)
-
-        patch = [{'op': 'add',
-                  'value': '105f5cd9-ae67-480a-8c10-62040213b8fd',
-                  'path': '/uuid'}]
-        self.assertRaises(wsme.exc.ClientSideError,
-                          utils.validate_patch,
-                          patch)
-
-    def test_valid_types(self):
-        vt = utils.ValidTypes(wsme.types.text, six.integer_types)
-
-        value = vt.validate("hello")
-        self.assertEqual("hello", value)
-
-        value = vt.validate(10)
-        self.assertEqual(10, value)
-
-        # wrong value
-        self.assertRaises(ValueError, vt.validate, 0.10)
