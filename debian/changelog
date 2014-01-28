@@ -1,4 +1,4 @@
-ironic (2014.1~b1-1) experimental; urgency=low
+ironic (2014.1~b2-1) experimental; urgency=low
 
   * Initial release. (Closes: #730484)
 
