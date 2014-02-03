@@ -18,6 +18,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Baremetal Service API"
 NAME=ironic-api
 DAEMON=/usr/bin/ironic-api
+DAEMON_ARGS="--config-file=/etc/ironic/ironic.conf --log-file=/var/log/ironic/api.log"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 SYSNAME=ironic
@@ -35,6 +36,7 @@ do_start()
 	start-stop-daemon --start --background --quiet --chuid ${SYSNAME}:${SYSNAME} --make-pidfile --pidfile $PIDFILE --startas $DAEMON --test > /dev/null \
 		|| return 1
 	start-stop-daemon --start --background --quiet --chuid ${SYSNAME}:${SYSNAME} --make-pidfile --pidfile $PIDFILE --startas $DAEMON \
+		$DAEMON_ARGS \
 		|| return 2
 }
 
