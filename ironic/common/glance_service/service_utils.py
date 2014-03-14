@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2012 OpenStack Foundation
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
@@ -18,10 +16,10 @@
 
 import copy
 import logging
-import urlparse
 
 from oslo.config import cfg
 import six
+import six.moves.urllib.parse as urlparse
 
 from ironic.common import exception
 from ironic.openstack.common import jsonutils

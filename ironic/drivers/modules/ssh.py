@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
 #
@@ -39,55 +37,129 @@ from ironic.drivers import base
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import processutils
 
+libvirt_opts = [
+    cfg.StrOpt('libvirt_uri',
+               default='qemu:///system',
+               help='libvirt uri')
+]
+
 CONF = cfg.CONF
+CONF.register_opts(libvirt_opts, group='ssh')
 
 LOG = logging.getLogger(__name__)
 
-COMMAND_SETS = {
-    'vbox': {
-        'base_cmd': '/usr/bin/VBoxManage',
-        'start_cmd': 'startvm {_NodeName_}',
-        'stop_cmd': 'controlvm {_NodeName_} poweroff',
-        'reboot_cmd': 'controlvm {_NodeName_} reset',
-        'list_all': "list vms|awk -F'\"' '{print $2}'",
-        'list_running': 'list runningvms',
-        'get_node_macs': ("showvminfo --machinereadable {_NodeName_} | "
-            "grep "
-            '"macaddress" | awk -F '
-            "'"
-            '"'
-            "' '{print $2}'")
-    },
-    "virsh": {
-        'base_cmd': '/usr/bin/virsh',
-        'start_cmd': 'start {_NodeName_}',
-        'stop_cmd': 'destroy {_NodeName_}',
-        'reboot_cmd': 'reset {_NodeName_}',
-        'list_all': "list --all | tail -n +2 | awk -F\" \" '{print $2}'",
-        'list_running':
-            "list --all|grep running|awk -v qc='\"' -F\" \" '{print qc$2qc}'",
-        'get_node_macs': ("dumpxml {_NodeName_} | grep "
-            '"mac address" | awk -F'
-            '"'
-            "'"
-            '" '
-            "'{print $2}' | tr -d ':'")
-    }
-}
+
+def _get_command_sets(virt_type):
+    if virt_type == 'vbox':
+        return {
+            'base_cmd': '/usr/bin/VBoxManage',
+            'start_cmd': 'startvm {_NodeName_}',
+            'stop_cmd': 'controlvm {_NodeName_} poweroff',
+            'reboot_cmd': 'controlvm {_NodeName_} reset',
+            'list_all': "list vms|awk -F'\"' '{print $2}'",
+            'list_running': 'list runningvms',
+            'get_node_macs': ("showvminfo --machinereadable {_NodeName_} | "
+                "grep "
+                '"macaddress" | awk -F '
+                "'"
+                '"'
+                "' '{print $2}'")
+            }
+    elif virt_type == 'vmware':
+        return {
+            'base_cmd': '/bin/vim-cmd',
+            'start_cmd': 'vmsvc/power.on {_NodeName_}',
+            'stop_cmd': 'vmsvc/power.off {_NodeName_}',
+            'reboot_cmd': 'vmsvc/power.reboot {_NodeName_}',
+            'list_all': "vmsvc/getallvms | awk '$1 ~ /^[0-9]+$/ {print $1}'",
+            # NOTE(arata): In spite of its name, list_running_cmd shows a
+            #              single vmid, not a list. But it is OK.
+            'list_running': (
+                "vmsvc/power.getstate {_NodeName_} | "
+                "grep 'Powered on' >/dev/null && "
+                "echo '\"{_NodeName_}\"' || true"),
+            # NOTE(arata): `true` is needed to handle a false vmid, which can
+            #              be returned by list_cmd. In that case, get_node_macs
+            #              returns an empty list rather than fails with
+            #              non-zero status code.
+            'get_node_macs': (
+                "vmsvc/device.getdevices {_NodeName_} | "
+                "grep macAddress | awk -F '\"' '{print $2}' || true"),
+        }
+    elif virt_type == "virsh":
+        virsh_cmds = {
+            'base_cmd': '/usr/bin/virsh',
+            'start_cmd': 'start {_NodeName_}',
+            'stop_cmd': 'destroy {_NodeName_}',
+            'reboot_cmd': 'reset {_NodeName_}',
+            'list_all': "list --all | tail -n +2 | awk -F\" \" '{print $2}'",
+            'list_running': ("list --all|grep running | "
+                "awk -v qc='\"' -F\" \" '{print qc$2qc}'"),
+            'get_node_macs': ("dumpxml {_NodeName_} | grep "
+                '"mac address" | awk -F'
+                '"'
+                "'"
+                '" '
+                "'{print $2}' | tr -d ':'")
+        }
+
+        if CONF.ssh.libvirt_uri:
+            virsh_cmds['base_cmd'] += ' --connect %s' % CONF.ssh.libvirt_uri
+
+        return virsh_cmds
+    else:
+        raise exception.InvalidParameterValue(_(
+            "SSHPowerDriver '%(virt_type)s' is not a valid virt_type, ") %
+            {'virt_type': virt_type})
 
 
 def _normalize_mac(mac):
     return mac.replace('-', '').replace(':', '').lower()
 
 
+def _ssh_execute(ssh_obj, cmd_to_exec):
+    """Executes a command via ssh.
+
+    Executes a command via ssh and returns a list of the lines of the
+    output from the command.
+
+    :param ssh_obj: paramiko.SSHClient, an active ssh connection.
+    :param cmd_to_exec: command to execute.
+    :returns: list of the lines of output from the command.
+    :raises: SSHCommandFailed on an error from ssh.
+
+    """
+    try:
+        output_list = processutils.ssh_execute(ssh_obj,
+                                               cmd_to_exec)[0].split('\n')
+    except Exception as e:
+        LOG.debug(_("Cannot execute SSH cmd %(cmd)s. Reason: %(err)s.")
+                % {'cmd': cmd_to_exec, 'err': e})
+        raise exception.SSHCommandFailed(cmd=cmd_to_exec)
+
+    return output_list
+
+
 def _parse_driver_info(node):
+    """Gets the information needed for accessing the node.
+
+    :param node: the Node of interest.
+    :returns: dictionary of information.
+    :raises: InvalidParameterValue if any required parameters are missing
+        or incorrect.
+
+    """
     info = node.get('driver_info', {})
-    address = info.get('ssh_address', None)
-    username = info.get('ssh_username', None)
-    password = info.get('ssh_password', None)
-    port = info.get('ssh_port', 22)
-    key_filename = info.get('ssh_key_filename', None)
-    virt_type = info.get('ssh_virt_type', None)
+    address = info.get('ssh_address')
+    username = info.get('ssh_username')
+    password = info.get('ssh_password')
+    try:
+        port = int(info.get('ssh_port', 22))
+    except ValueError:
+        raise exception.InvalidParameterValue(_(
+            "SSHPowerDriver requires ssh_port to be integer value"))
+    key_filename = info.get('ssh_key_filename')
+    virt_type = info.get('ssh_virt_type')
 
     # NOTE(deva): we map 'address' from API to 'host' for common utils
     res = {
@@ -102,14 +174,7 @@ def _parse_driver_info(node):
         raise exception.InvalidParameterValue(_(
             "SSHPowerDriver requires virt_type be set."))
 
-    cmd_set = COMMAND_SETS.get(virt_type, None)
-    if not cmd_set:
-        valid_values = ', '.join(COMMAND_SETS.keys())
-        raise exception.InvalidParameterValue(_(
-            "SSHPowerDriver '%(virt_type)s' is not a valid virt_type, "
-            "supported types are: %(valid)s") %
-            {'virt_type': virt_type, 'valid': valid_values})
-
+    cmd_set = _get_command_sets(virt_type)
     res['cmd_set'] = cmd_set
 
     if not address or not username:
@@ -131,13 +196,18 @@ def _parse_driver_info(node):
 
 
 def _get_power_status(ssh_obj, driver_info):
-    """Returns a node's current power state."""
+    """Returns a node's current power state.
 
+    :param ssh_obj: paramiko.SSHClient, an active ssh connection.
+    :param driver_info: information for accessing the node.
+    :returns: one of ironic.common.states POWER_OFF, POWER_ON.
+    :raises: NodeNotFound
+
+    """
     power_state = None
     cmd_to_exec = "%s %s" % (driver_info['cmd_set']['base_cmd'],
                              driver_info['cmd_set']['list_running'])
-    running_list = processutils.ssh_execute(ssh_obj,
-                                            cmd_to_exec)[0].split('\n')
+    running_list = _ssh_execute(ssh_obj, cmd_to_exec)
     # Command should return a list of running vms. If the current node is
     # not listed then we can assume it is not powered on.
     node_name = _get_hosts_name_for_node(ssh_obj, driver_info)
@@ -161,17 +231,27 @@ def _get_power_status(ssh_obj, driver_info):
 
 
 def _get_connection(node):
+    """Returns an SSH client connected to a node.
+
+    :param node: the Node.
+    :returns: paramiko.SSHClient, an active ssh connection.
+
+    """
     return utils.ssh_connect(_parse_driver_info(node))
 
 
 def _get_hosts_name_for_node(ssh_obj, driver_info):
-    """Get the name the host uses to reference the node."""
+    """Get the name the host uses to reference the node.
 
+    :param ssh_obj: paramiko.SSHClient, an active ssh connection.
+    :param driver_info: information for accessing the node.
+    :returns: the name or None if not found.
+
+    """
     matched_name = None
     cmd_to_exec = "%s %s" % (driver_info['cmd_set']['base_cmd'],
                              driver_info['cmd_set']['list_all'])
-    full_node_list = processutils.ssh_execute(ssh_obj,
-                                              cmd_to_exec)[0].split('\n')
+    full_node_list = _ssh_execute(ssh_obj, cmd_to_exec)
     LOG.debug(_("Retrieved Node List: %s") % repr(full_node_list))
     # for each node check Mac Addresses
     for node in full_node_list:
@@ -181,8 +261,7 @@ def _get_hosts_name_for_node(ssh_obj, driver_info):
         cmd_to_exec = "%s %s" % (driver_info['cmd_set']['base_cmd'],
                                  driver_info['cmd_set']['get_node_macs'])
         cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', node)
-        hosts_node_mac_list = processutils.ssh_execute(ssh_obj,
-                                                    cmd_to_exec)[0].split('\n')
+        hosts_node_mac_list = _ssh_execute(ssh_obj, cmd_to_exec)
 
         for host_mac in hosts_node_mac_list:
             if not host_mac:
@@ -204,8 +283,13 @@ def _get_hosts_name_for_node(ssh_obj, driver_info):
 
 
 def _power_on(ssh_obj, driver_info):
-    """Power ON this node."""
+    """Power ON this node.
 
+    :param ssh_obj: paramiko.SSHClient, an active ssh connection.
+    :param driver_info: information for accessing the node.
+    :returns: one of ironic.common.states POWER_ON or ERROR.
+
+    """
     current_pstate = _get_power_status(ssh_obj, driver_info)
     if current_pstate == states.POWER_ON:
         _power_off(ssh_obj, driver_info)
@@ -215,7 +299,7 @@ def _power_on(ssh_obj, driver_info):
                                  driver_info['cmd_set']['start_cmd'])
     cmd_to_power_on = cmd_to_power_on.replace('{_NodeName_}', node_name)
 
-    processutils.ssh_execute(ssh_obj, cmd_to_power_on)
+    _ssh_execute(ssh_obj, cmd_to_power_on)
 
     current_pstate = _get_power_status(ssh_obj, driver_info)
     if current_pstate == states.POWER_ON:
@@ -225,8 +309,13 @@ def _power_on(ssh_obj, driver_info):
 
 
 def _power_off(ssh_obj, driver_info):
-    """Power OFF this node."""
+    """Power OFF this node.
 
+    :param ssh_obj: paramiko.SSHClient, an active ssh connection.
+    :param driver_info: information for accessing the node.
+    :returns: one of ironic.common.states POWER_OFF or ERROR.
+
+    """
     current_pstate = _get_power_status(ssh_obj, driver_info)
     if current_pstate == states.POWER_OFF:
         return current_pstate
@@ -236,7 +325,7 @@ def _power_off(ssh_obj, driver_info):
                                   driver_info['cmd_set']['stop_cmd'])
     cmd_to_power_off = cmd_to_power_off.replace('{_NodeName_}', node_name)
 
-    processutils.ssh_execute(ssh_obj, cmd_to_power_off)
+    _ssh_execute(ssh_obj, cmd_to_power_off)
 
     current_pstate = _get_power_status(ssh_obj, driver_info)
     if current_pstate == states.POWER_OFF:
@@ -246,7 +335,13 @@ def _power_off(ssh_obj, driver_info):
 
 
 def _get_nodes_mac_addresses(task, node):
-    """Get all mac addresses for a node."""
+    """Get all mac addresses for a node.
+
+    :param task: An instance of `ironic.manager.task_manager.TaskManager`.
+    :param node: the Node of interest.
+    :returns: a list of all the MAC addresses for the node.
+
+    """
     for r in task.resources:
         if r.node.id == node['id']:
             return [p.address for p in r.ports]
@@ -262,15 +357,20 @@ class SSHPower(base.PowerInterface):
     NOTE: This driver does not currently support multi-node operations.
     """
 
-    def validate(self, node):
-        """Check that node 'driver_info' is valid.
+    def validate(self, task, node):
+        """Check that the node's 'driver_info' is valid.
 
-        Check that node 'driver_info' contains the requisite fields and SSH
-        connection can be established.
+        Check that the node's 'driver_info' contains the requisite fields
+        and that an SSH connection to the node can be established.
 
+        :param task: a task from TaskManager.
         :param node: Single node object.
-        :raises: InvalidParameterValue
+        :raises: InvalidParameterValue if any connection parameters are
+            incorrect or if ssh failed to connect to the node.
         """
+        if not _get_nodes_mac_addresses(task, node):
+            raise exception.InvalidParameterValue(_("Node %s does not have "
+                                "any port associated with it.") % node.uuid)
         try:
             _get_connection(node)
         except exception.SSHConnectFailed as e:
@@ -282,10 +382,15 @@ class SSHPower(base.PowerInterface):
 
         Poll the host for the current power state of the node.
 
-        :param task: A instance of `ironic.manager.task_manager.TaskManager`.
+        :param task: An instance of `ironic.manager.task_manager.TaskManager`.
         :param node: A single node.
 
         :returns: power state. One of :class:`ironic.common.states`.
+        :raises: InvalidParameterValue if any connection parameters are
+            incorrect.
+        :raises: NodeNotFound.
+        :raises: SSHCommandFailed on an error from ssh.
+        :raises: SSHConnectFailed if ssh failed to connect to the node.
         """
         driver_info = _parse_driver_info(node)
         driver_info['macs'] = _get_nodes_mac_addresses(task, node)
@@ -298,13 +403,17 @@ class SSHPower(base.PowerInterface):
 
         Set the power state of a node.
 
-        :param task: A instance of `ironic.manager.task_manager.TaskManager`.
+        :param task: An instance of `ironic.manager.task_manager.TaskManager`.
         :param node: A single node.
         :param pstate: Either POWER_ON or POWER_OFF from :class:
             `ironic.common.states`.
 
-        :returns NOTHING:
-        :raises: exception.IronicException or exception.PowerStateFailure.
+        :raises: InvalidParameterValue if any connection parameters are
+            incorrect, or if the desired power state is invalid.
+        :raises: NodeNotFound.
+        :raises: PowerStateFailure if it failed to set power state to pstate.
+        :raises: SSHCommandFailed on an error from ssh.
+        :raises: SSHConnectFailed if ssh failed to connect to the node.
         """
         driver_info = _parse_driver_info(node)
         driver_info['macs'] = _get_nodes_mac_addresses(task, node)
@@ -327,11 +436,15 @@ class SSHPower(base.PowerInterface):
 
         Power cycles a node.
 
-        :param task: A instance of `ironic.manager.task_manager.TaskManager`.
+        :param task: An instance of `ironic.manager.task_manager.TaskManager`.
         :param node: A single node.
 
-        :returns NOTHING:
-        :raises: exception.PowerStateFailure.
+        :raises: InvalidParameterValue if any connection parameters are
+            incorrect.
+        :raises: NodeNotFound.
+        :raises: PowerStateFailure if it failed to set power state to POWER_ON.
+        :raises: SSHCommandFailed on an error from ssh.
+        :raises: SSHConnectFailed if ssh failed to connect to the node.
         """
         driver_info = _parse_driver_info(node)
         driver_info['macs'] = _get_nodes_mac_addresses(task, node)

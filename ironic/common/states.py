@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright (c) 2012 NTT DOCOMO, INC.
 # Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
@@ -53,6 +51,7 @@ NOSTATE = None
 INIT = 'initializing'
 ACTIVE = 'active'
 BUILDING = 'building'
+DEPLOYWAIT = 'wait call-back'
 DEPLOYING = 'deploying'
 DEPLOYFAIL = 'deploy failed'
 DEPLOYDONE = 'deploy complete'

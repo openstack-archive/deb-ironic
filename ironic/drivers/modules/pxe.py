@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # -*- encoding: utf-8 -*-
 #
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -29,6 +28,7 @@ from ironic.common.glance_service import service_utils
 from ironic.common import image_service as service
 from ironic.common import images
 from ironic.common import keystone
+from ironic.common import neutron
 from ironic.common import paths
 from ironic.common import states
 from ironic.common import utils
@@ -40,40 +40,32 @@ from ironic.openstack.common import fileutils
 from ironic.openstack.common import lockutils
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import loopingcall
+from ironic.openstack.common import strutils
 
 pxe_opts = [
-    cfg.StrOpt('deploy_kernel',
-               help='Default kernel image ID used in deployment phase'),
-    cfg.StrOpt('deploy_ramdisk',
-               help='Default ramdisk image ID used in deployment phase'),
-    cfg.StrOpt('net_config_template',
-               default=paths.basedir_def('ironic/net-dhcp.ubuntu.template'),
-               help='Template file for injected network config'),
     cfg.StrOpt('pxe_append_params',
                default='nofb nomodeset vga=normal',
-               help='additional append parameters for baremetal PXE boot'),
+               help='Additional append parameters for baremetal PXE boot.'),
     cfg.StrOpt('pxe_config_template',
                default=paths.basedir_def(
                     'drivers/modules/pxe_config.template'),
-               help='Template file for PXE configuration'),
-    cfg.IntOpt('pxe_deploy_timeout',
-                help='Timeout for PXE deployments. Default: 0 (unlimited)',
-                default=0),
+               help='Template file for PXE configuration.'),
     cfg.StrOpt('tftp_server',
                default='$my_ip',
-               help='IP address of Ironic compute node\'s tftp server'),
+               help='IP address of Ironic compute node\'s tftp server.'),
     cfg.StrOpt('tftp_root',
                default='/tftpboot',
-               help='Ironic compute node\'s tftp root path'),
+               help='Ironic compute node\'s tftp root path.'),
     cfg.StrOpt('images_path',
                default='/var/lib/ironic/images/',
-               help='Directory where images are stored on disk'),
+               help='Directory where images are stored on disk.'),
     cfg.StrOpt('tftp_master_path',
                default='/tftpboot/master_images',
-               help='Directory where master tftp images are stored on disk'),
+               help='Directory where master tftp images are stored on disk.'),
     cfg.StrOpt('instance_master_path',
                default='/var/lib/ironic/master_images',
-               help='Directory where master tftp images are stored on disk'),
+               help='Directory where master instance images are stored on '
+                    'disk.'),
     # NOTE(dekehn): Additional boot files options may be created in the event
     #  other architectures require different boot files.
     cfg.StrOpt('pxe_bootfile_name',
@@ -101,13 +93,10 @@ def _parse_driver_info(node):
 
     info = node.get('driver_info', {})
     d_info = {}
-    d_info['instance_name'] = info.get('pxe_instance_name', None)
-    d_info['image_source'] = info.get('pxe_image_source', None)
-    d_info['deploy_kernel'] = info.get('pxe_deploy_kernel',
-                                       CONF.pxe.deploy_kernel)
-    d_info['deploy_ramdisk'] = info.get('pxe_deploy_ramdisk',
-                                        CONF.pxe.deploy_ramdisk)
-    d_info['root_gb'] = info.get('pxe_root_gb', None)
+    d_info['image_source'] = info.get('pxe_image_source')
+    d_info['deploy_kernel'] = info.get('pxe_deploy_kernel')
+    d_info['deploy_ramdisk'] = info.get('pxe_deploy_ramdisk')
+    d_info['root_gb'] = info.get('pxe_root_gb')
 
     missing_info = []
     for label in d_info:
@@ -119,20 +108,36 @@ def _parse_driver_info(node):
                 "were not passed to ironic: %s") % missing_info)
 
     # Internal use only
-    d_info['deploy_key'] = info.get('pxe_deploy_key', None)
+    d_info['deploy_key'] = info.get('pxe_deploy_key')
 
     #TODO(ghe): Should we get rid of swap partition?
     d_info['swap_mb'] = info.get('pxe_swap_mb', 1)
-    d_info['key_data'] = info.get('pxe_key_data', None)
+    d_info['ephemeral_gb'] = info.get('pxe_ephemeral_gb', 0)
+    d_info['ephemeral_format'] = info.get('pxe_ephemeral_format')
 
-    for param in ('root_gb', 'swap_mb'):
+    err_msg_invalid = _("Can not validate PXE bootloader. Invalid parameter "
+                        "pxe_%(param)s. Reason: %(reason)s")
+    for param in ('root_gb', 'swap_mb', 'ephemeral_gb'):
         try:
             int(d_info[param])
         except ValueError:
-            raise exception.InvalidParameterValue(_(
-                "Can not validate PXE bootloader. Invalid "
-                "parameter %s") % param)
+            reason = _("'%s' is not an integer value.") % d_info[param]
+            raise exception.InvalidParameterValue(err_msg_invalid %
+                                            {'param': param, 'reason': reason})
 
+    if d_info['ephemeral_gb'] and not d_info['ephemeral_format']:
+        msg = _("The deploy contains an ephemeral partition, but no "
+                "filesystem type was specified by the pxe_ephemeral_format "
+                "parameter")
+        raise exception.InvalidParameterValue(msg)
+
+    preserve_ephemeral = info.get('pxe_preserve_ephemeral', False)
+    try:
+        d_info['preserve_ephemeral'] = strutils.bool_from_string(
+                                            preserve_ephemeral, strict=True)
+    except ValueError as e:
+        raise exception.InvalidParameterValue(err_msg_invalid %
+                                  {'param': 'preserve_ephemeral', 'reason': e})
     return d_info
 
 
@@ -190,6 +195,22 @@ def _get_node_mac_addresses(task, node):
     for r in task.resources:
         if r.node.id == node['id']:
             return [p.address for p in r.ports]
+
+
+def _get_node_vif_ids(task):
+    """Get all Neutron VIF ids for a node.
+       This function does not handle multi node operations.
+
+    :param task: a TaskManager instance.
+    :returns: A dict of the Node's port UUIDs and their associated VIFs
+
+    """
+    port_vifs = {}
+    for port in task.resources[0].ports:
+        vif = port.extra.get('vif_port_id')
+        if vif:
+            port_vifs[port.uuid] = vif
+    return port_vifs
 
 
 def _get_pxe_mac_path(mac):
@@ -300,7 +321,7 @@ def _get_image(ctx, path, uuid, master_path=None, image_service=None):
         if not os.path.exists(lock_file):
             raise loopingcall.LoopingCallDone()
     # If the download of the image needed is in progress (lock file present)
-    # we wait until the locks dissapears and create the link.
+    # we wait until the locks disappears and create the link.
 
     if master_path is None:
         #NOTE(ghe): We don't share images between instances/hosts
@@ -331,11 +352,10 @@ def _get_image(ctx, path, uuid, master_path=None, image_service=None):
 
 def _cache_tftp_images(ctx, node, pxe_info):
     """Fetch the necessary kernels and ramdisks for the instance."""
-    d_info = _parse_driver_info(node)
     fileutils.ensure_tree(
         os.path.join(CONF.pxe.tftp_root, node.uuid))
-    LOG.debug(_("Fetching kernel and ramdisk for instance %s") %
-              d_info['instance_name'])
+    LOG.debug(_("Fetching kernel and ramdisk for node %s") %
+              node.uuid)
     for label in pxe_info:
         (uuid, path) = pxe_info[label]
         if not os.path.exists(path):
@@ -364,8 +384,8 @@ def _cache_instance_image(ctx, node):
     image_path = _get_image_file_path(node.uuid)
     uuid = d_info['image_source']
 
-    LOG.debug(_("Fetching image %(ami)s for instance %(name)s") %
-              {'ami': uuid, 'name': d_info['instance_name']})
+    LOG.debug(_("Fetching image %(ami)s for node %(uuid)s") %
+              {'ami': uuid, 'uuid': node.uuid})
 
     if not os.path.exists(image_path):
         _get_image(ctx, image_path, uuid, CONF.pxe.instance_master_path)
@@ -457,6 +477,40 @@ def _dhcp_options_for_instance():
             ]
 
 
+def _update_neutron(task, node):
+    """Send or update the DHCP BOOT options to Neutron for this node."""
+    options = _dhcp_options_for_instance()
+    vifs = _get_node_vif_ids(task)
+    if not vifs:
+        LOG.warning(_("No VIFs found for node %(node)s when attempting to "
+                      "update Neutron DHCP BOOT options."),
+                      {'node': node.uuid})
+        return
+
+    # TODO(deva): decouple instantiation of NeutronAPI from task.context.
+    #             Try to use the user's task.context.auth_token, but if it
+    #             is not present, fall back to a server-generated context.
+    #             We don't need to recreate this in every method call.
+    api = neutron.NeutronAPI(task.context)
+    failures = []
+    for port_id, port_vif in vifs.iteritems():
+        try:
+            api.update_port_dhcp_opts(port_vif, options)
+        except exception.FailedToUpdateDHCPOptOnPort:
+            failures.append(port_id)
+
+    if failures:
+        if len(failures) == len(vifs):
+            raise exception.FailedToUpdateDHCPOptOnPort(_(
+                "Failed to set DHCP BOOT options for any port on node %s.") %
+                node.uuid)
+        else:
+            LOG.warning(_("Some errors were encountered when updating the "
+                          "DHCP BOOT options for node %(node)s on the "
+                          "following ports: %(ports)s."),
+                          {'node': node.uuid, 'ports': failures})
+
+
 def _create_pxe_config(task, node, pxe_info):
     """Generate pxe configuration file and link mac ports to it for
     tftp booting.
@@ -475,33 +529,30 @@ def _create_pxe_config(task, node, pxe_info):
         utils.create_link_without_raise(pxe_config_file_path, mac_path)
 
 
-def _update_neutron(task, node):
-    """Send the DHCP BOOT options to Neutron for this node."""
-    # FIXME: just a stub for the moment.
-    pass
-
-
 class PXEDeploy(base.DeployInterface):
     """PXE Deploy Interface: just a stub until the real driver is ported."""
 
-    def validate(self, node):
+    def validate(self, task, node):
         """Validate the driver-specific Node deployment info.
 
-        This method validates whether the 'driver_info' property of the
-        supplied node contains the required information for this driver to
-        deploy images to the node.
-
+        :param task: a task from TaskManager.
         :param node: a single Node to validate.
         :returns: InvalidParameterValue.
         """
+        if not _get_node_mac_addresses(task, node):
+            raise exception.InvalidParameterValue(_("Node %s does not have "
+                                "any port associated with it.") % node.uuid)
         _parse_driver_info(node)
 
     @task_manager.require_exclusive_lock
     def deploy(self, task, node):
         """Perform start deployment a node.
 
-        Given a node with complete metadata, deploy the indicated image
-        to the node.
+        Creates a temporary keystone token file, updates the Neutron DHCP port
+        options for next boot, and issues a reboot request to the power driver.
+        This causes the node to boot into the deployment ramdisk and triggers
+        the next phase of PXE-based deployment via
+        VendorPassthru._continue_deploy().
 
         :param task: a TaskManager instance.
         :param node: the Node to act upon.
@@ -513,14 +564,14 @@ class PXEDeploy(base.DeployInterface):
         _update_neutron(task, node)
         manager_utils.node_power_action(task, node, states.REBOOT)
 
-        return states.DEPLOYING
+        return states.DEPLOYWAIT
 
     @task_manager.require_exclusive_lock
     def tear_down(self, task, node):
         """Tear down a previous deployment.
 
-        Given a node that has been previously deployed to,
-        do all cleanup and tear down necessary to "un-deploy" that node.
+        Power off the node. All actual clean-up is done in the clean_up()
+        method which should be called separately.
 
         :param task: a TaskManager instance.
         :param node: the Node to act upon.
@@ -531,12 +582,31 @@ class PXEDeploy(base.DeployInterface):
         return states.DELETED
 
     def prepare(self, task, node):
+        """Prepare the deployment environment for this node.
+
+        Generates the TFTP configuration for PXE-booting both the deployment
+        and user images, fetches the images from Glance and adds them to the
+        local cache.
+
+        :param task: a TaskManager instance.
+        :param node: the Node to act upon.
+        """
         # TODO(deva): optimize this if rerun on existing files
         pxe_info = _get_tftp_image_info(node, task.context)
         _create_pxe_config(task, node, pxe_info)
         _cache_images(node, pxe_info, task.context)
 
     def clean_up(self, task, node):
+        """Clean up the deployment environment for this node.
+
+        Delete the deploy and user images from the local cache, if no remaining
+        active nodes require them. Removes the TFTP configuration files for
+        this node. As a precaution, this method also ensures the keystone auth
+        token file was removed.
+
+        :param task: a TaskManager instance.
+        :param node: the Node to act upon.
+        """
         # FIXME(ghe): Possible error to get image info if eliminated from
         #             glance. Retrieve image info and store in db.
         #             If we keep master images, no need to get the info,
@@ -567,7 +637,7 @@ class PXEDeploy(base.DeployInterface):
 
 class PXERescue(base.RescueInterface):
 
-    def validate(self, node):
+    def validate(self, task, node):
         pass
 
     def rescue(self, task, node):
@@ -595,8 +665,9 @@ class VendorPassthru(base.VendorInterface):
                   'pxe_config_path': _get_pxe_config_file_path(
                                                     node.uuid),
                   'root_mb': 1024 * int(d_info['root_gb']),
-                  'swap_mb': int(d_info['swap_mb'])
-
+                  'swap_mb': int(d_info['swap_mb']),
+                  'ephemeral_mb': 1024 * int(d_info['ephemeral_gb']),
+                  'preserve_ephemeral': d_info['preserve_ephemeral'],
             }
 
         missing = [key for key in params.keys() if params[key] is None]
@@ -605,9 +676,12 @@ class VendorPassthru(base.VendorInterface):
                     "Parameters %s were not passed to ironic"
                     " for deploy.") % missing)
 
+        # ephemeral_format is nullable
+        params['ephemeral_format'] = d_info.get('ephemeral_format')
+
         return params
 
-    def validate(self, node, **kwargs):
+    def validate(self, task, node, **kwargs):
         method = kwargs['method']
         if method == 'pass_deploy_info':
             self._get_deploy_info(node, **kwargs)
@@ -646,6 +720,12 @@ class VendorPassthru(base.VendorInterface):
                 node.last_error = msg
                 node.save(task.context)
 
+        if node.provision_state != states.DEPLOYWAIT:
+            LOG.error(_('Node %s is not waiting to be deployed.') %
+                      node.uuid)
+            return
+        node.provision_state = states.DEPLOYING
+        node.save(task.context)
         # remove cached keystone token immediately
         _destroy_token_file(node)
 
@@ -663,9 +743,10 @@ class VendorPassthru(base.VendorInterface):
 
         try:
             deploy_utils.deploy(**params)
-        except Exception:
-            # NOTE(deva): deploy() already logs any failure
-            #             so we don't need to log it again here.
+        except Exception as e:
+            LOG.error(_('PXE deploy failed for instance %(instance)s. '
+                        'Error: %(error)s') % {'instance': node.instance_uuid,
+                                               'error': e})
             _set_failed_state(_('PXE driver failed to continue deployment.'))
         else:
             LOG.info(_('Deployment to node %s done') % node.uuid)

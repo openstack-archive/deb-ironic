@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # -*- encoding: utf-8 -*-
 #
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -146,7 +145,8 @@ def _check_port_change_forbidden(port, session):
         query = query.filter_by(id=node_id)
         node_ref = query.one()
         if node_ref['reservation'] is not None:
-            raise exception.NodeLocked(node=node_id)
+            raise exception.NodeLocked(node=node_id,
+                                       host=node_ref['reservation'])
 
 
 def _paginate_query(model, limit=None, marker=None, sort_key=None,
@@ -165,7 +165,8 @@ def _check_node_already_locked(query, query_by):
     no_reserv = None
     locked_ref = query.filter(models.Node.reservation != no_reserv).first()
     if locked_ref:
-        raise exception.NodeLocked(node=locked_ref[query_by])
+        raise exception.NodeLocked(node=locked_ref[query_by],
+                                   host=locked_ref['reservation'])
 
 
 def _handle_node_lock_not_found(nodes, query, query_by):
@@ -181,18 +182,14 @@ class Connection(api.Connection):
     def __init__(self):
         pass
 
-    def get_nodeinfo_list(self, columns=None, filters=None, limit=None,
-                          marker=None, sort_key=None, sort_dir=None):
-        # list-ify columns and filters default values because it is bad form
-        # to include a mutable list in function definitions.
+    def _add_nodes_filters(self, query, filters):
         if filters is None:
             filters = []
-        if columns is None:
-            columns = [models.Node.id]
-        else:
-            columns = [getattr(models.Node, c) for c in columns]
 
-        query = model_query(*columns, base_model=models.Node)
+        if 'chassis_uuid' in filters:
+            # get_chassis() to raise an exception if the chassis is not found
+            chassis_obj = self.get_chassis(filters['chassis_uuid'])
+            query = query.filter_by(chassis_id=chassis_obj.id)
         if 'associated' in filters:
             if filters['associated']:
                 query = query.filter(models.Node.instance_uuid != None)
@@ -203,40 +200,32 @@ class Connection(api.Connection):
                 query = query.filter(models.Node.reservation != None)
             else:
                 query = query.filter(models.Node.reservation == None)
+        if 'maintenance' in filters:
+            query = query.filter_by(maintenance=filters['maintenance'])
         if 'driver' in filters:
-            query = query.filter(models.Node.driver == filters['driver'])
+            query = query.filter_by(driver=filters['driver'])
+
+        return query
+
+    def get_nodeinfo_list(self, columns=None, filters=None, limit=None,
+                          marker=None, sort_key=None, sort_dir=None):
+        # list-ify columns default values because it is bad form
+        # to include a mutable list in function definitions.
+        if columns is None:
+            columns = [models.Node.id]
+        else:
+            columns = [getattr(models.Node, c) for c in columns]
+
+        query = model_query(*columns, base_model=models.Node)
+        query = self._add_nodes_filters(query, filters)
         return _paginate_query(models.Node, limit, marker,
                                sort_key, sort_dir, query)
 
     @objects.objectify(objects.Node)
-    def get_node_list(self, limit=None, marker=None,
+    def get_node_list(self, filters=None, limit=None, marker=None,
                       sort_key=None, sort_dir=None):
-        return _paginate_query(models.Node, limit, marker,
-                               sort_key, sort_dir)
-
-    @objects.objectify(objects.Node)
-    def get_nodes_by_chassis(self, chassis_id, limit=None, marker=None,
-                             sort_key=None, sort_dir=None):
-        # get_chassis() to raise an exception if the chassis is not found
-        chassis_obj = self.get_chassis(chassis_id)
         query = model_query(models.Node)
-        query = query.filter_by(chassis_id=chassis_obj.id)
-        return _paginate_query(models.Node, limit, marker,
-                               sort_key, sort_dir, query)
-
-    @objects.objectify(objects.Node)
-    def get_associated_nodes(self, limit=None, marker=None,
-                      sort_key=None, sort_dir=None):
-        query = model_query(models.Node).\
-                filter(models.Node.instance_uuid != None)
-        return _paginate_query(models.Node, limit, marker,
-                               sort_key, sort_dir, query)
-
-    @objects.objectify(objects.Node)
-    def get_unassociated_nodes(self, limit=None, marker=None,
-                      sort_key=None, sort_dir=None):
-        query = model_query(models.Node).\
-                filter(models.Node.instance_uuid == None)
+        query = self._add_nodes_filters(query, filters)
         return _paginate_query(models.Node, limit, marker,
                                sort_key, sort_dir, query)
 
@@ -289,12 +278,6 @@ class Connection(api.Connection):
             values['power_state'] = states.NOSTATE
         if not values.get('provision_state'):
             values['provision_state'] = states.NOSTATE
-        if not values.get('properties'):
-            values['properties'] = '{}'
-        if not values.get('extra'):
-            values['extra'] = '{}'
-        if not values.get('driver_info'):
-            values['driver_info'] = '{}'
 
         node = models.Node()
         node.update(values)
@@ -338,11 +321,6 @@ class Connection(api.Connection):
                 node_ref = query.one()
             except NoResultFound:
                 raise exception.NodeNotFound(node=node_id)
-            if node_ref['reservation'] is not None:
-                raise exception.NodeLocked(node=node_id)
-            if node_ref['instance_uuid'] is not None:
-                raise exception.NodeAssociated(node=node_id,
-                                            instance=node_ref['instance_uuid'])
 
             # Get node ID, if an UUID was supplied. The ID is
             # required for deleting all ports, attached to the node.
@@ -370,6 +348,10 @@ class Connection(api.Connection):
             if values.get("instance_uuid") and ref.instance_uuid:
                 raise exception.NodeAssociated(node=node_id,
                                 instance=values['instance_uuid'])
+
+            if 'provision_state' in values:
+                values['provision_updated_at'] = timeutils.utcnow()
+
             ref.update(values)
         return ref
 
@@ -409,8 +391,6 @@ class Connection(api.Connection):
     def create_port(self, values):
         if not values.get('uuid'):
             values['uuid'] = utils.generate_uuid()
-        if not values.get('extra'):
-            values['extra'] = '{}'
         port = models.Port()
         port.update(values)
         try:
@@ -469,8 +449,6 @@ class Connection(api.Connection):
     def create_chassis(self, values):
         if not values.get('uuid'):
             values['uuid'] = utils.generate_uuid()
-        if not values.get('extra'):
-            values['extra'] = '{}'
         chassis = models.Chassis()
         chassis.update(values)
         chassis.save()

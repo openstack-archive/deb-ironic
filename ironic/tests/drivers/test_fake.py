@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -18,6 +17,7 @@
 
 """Test class for Fake driver."""
 
+from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import states
 from ironic.conductor import task_manager
@@ -35,7 +35,8 @@ class FakeDriverTestCase(base.TestCase):
         super(FakeDriverTestCase, self).setUp()
         self.context = context.get_admin_context()
         self.dbapi = db_api.get_instance()
-        self.driver = mgr_utils.get_mocked_node_manager(driver='fake')
+        mgr_utils.mock_the_extension_manager()
+        self.driver = driver_factory.get_driver("fake")
         self.node = db_utils.get_test_node()
         self.dbapi.create_node(self.node)
 
@@ -44,13 +45,14 @@ class FakeDriverTestCase(base.TestCase):
         self.assertIsInstance(self.driver.power, driver_base.PowerInterface)
         self.assertIsInstance(self.driver.deploy, driver_base.DeployInterface)
         self.assertIsInstance(self.driver.vendor, driver_base.VendorInterface)
+        self.assertIsInstance(self.driver.console,
+                                                  driver_base.ConsoleInterface)
         self.assertIsNone(self.driver.rescue)
-        self.assertIsNone(self.driver.console)
 
     def test_power_interface(self):
-        self.driver.power.validate(self.node)
         with task_manager.acquire(self.context,
                                   [self.node['uuid']]) as task:
+            self.driver.power.validate(task, self.node)
             self.driver.power.get_power_state(task, self.node)
             self.assertRaises(exception.InvalidParameterValue,
                               self.driver.power.set_power_state,
@@ -59,7 +61,7 @@ class FakeDriverTestCase(base.TestCase):
             self.driver.power.reboot(task, self.node)
 
     def test_deploy_interface(self):
-        self.driver.deploy.validate(self.node)
+        self.driver.deploy.validate(None, self.node)
 
         self.driver.deploy.prepare(None, None)
         self.driver.deploy.deploy(None, None)
@@ -69,14 +71,33 @@ class FakeDriverTestCase(base.TestCase):
         self.driver.deploy.clean_up(None, None)
         self.driver.deploy.tear_down(None, None)
 
-    def test_vendor_interface(self):
-        info = {'method': 'foo',
-                'bar': 'baz'}
-        self.assertTrue(self.driver.vendor.validate(self.node, **info))
-        self.assertTrue(self.driver.vendor.vendor_passthru(None,
-                                                           self.node['uuid'],
-                                                           **info))
-        # no method
+    def test_vendor_interface_route_valid_methods(self):
+        info = {'method': 'first_method', 'bar': 'baz'}
+        self.driver.vendor.validate(None, self.node, **info)
+        self.assertTrue(self.driver.vendor.vendor_passthru(
+                None, self.node, **info))
+
+        info['bar'] = 'bad info'
+        self.assertFalse(self.driver.vendor.vendor_passthru(
+                None, self.node, **info))
+
+        info['method'] = 'second_method'
+        self.driver.vendor.validate(None, self.node, **info)
+        self.assertFalse(self.driver.vendor.vendor_passthru(
+                None, self.node, **info))
+
+        info['bar'] = 'kazoo'
+        self.assertTrue(self.driver.vendor.vendor_passthru(
+                None, self.node, **info))
+
+    def test_vendor_interface_missing_param(self):
+        info = {'method': 'first_method'}
         self.assertRaises(exception.InvalidParameterValue,
                           self.driver.vendor.validate,
-                          self.node, bar='baz')
+                          None, self.node, **info)
+
+    def test_vendor_interface_bad_method(self):
+        info = {'method': 'bad_method', 'bar': 'kazoo'}
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.driver.vendor.validate,
+                          None, self.node, **info)

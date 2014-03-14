@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # -*- encoding: utf-8 -*-
 #
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -23,6 +22,7 @@ from ironic.drivers.modules import fake
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules import pxe
+from ironic.drivers.modules import seamicro
 from ironic.drivers.modules import ssh
 
 
@@ -32,7 +32,11 @@ class FakeDriver(base.BaseDriver):
     def __init__(self):
         self.power = fake.FakePower()
         self.deploy = fake.FakeDeploy()
-        self.vendor = fake.FakeVendor()
+
+        a = fake.FakeVendorA()
+        b = fake.FakeVendorB()
+        self.vendor = fake.MultipleVendorInterface(a, b)
+        self.console = fake.FakeConsole()
 
 
 class FakeIPMIToolDriver(base.BaseDriver):
@@ -41,7 +45,7 @@ class FakeIPMIToolDriver(base.BaseDriver):
     def __init__(self):
         self.power = ipmitool.IPMIPower()
         self.deploy = fake.FakeDeploy()
-        self.vendor = self.power
+        self.vendor = ipmitool.VendorPassthru()
 
 
 class FakePXEDriver(base.BaseDriver):
@@ -68,4 +72,17 @@ class FakeIPMINativeDriver(base.BaseDriver):
     def __init__(self):
         self.power = ipminative.NativeIPMIPower()
         self.deploy = fake.FakeDeploy()
-        self.vendor = self.power
+        self.vendor = ipminative.VendorPassthru()
+
+
+class FakeSeaMicroDriver(base.BaseDriver):
+    """Fake SeaMicro driver."""
+
+    def __init__(self):
+        self.power = seamicro.Power()
+        self.deploy = fake.FakeDeploy()
+        self.rescue = self.deploy
+        self.seamicro_vendor = seamicro.VendorPassthru()
+        self.pxe_vendor = pxe.VendorPassthru()
+        self.vendor = seamicro.SeaMicroPXEMultipleVendorInterface(
+            self.seamicro_vendor, self.pxe_vendor)

@@ -1,8 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-# -*- encoding: utf-8 -*-
-#
-# Copyright 2013 Hewlett-Packard Development Company, L.P.
-#
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
 #    a copy of the License at
@@ -15,20 +10,27 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from sqlalchemy import Table, MetaData
+"""Nodes add console enabled
+
+Revision ID: 3cb628139ea4
+Revises: 21b331f883ef
+Create Date: 2014-02-26 11:24:11.318023
+
+"""
+
+# revision identifiers, used by Alembic.
+revision = '3cb628139ea4'
+down_revision = '21b331f883ef'
+
+from alembic import op
+import sqlalchemy as sa
 
 
-def upgrade(migrate_engine):
-    meta = MetaData()
-    meta.bind = migrate_engine
-
-    nodes = Table('nodes', meta, autoload=True)
-
-    nodes.c.deploy_driver.drop()
-    nodes.c.deploy_info.drop()
-    nodes.c.control_driver.alter(name='driver')
-    nodes.c.control_info.alter(name='driver_info')
+def upgrade():
+    op.add_column('nodes',
+        sa.Column('console_enabled', sa.Boolean)
+    )
 
 
-def downgrade(migrate_engine):
-    raise NotImplementedError('Downgrade from version 005 is unsupported.')
+def downgrade():
+    op.drop_column('nodes', 'console_enabled')

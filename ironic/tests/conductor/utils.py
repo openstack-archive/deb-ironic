@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -22,10 +21,8 @@ from ironic.common import driver_factory
 import pkg_resources
 from stevedore import dispatch
 
-from ironic.conductor import resource_manager
 
-
-def get_mockable_extension_manager(driver, namespace):
+def mock_the_extension_manager(driver="fake", namespace="ironic.drivers"):
     """Get a fake stevedore NameDispatchExtensionManager instance.
 
     :param namespace: A string representing the namespace over which to
@@ -51,25 +48,9 @@ def get_mockable_extension_manager(driver, namespace):
                                                   lambda x: True)
     mock_ext_mgr = driver_factory.DriverFactory()
     mock_ext = mock_ext_mgr._extension_manager._load_one_plugin(
-                                                     entry_point, True, [], {})
+                                              entry_point, True, [], {}, False)
     mock_ext_mgr._extension_manager.extensions = [mock_ext]
     mock_ext_mgr._extension_manager.by_name = dict((e.name, e)
                                                    for e in [mock_ext])
+
     return (mock_ext_mgr, mock_ext)
-
-
-def get_mocked_node_manager(driver="fake"):
-    """Mock :class:NodeManager and get a ref to the driver inside..
-
-    To enable testing of NodeManagers, we need to control what plugins
-    stevedore loads under the hood. To do that, we fake the plugin loading,
-    substituting NodeManager's _driver_factory with an instance of the
-    specified driver only, and return a reference directly to that driver
-    instance.
-
-    :returns: A driver instance.
-    """
-
-    (mgr, ext) = get_mockable_extension_manager(driver, 'ironic.drivers')
-    resource_manager.NodeManager._driver_factory = mgr
-    return ext.obj

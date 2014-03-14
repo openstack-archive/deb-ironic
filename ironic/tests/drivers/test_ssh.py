@@ -18,6 +18,7 @@
 import mock
 import paramiko
 
+from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import states
 from ironic.common import utils
@@ -25,14 +26,16 @@ from ironic.conductor import task_manager
 from ironic.db import api as dbapi
 from ironic.drivers.modules import ssh
 from ironic.openstack.common import context
-from ironic.openstack.common import jsonutils as json
 from ironic.openstack.common import processutils
 from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
 
-INFO_DICT = json.loads(db_utils.ssh_info)
+from oslo.config import cfg
+
+CONF = cfg.CONF
+INFO_DICT = db_utils.get_test_ssh_info()
 
 
 class SSHValidateParametersTestCase(base.TestCase):
@@ -91,6 +94,15 @@ class SSHValidateParametersTestCase(base.TestCase):
                 ssh._parse_driver_info,
                 node)
 
+    def test__parse_driver_info_ssh_port_wrong_type(self):
+        # make sure error is raised when ssh_port is not integer
+        info = dict(INFO_DICT)
+        info['ssh_port'] = 'wrong_port_value'
+        node = db_utils.get_test_node(driver_info=info)
+        self.assertRaises(exception.InvalidParameterValue,
+                ssh._parse_driver_info,
+                node)
+
     def test__parse_driver_info_missing_key(self):
         # make sure error is raised when info is missing
         info = dict(INFO_DICT)
@@ -103,12 +115,21 @@ class SSHValidateParametersTestCase(base.TestCase):
     def test__normalize_mac_string(self):
         mac_raw = "0A:1B-2C-3D:4F"
         mac_clean = ssh._normalize_mac(mac_raw)
-        self.assertEqual(mac_clean, "0a1b2c3d4f")
+        self.assertEqual("0a1b2c3d4f", mac_clean)
 
     def test__normalize_mac_unicode(self):
         mac_raw = u"0A:1B-2C-3D:4F"
         mac_clean = ssh._normalize_mac(mac_raw)
-        self.assertEqual(mac_clean, "0a1b2c3d4f")
+        self.assertEqual("0a1b2c3d4f", mac_clean)
+
+    def test__parse_driver_info_with_custom_libvirt_uri(self):
+        CONF.set_override('libvirt_uri', 'qemu:///foo', 'ssh')
+        expected_base_cmd = "/usr/bin/virsh --connect qemu:///foo"
+
+        node = db_utils.get_test_node(driver='fake_ssh', driver_info=INFO_DICT)
+        node['driver_info']['ssh_virt_type'] = 'virsh'
+        info = ssh._parse_driver_info(node)
+        self.assertEqual(expected_base_cmd, info['cmd_set']['base_cmd'])
 
 
 class SSHPrivateMethodsTestCase(base.TestCase):
@@ -120,9 +141,11 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                         driver_info=INFO_DICT)
         self.sshclient = paramiko.SSHClient()
 
-        #setup the mock for processutils.ssh_execute because most tests use it
+        # Set up the mock for processutils.ssh_execute because most tests use
+        # it. processutils.ssh_execute returns (stdout, stderr).
         self.ssh_patcher = mock.patch.object(processutils, 'ssh_execute')
         self.exec_ssh_mock = self.ssh_patcher.start()
+        self.exec_ssh_mock.return_value = ('', '')
 
         def stop_patcher():
             if self.ssh_patcher:
@@ -130,19 +153,56 @@ class SSHPrivateMethodsTestCase(base.TestCase):
 
         self.addCleanup(stop_patcher)
 
+    def test__get_connection_client(self):
+        with mock.patch.object(
+                utils, 'ssh_connect') as ssh_connect_mock:
+            ssh_connect_mock.return_value = self.sshclient
+            client = ssh._get_connection(self.node)
+            self.assertEqual(self.sshclient, client)
+            driver_info = ssh._parse_driver_info(self.node)
+            ssh_connect_mock.assert_called_once_with(driver_info)
+
+    def test__get_connection_exception(self):
+        with mock.patch.object(
+                utils, 'ssh_connect') as ssh_connect_mock:
+            ssh_connect_mock.side_effect = exception.SSHConnectFailed(
+                                                                  host='fake')
+            self.assertRaises(exception.SSHConnectFailed,
+                              ssh._get_connection,
+                              self.node)
+            driver_info = ssh._parse_driver_info(self.node)
+            ssh_connect_mock.assert_called_once_with(driver_info)
+
+    def test__ssh_execute(self):
+        ssh_cmd = "somecmd"
+        expected = ['a', 'b', 'c']
+        self.exec_ssh_mock.return_value = ('\n'.join(expected), '')
+        lst = ssh._ssh_execute(self.sshclient, ssh_cmd)
+        self.exec_ssh_mock.assert_called_once_with(self.sshclient, ssh_cmd)
+        self.assertEqual(expected, lst)
+
+    def test__ssh_execute_exception(self):
+        ssh_cmd = "somecmd"
+        self.exec_ssh_mock.side_effect = processutils.ProcessExecutionError
+        self.assertRaises(exception.SSHCommandFailed,
+                          ssh._ssh_execute,
+                          self.sshclient,
+                          ssh_cmd)
+        self.exec_ssh_mock.assert_called_once_with(self.sshclient, ssh_cmd)
+
     def test__get_power_status_on(self):
         info = ssh._parse_driver_info(self.node)
         with mock.patch.object(ssh, '_get_hosts_name_for_node') \
                 as get_hosts_name_mock:
-            self.exec_ssh_mock.return_value = [
-                    '"NodeName" {b43c4982-110c-4c29-9325-d5f41b053513}']
+            self.exec_ssh_mock.return_value = (
+                    '"NodeName" {b43c4982-110c-4c29-9325-d5f41b053513}', '')
             get_hosts_name_mock.return_value = "NodeName"
 
             pstate = ssh._get_power_status(self.sshclient, info)
 
             ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
                                  info['cmd_set']['list_running'])
-            self.assertEqual(pstate, states.POWER_ON)
+            self.assertEqual(states.POWER_ON, pstate)
             self.exec_ssh_mock.assert_called_once_with(
                     self.sshclient, ssh_cmd)
             get_hosts_name_mock.assert_called_once_with(self.sshclient,
@@ -152,15 +212,15 @@ class SSHPrivateMethodsTestCase(base.TestCase):
         info = ssh._parse_driver_info(self.node)
         with mock.patch.object(ssh, '_get_hosts_name_for_node') \
                 as get_hosts_name_mock:
-            self.exec_ssh_mock.return_value = [
-                    '"NodeName" {b43c4982-110c-4c29-9325-d5f41b053513}']
+            self.exec_ssh_mock.return_value = (
+                    '"NodeName" {b43c4982-110c-4c29-9325-d5f41b053513}', '')
             get_hosts_name_mock.return_value = "NotNodeName"
 
             pstate = ssh._get_power_status(self.sshclient, info)
 
             ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
                                  info['cmd_set']['list_running'])
-            self.assertEqual(pstate, states.POWER_OFF)
+            self.assertEqual(states.POWER_OFF, pstate)
             self.exec_ssh_mock.assert_called_once_with(self.sshclient,
                     ssh_cmd)
             get_hosts_name_mock.assert_called_once_with(self.sshclient,
@@ -171,8 +231,8 @@ class SSHPrivateMethodsTestCase(base.TestCase):
 
         with mock.patch.object(ssh, '_get_hosts_name_for_node') \
                 as get_hosts_name_mock:
-            self.exec_ssh_mock.return_value = [
-                    '"NodeName" {b43c4982-110c-4c29-9325-d5f41b053513}']
+            self.exec_ssh_mock.return_value = (
+                    '"NodeName" {b43c4982-110c-4c29-9325-d5f41b053513}', '')
             info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
             get_hosts_name_mock.return_value = None
             self.assertRaises(exception.NodeNotFound,
@@ -188,6 +248,19 @@ class SSHPrivateMethodsTestCase(base.TestCase):
             get_hosts_name_mock.assert_called_once_with(self.sshclient,
                                                         info)
 
+    def test__get_power_status_exception(self):
+        info = ssh._parse_driver_info(self.node)
+        self.exec_ssh_mock.side_effect = processutils.ProcessExecutionError
+
+        self.assertRaises(exception.SSHCommandFailed,
+                          ssh._get_power_status,
+                          self.sshclient,
+                          info)
+        ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
+                             info['cmd_set']['list_running'])
+        self.exec_ssh_mock.assert_called_once_with(
+                self.sshclient, ssh_cmd)
+
     def test__get_hosts_name_for_node_match(self):
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
@@ -197,19 +270,21 @@ class SSHPrivateMethodsTestCase(base.TestCase):
         cmd_to_exec = "%s %s" % (info['cmd_set']['base_cmd'],
                                  info['cmd_set']['get_node_macs'])
         cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
-        self.exec_ssh_mock.side_effect = [['NodeName'], ['52:54:00:cf:2d:31']]
+        self.exec_ssh_mock.side_effect = [('NodeName', ''),
+                                          ('52:54:00:cf:2d:31', '')]
         expected = [mock.call(self.sshclient, ssh_cmd),
                     mock.call(self.sshclient, cmd_to_exec)]
 
         found_name = ssh._get_hosts_name_for_node(self.sshclient, info)
 
-        self.assertEqual(found_name, 'NodeName')
-        self.assertEqual(self.exec_ssh_mock.call_args_list, expected)
+        self.assertEqual('NodeName', found_name)
+        self.assertEqual(expected, self.exec_ssh_mock.call_args_list)
 
     def test__get_hosts_name_for_node_no_match(self):
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "22:22:22:22:22:22"]
-        self.exec_ssh_mock.side_effect = [['NodeName'], ['52:54:00:cf:2d:31']]
+        self.exec_ssh_mock.side_effect = [('NodeName', ''),
+                                          ('52:54:00:cf:2d:31', '')]
 
         ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
                              info['cmd_set']['list_all'])
@@ -223,8 +298,29 @@ class SSHPrivateMethodsTestCase(base.TestCase):
 
         found_name = ssh._get_hosts_name_for_node(self.sshclient, info)
 
-        self.assertEqual(found_name, None)
-        self.assertEqual(self.exec_ssh_mock.call_args_list, expected)
+        self.assertIsNone(found_name)
+        self.assertEqual(expected, self.exec_ssh_mock.call_args_list)
+
+    def test__get_hosts_name_for_node_exception(self):
+        info = ssh._parse_driver_info(self.node)
+        info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
+        ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
+                             info['cmd_set']['list_all'])
+
+        cmd_to_exec = "%s %s" % (info['cmd_set']['base_cmd'],
+                                 info['cmd_set']['get_node_macs'])
+        cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
+
+        self.exec_ssh_mock.side_effect = [('NodeName', ''),
+                                          processutils.ProcessExecutionError]
+        expected = [mock.call(self.sshclient, ssh_cmd),
+                    mock.call(self.sshclient, cmd_to_exec)]
+
+        self.assertRaises(exception.SSHCommandFailed,
+                          ssh._get_hosts_name_for_node,
+                          self.sshclient,
+                          info)
+        self.assertEqual(expected, self.exec_ssh_mock.call_args_list)
 
     def test__power_on_good(self):
         info = ssh._parse_driver_info(self.node)
@@ -237,7 +333,6 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                 get_power_status_mock.side_effect = [states.POWER_OFF,
                                                      states.POWER_ON]
                 get_hosts_name_mock.return_value = "NodeName"
-                self.exec_ssh_mock.return_value = None
                 expected = [mock.call(self.sshclient, info),
                             mock.call(self.sshclient, info)]
 
@@ -246,9 +341,9 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                 cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
                 current_state = ssh._power_on(self.sshclient, info)
 
-                self.assertEqual(current_state, states.POWER_ON)
-                self.assertEqual(get_power_status_mock.call_args_list,
-                                 expected)
+                self.assertEqual(states.POWER_ON, current_state)
+                self.assertEqual(expected,
+                                 get_power_status_mock.call_args_list)
                 get_hosts_name_mock.assert_called_once_with(self.sshclient,
                                                             info)
                 self.exec_ssh_mock.assert_called_once_with(self.sshclient,
@@ -264,7 +359,6 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                 get_power_status_mock.side_effect = [states.POWER_OFF,
                                                      states.POWER_OFF]
                 get_hosts_name_mock.return_value = "NodeName"
-                self.exec_ssh_mock.return_value = None
                 expected = [mock.call(self.sshclient, info),
                             mock.call(self.sshclient, info)]
 
@@ -273,9 +367,37 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                 cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
                 current_state = ssh._power_on(self.sshclient, info)
 
-                self.assertEqual(current_state, states.ERROR)
-                self.assertEqual(get_power_status_mock.call_args_list,
-                                 expected)
+                self.assertEqual(states.ERROR, current_state)
+                self.assertEqual(expected,
+                                 get_power_status_mock.call_args_list)
+                get_hosts_name_mock.assert_called_once_with(self.sshclient,
+                                                            info)
+                self.exec_ssh_mock.assert_called_once_with(self.sshclient,
+                                                           cmd_to_exec)
+
+    def test__power_on_exception(self):
+        info = ssh._parse_driver_info(self.node)
+        info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
+
+        self.exec_ssh_mock.side_effect = processutils.ProcessExecutionError
+        with mock.patch.object(
+                ssh, '_get_power_status') as get_power_status_mock:
+            with mock.patch.object(
+                    ssh, '_get_hosts_name_for_node') as get_hosts_name_mock:
+                get_power_status_mock.side_effect = [states.POWER_OFF,
+                                                     states.POWER_ON]
+                get_hosts_name_mock.return_value = "NodeName"
+
+                cmd_to_exec = "%s %s" % (info['cmd_set']['base_cmd'],
+                                         info['cmd_set']['start_cmd'])
+                cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
+
+                self.assertRaises(exception.SSHCommandFailed,
+                                  ssh._power_on,
+                                  self.sshclient,
+                                  info)
+                get_power_status_mock.assert_called_once_with(self.sshclient,
+                                                              info)
                 get_hosts_name_mock.assert_called_once_with(self.sshclient,
                                                             info)
                 self.exec_ssh_mock.assert_called_once_with(self.sshclient,
@@ -291,7 +413,6 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                 get_power_status_mock.side_effect = [states.POWER_ON,
                                                      states.POWER_OFF]
                 get_hosts_name_mock.return_value = "NodeName"
-                self.exec_ssh_mock.return_value = None
                 expected = [mock.call(self.sshclient, info),
                             mock.call(self.sshclient, info)]
 
@@ -300,9 +421,9 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                 cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
                 current_state = ssh._power_off(self.sshclient, info)
 
-                self.assertEqual(current_state, states.POWER_OFF)
-                self.assertEqual(get_power_status_mock.call_args_list,
-                                 expected)
+                self.assertEqual(states.POWER_OFF, current_state)
+                self.assertEqual(expected,
+                                 get_power_status_mock.call_args_list)
                 get_hosts_name_mock.assert_called_once_with(self.sshclient,
                                                             info)
                 self.exec_ssh_mock.assert_called_once_with(self.sshclient,
@@ -318,7 +439,6 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                 get_power_status_mock.side_effect = [states.POWER_ON,
                                                      states.POWER_ON]
                 get_hosts_name_mock.return_value = "NodeName"
-                self.exec_ssh_mock.return_value = None
                 expected = [mock.call(self.sshclient, info),
                             mock.call(self.sshclient, info)]
 
@@ -327,9 +447,38 @@ class SSHPrivateMethodsTestCase(base.TestCase):
                 cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
                 current_state = ssh._power_off(self.sshclient, info)
 
-                self.assertEqual(current_state, states.ERROR)
-                self.assertEqual(get_power_status_mock.call_args_list,
-                                 expected)
+                self.assertEqual(states.ERROR, current_state)
+                self.assertEqual(expected,
+                                 get_power_status_mock.call_args_list)
+                get_hosts_name_mock.assert_called_once_with(self.sshclient,
+                                                            info)
+                self.exec_ssh_mock.assert_called_once_with(self.sshclient,
+                                                           cmd_to_exec)
+
+    def test__power_off_exception(self):
+        info = ssh._parse_driver_info(self.node)
+        info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
+        self.exec_ssh_mock.side_effect = processutils.ProcessExecutionError
+        with mock.patch.object(
+                ssh, '_get_power_status') as get_power_status_mock:
+            with mock.patch.object(
+                    ssh, '_get_hosts_name_for_node') as get_hosts_name_mock:
+                self.exec_ssh_mock.side_effect = (
+                        processutils.ProcessExecutionError)
+                get_power_status_mock.side_effect = [states.POWER_ON,
+                                                     states.POWER_OFF]
+                get_hosts_name_mock.return_value = "NodeName"
+
+                cmd_to_exec = "%s %s" % (info['cmd_set']['base_cmd'],
+                                         info['cmd_set']['stop_cmd'])
+                cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
+
+                self.assertRaises(exception.SSHCommandFailed,
+                                  ssh._power_off,
+                                  self.sshclient,
+                                  info)
+                get_power_status_mock.assert_called_once_with(self.sshclient,
+                                                            info)
                 get_hosts_name_mock.assert_called_once_with(self.sshclient,
                                                             info)
                 self.exec_ssh_mock.assert_called_once_with(self.sshclient,
@@ -364,7 +513,7 @@ class SSHPrivateMethodsTestCase(base.TestCase):
             stdout, stderr = processutils.ssh_execute(self.sshclient,
                                                       "command")
 
-            self.assertEqual(stdout, 'hello')
+            self.assertEqual('hello', stdout)
             exec_command_mock.assert_called_once_with("command")
 
     def test_exec_ssh_command_fail(self):
@@ -405,12 +554,15 @@ class SSHDriverTestCase(db_base.DbTestCase):
     def setUp(self):
         super(SSHDriverTestCase, self).setUp()
         self.context = context.get_admin_context()
-        self.driver = mgr_utils.get_mocked_node_manager(driver='fake_ssh')
-        self.node = db_utils.get_test_node(
-                        driver='fake_ssh',
-                        driver_info=INFO_DICT)
+        mgr_utils.mock_the_extension_manager(driver="fake_ssh")
+        self.driver = driver_factory.get_driver("fake_ssh")
+        n = db_utils.get_test_node(
+                driver='fake_ssh',
+                driver_info=INFO_DICT)
         self.dbapi = dbapi.get_instance()
-        self.dbapi.create_node(self.node)
+        self.node = self.dbapi.create_node(n)
+        self.port = self.dbapi.create_port(db_utils.get_test_port(
+                                                         node_id=self.node.id))
         self.sshclient = paramiko.SSHClient()
 
         #setup these mocks because most tests use them
@@ -442,6 +594,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
         self.get_conn_mock = None
 
         ports = []
+        ports.append(self.port)
         ports.append(
             self.dbapi.create_port(
                 db_utils.get_test_port(
@@ -459,7 +612,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
 
         with task_manager.acquire(self.context, [self.node['uuid']]) as task:
             node_macs = ssh._get_nodes_mac_addresses(task, self.node)
-        self.assertEqual(node_macs, ['aa:bb:cc', 'dd:ee:ff'])
+        self.assertEqual(sorted([p.address for p in ports]), sorted(node_macs))
 
     def test__validate_info_ssh_connect_failed(self):
         info = ssh._parse_driver_info(self.node)
@@ -474,8 +627,23 @@ class SSHDriverTestCase(db_base.DbTestCase):
                                       shared=False) as task:
                 self.assertRaises(exception.InvalidParameterValue,
                                   task.resources[0].driver.power.validate,
-                                  self.node)
-                ssh_connect_mock.assert_called_once()
+                                  task, self.node)
+                driver_info = ssh._parse_driver_info(self.node)
+                ssh_connect_mock.assert_called_once_with(driver_info)
+
+    def test_validate_fail_no_port(self):
+        # stop the get_mac_addr mock, it's needed for this test
+        self.get_mac_addr_patcher.stop()
+        self.get_mac_addr_mock = None
+
+        new_node = self.dbapi.create_node(db_utils.get_test_node(id=321,
+                                   uuid='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+                                   driver='fake_ssh', driver_info=INFO_DICT))
+        with task_manager.acquire(self.context, [new_node.uuid],
+                                  shared=True) as task:
+            self.assertRaises(exception.InvalidParameterValue,
+                              task.resources[0].driver.power.validate,
+                              task, new_node)
 
     def test_reboot_good(self):
         info = ssh._parse_driver_info(self.node)
@@ -554,7 +722,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, [info['uuid']],
                                   shared=False) as task:
             self.assertRaises(
-                    exception.IronicException,
+                    exception.InvalidParameterValue,
                     task.resources[0].driver.power.set_power_state,
                     task,
                     self.node,

@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # -*- encoding: utf-8 -*-
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -52,7 +51,7 @@ class KeystoneTestCase(base.TestCase):
                         _fake_client))
 
         res = keystone.get_service_url()
-        self.assertEqual(res, fake_url)
+        self.assertEqual(fake_url, res)
 
     def test_url_not_found(self):
 

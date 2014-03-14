@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding: utf-8
 #
 # Copyright 2013 Red Hat, Inc.
@@ -15,8 +14,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
-import re
 
 import mock
 import six
@@ -53,35 +50,6 @@ class TestUuidType(base.FunctionalTest):
     def test_invalid_uuid(self):
         self.assertRaises(exception.InvalidUUID,
                           types.UuidType.validate, 'invalid-uuid')
-
-
-# TODO(lucasagomes): The tests for the StringType class were ported from
-#                    WSME trunk remove it on the next WSME release (> 0.5b6)
-class TestStringType(base.FunctionalTest):
-
-    def test_validate_string_type(self):
-        v = types.StringType(min_length=1, max_length=10,
-                             pattern='^[a-zA-Z0-9]*$')
-        v.validate('1')
-        v.validate('12345')
-        v.validate('1234567890')
-        self.assertRaises(ValueError, v.validate, '')
-        self.assertRaises(ValueError, v.validate, '12345678901')
-
-        # Test a pattern validation
-        v.validate('a')
-        v.validate('A')
-        self.assertRaises(ValueError, v.validate, '_')
-
-    def test_validate_string_type_precompile(self):
-        precompile = re.compile('^[a-zA-Z0-9]*$')
-        v = types.StringType(min_length=1, max_length=10,
-                             pattern=precompile)
-
-        # Test a pattern validation
-        v.validate('a')
-        v.validate('A')
-        self.assertRaises(ValueError, v.validate, '_')
 
 
 class MyPatchType(types.JsonPatchType):
@@ -198,3 +166,39 @@ class TestMultiType(base.FunctionalTest):
         vt = types.MultiType(wsme.types.text, six.integer_types)
         self.assertRaises(ValueError, vt.validate, 0.10)
         self.assertRaises(ValueError, vt.validate, object())
+
+    def test_multitype_tostring(self):
+        vt = types.MultiType(str, int)
+        vts = str(vt)
+        self.assertIn(str(str), vts)
+        self.assertIn(str(int), vts)
+
+
+class TestBooleanType(base.FunctionalTest):
+
+    def test_valid_true_values(self):
+        v = types.BooleanType()
+        self.assertTrue(v.validate("true"))
+        self.assertTrue(v.validate("TRUE"))
+        self.assertTrue(v.validate("True"))
+        self.assertTrue(v.validate("t"))
+        self.assertTrue(v.validate("1"))
+        self.assertTrue(v.validate("y"))
+        self.assertTrue(v.validate("yes"))
+        self.assertTrue(v.validate("on"))
+
+    def test_valid_false_values(self):
+        v = types.BooleanType()
+        self.assertFalse(v.validate("false"))
+        self.assertFalse(v.validate("FALSE"))
+        self.assertFalse(v.validate("False"))
+        self.assertFalse(v.validate("f"))
+        self.assertFalse(v.validate("0"))
+        self.assertFalse(v.validate("n"))
+        self.assertFalse(v.validate("no"))
+        self.assertFalse(v.validate("off"))
+
+    def test_invalid_value(self):
+        v = types.BooleanType()
+        self.assertRaises(exception.Invalid, v.validate, "invalid-value")
+        self.assertRaises(exception.Invalid, v.validate, "01")

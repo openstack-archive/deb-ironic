@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 UnitedStack Inc.
 # All Rights Reserved.
 #
@@ -87,7 +85,7 @@ class Port(base.APIBase):
                                 mandatory=True)
     "The UUID of the node this port belongs to"
 
-    links = [link.Link]
+    links = wsme.wsattr([link.Link], readonly=True)
     "A list containing a self link and associated port links"
 
     def __init__(self, **kwargs):
@@ -98,7 +96,7 @@ class Port(base.APIBase):
         # NOTE(lucasagomes): node_uuid is not part of objects.Port.fields
         #                    because it's an API-only attribute
         self.fields.append('node_uuid')
-        setattr(self, 'node_uuid', kwargs.get('node_id', None))
+        setattr(self, 'node_uuid', kwargs.get('node_id'))
 
     @classmethod
     def convert_with_links(cls, rpc_port, expand=True):
@@ -245,7 +243,7 @@ class PortsController(rest.RestController):
         rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
         return Port.convert_with_links(rpc_port)
 
-    @wsme_pecan.wsexpose(Port, body=Port)
+    @wsme_pecan.wsexpose(Port, body=Port, status_code=201)
     def post(self, port):
         """Create a new port.
 
@@ -276,9 +274,8 @@ class PortsController(rest.RestController):
         try:
             port = Port(**jsonpatch.apply_patch(rpc_port.as_dict(),
                                                 jsonpatch.JsonPatch(patch)))
-        except jsonpatch.JsonPatchException as e:
-            LOG.exception(e)
-            raise wsme.exc.ClientSideError(_("Patching Error: %s") % e)
+        except api_utils.JSONPATCH_EXCEPTIONS as e:
+            raise exception.PatchError(patch=patch, reason=e)
 
         # Update only the fields that have changed
         for field in objects.Port.fields:

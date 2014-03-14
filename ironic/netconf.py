@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -45,10 +43,10 @@ def _get_my_ip():
 netconf_opts = [
     cfg.StrOpt('my_ip',
                default=_get_my_ip(),
-               help='ip address of this host'),
+               help='IP address of this host.'),
     cfg.BoolOpt('use_ipv6',
                 default=False,
-                help='use ipv6'),
+                help='Use IPv6.'),
 ]
 
 CONF.register_opts(netconf_opts)

@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -22,10 +20,10 @@ from wsme import types as wtypes
 
 class APIBase(wtypes.Base):
 
-    created_at = datetime.datetime
+    created_at = wsme.wsattr(datetime.datetime, readonly=True)
     "The time in UTC at which the object is created"
 
-    updated_at = datetime.datetime
+    updated_at = wsme.wsattr(datetime.datetime, readonly=True)
     "The time in UTC at which the object is updated"
 
     def as_dict(self):

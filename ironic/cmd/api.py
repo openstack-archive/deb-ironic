@@ -1,7 +1,4 @@
-#!/usr/bin/env python
 # -*- encoding: utf-8 -*-
-#
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 #
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
@@ -24,6 +21,7 @@ import logging
 import sys
 
 from oslo.config import cfg
+from six.moves import socketserver
 from wsgiref import simple_server
 
 from ironic.api import app
@@ -31,6 +29,12 @@ from ironic.common import service as ironic_service
 from ironic.openstack.common import log
 
 CONF = cfg.CONF
+
+
+class ThreadedSimpleServer(socketserver.ThreadingMixIn,
+                           simple_server.WSGIServer):
+    """A Mixin class to make the API service greenthread-able."""
+    pass
 
 
 def main():
@@ -42,7 +46,8 @@ def main():
     port = CONF.api.port
     wsgi = simple_server.make_server(
             host, port,
-            app.VersionSelectorApplication())
+            app.VersionSelectorApplication(),
+            server_class=ThreadedSimpleServer)
 
     LOG = log.getLogger(__name__)
     LOG.info(_("Serving on http://%(host)s:%(port)s") %

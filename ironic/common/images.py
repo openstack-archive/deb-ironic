@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -38,7 +36,7 @@ LOG = logging.getLogger(__name__)
 image_opts = [
     cfg.BoolOpt('force_raw_images',
                 default=True,
-                help='Force backing images to raw format'),
+                help='Force backing images to raw format.'),
 ]
 
 CONF = cfg.CONF

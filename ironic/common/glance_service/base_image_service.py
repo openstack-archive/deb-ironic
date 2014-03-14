@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 OpenStack Foundation
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
@@ -22,9 +20,10 @@ import logging
 import shutil
 import sys
 import time
-import urlparse
 
 from glanceclient import client
+import six.moves.urllib.parse as urlparse
+
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
 
@@ -68,7 +67,7 @@ def check_image_service(func):
         if self.client:
             return func(self, *args, **kwargs)
 
-        image_href = kwargs.get('image_href', None)
+        image_href = kwargs.get('image_href')
         (image_id, self.glance_host,
          self.glance_port, use_ssl) = service_utils.parse_image_ref(image_href)
 

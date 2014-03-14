@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
 #
@@ -26,7 +24,7 @@ from ironic.common.glance_service import service_utils
 glance_opts = [
     cfg.ListOpt('allowed_direct_url_schemes',
                 default=[],
-                help='A list of url scheme that can be downloaded directly '
+                help='A list of URL schemes that can be downloaded directly '
                 'via the direct_url.  Currently supported schemes: '
                 '[file].')
 ]

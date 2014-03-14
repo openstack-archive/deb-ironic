@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
 #
@@ -21,14 +19,14 @@ from oslo.config import cfg
 API_SERVICE_OPTS = [
     cfg.StrOpt('host_ip',
                default='0.0.0.0',
-               help='The listen IP for the Ironic API server'),
+               help='The listen IP for the Ironic API server.'),
     cfg.IntOpt('port',
                default=6385,
-               help='The port for the Ironic API server'),
+               help='The port for the Ironic API server.'),
     cfg.IntOpt('max_limit',
                default=1000,
                help='The maximum number of items returned in a single '
-                    'response from a collection resource'),
+                    'response from a collection resource.'),
     ]
 
 CONF = cfg.CONF

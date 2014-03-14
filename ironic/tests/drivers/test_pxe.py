@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -27,11 +26,11 @@ import time
 
 from oslo.config import cfg
 
-
 from ironic.common import exception
 from ironic.common.glance_service import base_image_service
 from ironic.common.glance_service import service_utils
 from ironic.common import images
+from ironic.common import neutron
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
@@ -49,7 +48,7 @@ from ironic.tests.db import utils as db_utils
 
 CONF = cfg.CONF
 
-INFO_DICT = json.loads(db_utils.pxe_info)
+INFO_DICT = db_utils.get_test_pxe_info()
 
 
 class PXEValidateParametersTestCase(base.TestCase):
@@ -68,20 +67,11 @@ class PXEValidateParametersTestCase(base.TestCase):
                     driver='fake_pxe',
                     driver_info=INFO_DICT)
         info = pxe._parse_driver_info(node)
-        self.assertIsNotNone(info.get('instance_name'))
         self.assertIsNotNone(info.get('image_source'))
         self.assertIsNotNone(info.get('deploy_kernel'))
         self.assertIsNotNone(info.get('deploy_ramdisk'))
         self.assertIsNotNone(info.get('root_gb'))
-
-    def test__parse_driver_info_missing_instance_name(self):
-        # make sure error is raised when info is missing
-        info = dict(INFO_DICT)
-        del info['pxe_instance_name']
-        node = self._create_test_node(driver_info=info)
-        self.assertRaises(exception.InvalidParameterValue,
-                pxe._parse_driver_info,
-                node)
+        self.assertEqual(0, info.get('ephemeral_gb'))
 
     def test__parse_driver_info_missing_instance_source(self):
         # make sure error is raised when info is missing
@@ -127,10 +117,66 @@ class PXEValidateParametersTestCase(base.TestCase):
                 pxe._parse_driver_info,
                 node)
 
+    def test__parse_driver_info_valid_ephemeral_gb(self):
+        ephemeral_gb = 10
+        info = dict(INFO_DICT)
+        info['pxe_ephemeral_gb'] = ephemeral_gb
+        info['pxe_ephemeral_format'] = 'exttest'
+        node = self._create_test_node(driver_info=info)
+        data = pxe._parse_driver_info(node)
+        self.assertEqual(ephemeral_gb, data.get('ephemeral_gb'))
+
+    def test__parse_driver_info_invalid_ephemeral_gb(self):
+        info = dict(INFO_DICT)
+        info['pxe_ephemeral_gb'] = 'foobar'
+        info['pxe_ephemeral_format'] = 'exttest'
+        node = self._create_test_node(driver_info=info)
+        self.assertRaises(exception.InvalidParameterValue,
+                pxe._parse_driver_info,
+                node)
+
+    def test__parse_driver_info_valid_ephemeral_missing_format(self):
+        ephemeral_gb = 10
+        info = dict(INFO_DICT)
+        info['pxe_ephemeral_gb'] = ephemeral_gb
+        info['pxe_ephemeral_format'] = None
+        node = self._create_test_node(driver_info=info)
+        self.assertRaises(exception.InvalidParameterValue,
+                pxe._parse_driver_info,
+                node)
+
+    def test__parse_driver_info_valid_preserve_ephemeral_true(self):
+        info = dict(INFO_DICT)
+        for _id, opt in enumerate(['true', 'TRUE', 'True', 't',
+                                   'on', 'yes', 'y', '1']):
+            info['pxe_preserve_ephemeral'] = opt
+            node = self._create_test_node(id=_id, uuid=utils.generate_uuid(),
+                                          driver_info=info)
+            data = pxe._parse_driver_info(node)
+            self.assertTrue(data.get('preserve_ephemeral'))
+
+    def test__parse_driver_info_valid_preserve_ephemeral_false(self):
+        info = dict(INFO_DICT)
+        for _id, opt in enumerate(['false', 'FALSE', 'False', 'f',
+                                   'off', 'no', 'n', '0']):
+            info['pxe_preserve_ephemeral'] = opt
+            node = self._create_test_node(id=_id, uuid=utils.generate_uuid(),
+                                          driver_info=info)
+            data = pxe._parse_driver_info(node)
+            self.assertFalse(data.get('preserve_ephemeral'))
+
+    def test__parse_driver_info_invalid_preserve_ephemeral(self):
+        info = dict(INFO_DICT)
+        info['pxe_preserve_ephemeral'] = 'foobar'
+        node = self._create_test_node(driver_info=info)
+        self.assertRaises(exception.InvalidParameterValue,
+                pxe._parse_driver_info,
+                node)
+
     def test__get_pxe_mac_path(self):
         mac = '00:11:22:33:44:55:66'
-        self.assertEqual(pxe._get_pxe_mac_path(mac),
-                         '/tftpboot/pxelinux.cfg/01-00-11-22-33-44-55-66')
+        self.assertEqual('/tftpboot/pxelinux.cfg/01-00-11-22-33-44-55-66',
+                         pxe._get_pxe_mac_path(mac))
 
     def test__link_master_image(self):
         temp_dir = tempfile.mkdtemp()
@@ -139,7 +185,7 @@ class PXEValidateParametersTestCase(base.TestCase):
         open(orig_path, 'w').close()
         pxe._link_master_image(orig_path, dest_path)
         self.assertIsNotNone(os.path.exists(dest_path))
-        self.assertEqual(os.stat(dest_path).st_nlink, 2)
+        self.assertEqual(2, os.stat(dest_path).st_nlink)
 
     def test__unlink_master_image(self):
         temp_dir = tempfile.mkdtemp()
@@ -158,7 +204,7 @@ class PXEValidateParametersTestCase(base.TestCase):
         self.assertTrue(os.path.exists(master_path))
         self.assertTrue(os.path.exists(instance_path))
         self.assertFalse(os.path.exists(tmp_path))
-        self.assertEqual(os.stat(master_path).st_nlink, 2)
+        self.assertEqual(2, os.stat(master_path).st_nlink)
 
     def test__download_in_progress(self):
         temp_dir = tempfile.mkdtemp()
@@ -168,7 +214,7 @@ class PXEValidateParametersTestCase(base.TestCase):
 
     def test__download_in_progress_wait(self):
         try:
-            CONF.set_default('auth_strategy', 'keystone')
+            self.config(auth_strategy='keystone')
         except Exception:
             opts = [
                 cfg.StrOpt('auth_strategy', default='keystone'),
@@ -202,15 +248,11 @@ class PXEValidateParametersTestCase(base.TestCase):
         self.assertFalse(os.path.exists(lock_file))
         self.assertTrue(os.path.exists(os.path.join(instance_path,
                                                     'node_uuid')))
-        self.assertEqual(os.stat(os.path.join(master_path, 'node_uuid')).
-                             st_nlink, 2)
-
-    def test__update_neutron(self):
-        # FIXME: just a stub for the moment
-        pass
+        self.assertEqual(2, os.stat(os.path.join(master_path, 'node_uuid')).
+                             st_nlink)
 
 
-class PXEPrivateMethodsTestCase(base.TestCase):
+class PXEPrivateMethodsTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(PXEPrivateMethodsTestCase, self).setUp()
@@ -218,6 +260,7 @@ class PXEPrivateMethodsTestCase(base.TestCase):
               'driver': 'fake_pxe',
               'driver_info': INFO_DICT
         }
+        mgr_utils.mock_the_extension_manager(driver="fake_pxe")
         self.dbapi = dbapi.get_instance()
         self.node = self._create_test_node(**n)
         self.context = context.get_admin_context()
@@ -225,6 +268,10 @@ class PXEPrivateMethodsTestCase(base.TestCase):
     def _create_test_node(self, **kwargs):
         n = db_utils.get_test_node(**kwargs)
         return self.dbapi.create_node(n)
+
+    def _create_test_port(self, **kwargs):
+        p = db_utils.get_test_port(**kwargs)
+        return self.dbapi.create_port(p)
 
     def test__get_tftp_image_info(self):
         properties = {'properties': {u'kernel_id': u'instance_kernel_uuid',
@@ -256,13 +303,12 @@ class PXEPrivateMethodsTestCase(base.TestCase):
             image_info = pxe._get_tftp_image_info(self.node, self.context)
             show_mock.assert_called_once_with('glance://image_uuid',
                                                method='get')
-            self.assertEqual(image_info, expected_info)
+            self.assertEqual(expected_info, image_info)
 
     def test__build_pxe_config(self):
-        CONF.set_default('pxe_append_params', 'test_param', group='pxe')
+        self.config(pxe_append_params='test_param', group='pxe')
         # NOTE: right '/' should be removed from url string
-        CONF.set_default('api_url', 'http://192.168.122.184:6385/',
-                group='conductor')
+        self.config(api_url='http://192.168.122.184:6385/', group='conductor')
 
         template = 'ironic/tests/drivers/pxe_config.template'
         pxe_config_template = open(template, 'r').read()
@@ -293,16 +339,110 @@ class PXEPrivateMethodsTestCase(base.TestCase):
                                                self.context)
 
             random_alnum_mock.assert_called_once_with(32)
-            self.assertEqual(pxe_config, pxe_config_template)
+            self.assertEqual(pxe_config_template, pxe_config)
 
         # test that deploy_key saved
         db_node = self.dbapi.get_node(self.node['uuid'])
         db_key = db_node['driver_info'].get('pxe_deploy_key')
-        self.assertEqual(db_key, fake_key)
+        self.assertEqual(fake_key, db_key)
+
+    def test__get_nodes_mac_addresses(self):
+        self._create_test_port(node_id=self.node.id,
+                               address='aa:bb:cc',
+                               uuid=utils.generate_uuid(),
+                               id=6)
+        self._create_test_port(node_id=self.node.id,
+                               address='dd:ee:ff',
+                               uuid=utils.generate_uuid(),
+                               id=7)
+
+        expected = ['aa:bb:cc', 'dd:ee:ff']
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            node_macs = pxe._get_node_mac_addresses(task, self.node)
+        self.assertEqual(expected, node_macs)
+
+    def test__get_node_vif_ids_no_ports(self):
+        expected = {}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            result = pxe._get_node_vif_ids(task)
+        self.assertEqual(expected, result)
+
+    def test__get_node_vif_ids_one_port(self):
+        port1 = self._create_test_port(node_id=self.node.id, id=6,
+                                       address='aa:bb:cc',
+                                       uuid=utils.generate_uuid(),
+                                       extra={'vif_port_id': 'test-vif-A'})
+        expected = {port1.uuid: 'test-vif-A'}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            result = pxe._get_node_vif_ids(task)
+        self.assertEqual(expected, result)
+
+    def test__get_node_vif_ids_two_ports(self):
+        port1 = self._create_test_port(node_id=self.node.id, id=6,
+                                       address='aa:bb:cc',
+                                       uuid=utils.generate_uuid(),
+                                       extra={'vif_port_id': 'test-vif-A'})
+        port2 = self._create_test_port(node_id=self.node.id, id=7,
+                                       address='dd:ee:ff',
+                                       uuid=utils.generate_uuid(),
+                                       extra={'vif_port_id': 'test-vif-B'})
+        expected = {port1.uuid: 'test-vif-A', port2.uuid: 'test-vif-B'}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            result = pxe._get_node_vif_ids(task)
+        self.assertEqual(expected, result)
+
+    def test__update_neutron(self):
+        opts = pxe._dhcp_options_for_instance()
+        with mock.patch.object(pxe, '_get_node_vif_ids') as mock_gnvi:
+            mock_gnvi.return_value = {'port-uuid': 'vif-uuid'}
+            with mock.patch.object(neutron.NeutronAPI,
+                                   'update_port_dhcp_opts') as mock_updo:
+                with task_manager.acquire(self.context,
+                                          self.node.uuid) as task:
+                    pxe._update_neutron(task, self.node)
+                mock_updo.assertCalleOnceWith('vif-uuid', opts)
+
+    def test__update_neutron_no_vif_data(self):
+        with mock.patch.object(pxe, '_get_node_vif_ids') as mock_gnvi:
+            mock_gnvi.return_value = {}
+            with mock.patch.object(neutron.NeutronAPI,
+                                   '__init__') as mock_init:
+                with task_manager.acquire(self.context,
+                                          self.node.uuid) as task:
+                    pxe._update_neutron(task, self.node)
+                mock_init.assert_not_called()
+
+    def test__update_neutron_some_failures(self):
+        # confirm update is called twice, one fails, but no exception raised
+        with mock.patch.object(pxe, '_get_node_vif_ids') as mock_gnvi:
+            mock_gnvi.return_value = {'p1': 'v1', 'p2': 'v2'}
+            with mock.patch.object(neutron.NeutronAPI,
+                                   'update_port_dhcp_opts') as mock_updo:
+                exc = exception.FailedToUpdateDHCPOptOnPort('fake exception')
+                mock_updo.side_effect = [None, exc]
+                with task_manager.acquire(self.context,
+                                          self.node.uuid) as task:
+                    pxe._update_neutron(task, self.node)
+                self.assertEqual(2, mock_updo.call_count)
+
+    def test__update_neutron_fails(self):
+        # confirm update is called twice, both fail, and exception is raised
+        with mock.patch.object(pxe, '_get_node_vif_ids') as mock_gnvi:
+            mock_gnvi.return_value = {'p1': 'v1', 'p2': 'v2'}
+            with mock.patch.object(neutron.NeutronAPI,
+                                   'update_port_dhcp_opts') as mock_updo:
+                exc = exception.FailedToUpdateDHCPOptOnPort('fake exception')
+                mock_updo.side_effect = [exc, exc]
+                with task_manager.acquire(self.context,
+                                          self.node.uuid) as task:
+                    self.assertRaises(exception.FailedToUpdateDHCPOptOnPort,
+                                      pxe._update_neutron,
+                                      task, self.node)
+                self.assertEqual(2, mock_updo.call_count)
 
     def test__dhcp_options_for_instance(self):
-        CONF.set_default('pxe_bootfile_name', 'test_pxe_bootfile', group='pxe')
-        CONF.set_default('tftp_server', '192.0.2.1', group='pxe')
+        self.config(pxe_bootfile_name='test_pxe_bootfile', group='pxe')
+        self.config(tftp_server='192.0.2.1', group='pxe')
         expected_info = [{'opt_name': 'bootfile-name',
                           'opt_value': 'test_pxe_bootfile'},
                          {'opt_name': 'server-ip-address',
@@ -330,15 +470,15 @@ class PXEPrivateMethodsTestCase(base.TestCase):
 
     def test_get_token_file_path(self):
         node_uuid = self.node['uuid']
-        self.assertEqual(pxe._get_token_file_path(node_uuid),
-                         '/tftpboot/token-' + node_uuid)
+        self.assertEqual('/tftpboot/token-' + node_uuid,
+                         pxe._get_token_file_path(node_uuid))
 
     def test__cache_tftp_images_master_path(self):
         temp_dir = tempfile.mkdtemp()
-        CONF.set_default('tftp_root', temp_dir, group='pxe')
-        CONF.set_default('tftp_master_path', os.path.join(temp_dir,
-                                                          'tftp_master_path'),
-                         group='pxe')
+        self.config(tftp_root=temp_dir, group='pxe')
+        self.config(tftp_master_path=os.path.join(temp_dir,
+                                                  'tftp_master_path'),
+                    group='pxe')
         image_info = {'deploy_kernel': ['deploy_kernel',
                                         os.path.join(temp_dir,
                                                      self.node.uuid,
@@ -362,8 +502,8 @@ class PXEPrivateMethodsTestCase(base.TestCase):
 
     def test__cache_tftp_images_no_master_path(self):
         temp_dir = tempfile.mkdtemp()
-        CONF.set_default('tftp_root', temp_dir, group='pxe')
-        CONF.set_default('tftp_master_path', None, group='pxe')
+        self.config(tftp_root=temp_dir, group='pxe')
+        self.config(tftp_master_path=None, group='pxe')
         image_info = {'deploy_kernel': ['deploy_kernel',
                                         os.path.join(temp_dir,
                                         self.node.uuid, 'deploy_kernel')]}
@@ -380,8 +520,8 @@ class PXEPrivateMethodsTestCase(base.TestCase):
 
     def test__cache_instance_images_no_master_path(self):
         temp_dir = tempfile.mkdtemp()
-        CONF.set_default('images_path', temp_dir, group='pxe')
-        CONF.set_default('instance_master_path', None, group='pxe')
+        self.config(images_path=temp_dir, group='pxe')
+        self.config(instance_master_path=None, group='pxe')
 
         with mock.patch.object(images, 'fetch_to_raw') as fetch_to_raw_mock:
             fetch_to_raw_mock.return_value = None
@@ -392,15 +532,15 @@ class PXEPrivateMethodsTestCase(base.TestCase):
                             'glance://image_uuid',
                             os.path.join(temp_dir, self.node.uuid, 'disk'),
                             None)
-            self.assertEqual(uuid, 'glance://image_uuid')
-            self.assertEqual(image_path,
-                             os.path.join(temp_dir, self.node.uuid, 'disk'))
+            self.assertEqual('glance://image_uuid', uuid)
+            self.assertEqual(os.path.join(temp_dir, self.node.uuid, 'disk'),
+                             image_path)
 
     def test__cache_instance_images_master_path(self):
         temp_dir = tempfile.mkdtemp()
-        CONF.set_default('images_path', temp_dir, group='pxe')
-        CONF.set_default('instance_master_path',
-                         os.path.join(temp_dir, 'instance_master_path'),
+        self.config(images_path=temp_dir, group='pxe')
+        self.config(instance_master_path=os.path.join(temp_dir,
+                                                      'instance_master_path'),
                          group='pxe')
         fileutils.ensure_tree(CONF.pxe.instance_master_path)
         fd, tmp_master_image = tempfile.mkstemp(
@@ -428,11 +568,11 @@ class PXEPrivateMethodsTestCase(base.TestCase):
                                                        None)
                     parse_image_ref_mock.assert_called_once_with(
                                                        'glance://image_uuid')
-                    self.assertEqual(uuid, 'glance://image_uuid')
-                    self.assertEqual(image_path,
-                                     os.path.join(temp_dir,
+                    self.assertEqual('glance://image_uuid', uuid)
+                    self.assertEqual(os.path.join(temp_dir,
                                                   self.node.uuid,
-                                                  'disk'))
+                                                  'disk'),
+                                     image_path)
 
     def test__get_image_download_in_progress(self):
         def _create_instance_path(*args):
@@ -461,10 +601,10 @@ class PXEDriverTestCase(db_base.DbTestCase):
         self.context = context.get_admin_context()
         self.context.auth_token = '4562138218392831'
         self.temp_dir = tempfile.mkdtemp()
-        CONF.set_default('tftp_root', self.temp_dir, group='pxe')
+        self.config(tftp_root=self.temp_dir, group='pxe')
         self.temp_dir = tempfile.mkdtemp()
-        CONF.set_default('images_path', self.temp_dir, group='pxe')
-        mgr_utils.get_mocked_node_manager(driver='fake_pxe')
+        self.config(images_path=self.temp_dir, group='pxe')
+        mgr_utils.mock_the_extension_manager(driver="fake_pxe")
         driver_info = INFO_DICT
         driver_info['pxe_deploy_key'] = 'fake-56789'
         n = db_utils.get_test_node(
@@ -472,6 +612,8 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 driver_info=driver_info)
         self.dbapi = dbapi.get_instance()
         self.node = self.dbapi.create_node(n)
+        self.port = self.dbapi.create_port(db_utils.get_test_port(
+                                                         node_id=self.node.id))
 
     def _create_token_file(self):
         token_path = pxe._get_token_file_path(self.node['uuid'])
@@ -481,7 +623,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
     def test_validate_good(self):
         with task_manager.acquire(self.context, [self.node['uuid']],
                                   shared=True) as task:
-            task.resources[0].driver.deploy.validate(self.node)
+            task.resources[0].driver.deploy.validate(task, self.node)
 
     def test_validate_fail(self):
         info = dict(INFO_DICT)
@@ -491,10 +633,21 @@ class PXEDriverTestCase(db_base.DbTestCase):
                                   shared=True) as task:
             self.assertRaises(exception.InvalidParameterValue,
                               task.resources[0].driver.deploy.validate,
-                              self.node)
+                              task, self.node)
+
+    def test_validate_fail_no_port(self):
+        new_node = self.dbapi.create_node(db_utils.get_test_node(id=321,
+                                   uuid='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+                                   driver='fake_pxe', driver_info=INFO_DICT))
+        with task_manager.acquire(self.context, [new_node.uuid],
+                                  shared=True) as task:
+            self.assertRaises(exception.InvalidParameterValue,
+                              task.resources[0].driver.deploy.validate,
+                              task, new_node)
 
     def test__get_nodes_mac_addresses(self):
         ports = []
+        ports.append(self.port)
         ports.append(
             self.dbapi.create_port(
                 db_utils.get_test_port(
@@ -511,12 +664,12 @@ class PXEDriverTestCase(db_base.DbTestCase):
                     node_id='123')))
         with task_manager.acquire(self.context, [self.node['uuid']]) as task:
             node_macs = pxe._get_node_mac_addresses(task, self.node)
-        self.assertEqual(node_macs, ['aa:bb:cc', 'dd:ee:ff'])
+        self.assertEqual(sorted([p.address for p in ports]), sorted(node_macs))
 
     def test_vendor_passthru_validate_good(self):
         with task_manager.acquire(self.context, [self.node['uuid']],
                                   shared=True) as task:
-            task.resources[0].driver.vendor.validate(self.node,
+            task.resources[0].driver.vendor.validate(task, self.node,
                     method='pass_deploy_info', address='123456', iqn='aaa-bbb',
                     key='fake-56789')
 
@@ -525,7 +678,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
                                   shared=True) as task:
             self.assertRaises(exception.InvalidParameterValue,
                               task.resources[0].driver.vendor.validate,
-                              self.node, method='pass_deploy_info',
+                              task, self.node, method='pass_deploy_info',
                               key='fake-56789')
 
     def test_vendor_passthru_validate_key_notmatch(self):
@@ -533,7 +686,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
                                   shared=True) as task:
             self.assertRaises(exception.InvalidParameterValue,
                               task.resources[0].driver.vendor.validate,
-                              self.node, method='pass_deploy_info',
+                              task, self.node, method='pass_deploy_info',
                               address='123456', iqn='aaa-bbb',
                               key='fake-12345')
 
@@ -567,7 +720,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 with task_manager.acquire(self.context,
                         self.node['uuid'], shared=False) as task:
                     state = task.driver.deploy.deploy(task, self.node)
-                    self.assertEqual(state, states.DEPLOYING)
+                    self.assertEqual(states.DEPLOYWAIT, state)
                     update_neutron_mock.assert_called_once_with(task,
                                                                 self.node)
                     node_power_mock.assert_called_once_with(task, self.node,
@@ -584,7 +737,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
             with task_manager.acquire(self.context,
                     self.node['uuid']) as task:
                 state = task.driver.deploy.tear_down(task, self.node)
-                self.assertEqual(state, states.DELETED)
+                self.assertEqual(states.DELETED, state)
                 node_power_mock.assert_called_once_with(task, self.node,
                                                         states.POWER_OFF)
 
@@ -598,6 +751,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
     def test_continue_deploy_good(self):
         token_path = self._create_token_file()
         self.node.power_state = states.POWER_ON
+        self.node.provision_state = states.DEPLOYWAIT
         self.node.save(self.context)
 
         def fake_deploy(**kwargs):
@@ -620,6 +774,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
     def test_continue_deploy_fail(self):
         token_path = self._create_token_file()
         self.node.power_state = states.POWER_ON
+        self.node.provision_state = states.DEPLOYWAIT
         self.node.save(self.context)
 
         def fake_deploy(**kwargs):
@@ -642,6 +797,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
     def test_continue_deploy_ramdisk_fails(self):
         token_path = self._create_token_file()
         self.node.power_state = states.POWER_ON
+        self.node.provision_state = states.DEPLOYWAIT
         self.node.save(self.context)
 
         def fake_deploy(**kwargs):
@@ -661,6 +817,19 @@ class PXEDriverTestCase(db_base.DbTestCase):
         self.assertIsNotNone(self.node.last_error)
         self.assertFalse(os.path.exists(token_path))
 
+    def test_continue_deploy_invalid(self):
+        self.node.power_state = states.POWER_ON
+        self.node.provision_state = 'FAKE'
+        self.node.save(self.context)
+
+        with task_manager.acquire(self.context, [self.node.uuid],
+                                  shared=True) as task:
+            task.resources[0].driver.vendor.vendor_passthru(task, self.node,
+                    method='pass_deploy_info', address='123456', iqn='aaa-bbb',
+                    key='fake-56789', error='test ramdisk error')
+        self.assertEqual('FAKE', self.node.provision_state)
+        self.assertEqual(states.POWER_ON, self.node.power_state)
+
     def test_lock_elevated(self):
         with task_manager.acquire(self.context, [self.node['uuid']],
                                   shared=True) as task:
@@ -670,7 +839,8 @@ class PXEDriverTestCase(db_base.DbTestCase):
                     method='pass_deploy_info', address='123456', iqn='aaa-bbb',
                     key='fake-56789')
                 # lock elevated w/o exception
-                _continue_deploy_mock.assert_called_once()
+                self.assertEqual(1, _continue_deploy_mock.call_count,
+                            "_continue_deploy was not called once.")
 
     def clean_up_config(self, master=None):
         ports = []
@@ -709,11 +879,9 @@ class PXEDriverTestCase(db_base.DbTestCase):
                                                'tftp_master')
                 instance_master_dir = os.path.join(CONF.pxe.images_path,
                                                    'instance_master')
-                CONF.set_default('tftp_master_path',
-                                 tftp_master_dir,
-                                 group='pxe')
-                CONF.set_default('instance_master_path', instance_master_dir,
-                                 group='pxe')
+                self.config(tftp_master_path=tftp_master_dir, group='pxe')
+                self.config(instance_master_path=instance_master_dir,
+                            group='pxe')
                 os.makedirs(tftp_master_dir)
                 os.makedirs(instance_master_dir)
                 master_deploy_kernel_path = os.path.join(tftp_master_dir,
@@ -734,8 +902,8 @@ class PXEDriverTestCase(db_base.DbTestCase):
                     os.link(master_instance_path, image_link)
 
             else:
-                CONF.set_default('tftp_master_path', '', group='pxe')
-                CONF.set_default('instance_master_path', '', group='pxe')
+                self.config(tftp_master_path='', group='pxe')
+                self.config(instance_master_path='', group='pxe')
                 open(deploy_kernel_path, 'w').close()
                 open(image_path, 'w').close()
 

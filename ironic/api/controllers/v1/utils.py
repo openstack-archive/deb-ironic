@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Red Hat, Inc.
 # All Rights Reserved.
 #
@@ -16,11 +13,17 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import jsonpatch
 import wsme
 
 from oslo.config import cfg
 
 CONF = cfg.CONF
+
+
+JSONPATCH_EXCEPTIONS = (jsonpatch.JsonPatchException,
+                        jsonpatch.JsonPointerException,
+                        KeyError)
 
 
 def validate_limit(limit):

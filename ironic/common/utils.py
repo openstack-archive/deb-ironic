@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2011 Justin Santa Barbara
@@ -43,10 +41,10 @@ utils_opts = [
     cfg.StrOpt('rootwrap_config',
                default="/etc/ironic/rootwrap.conf",
                help='Path to the rootwrap configuration file to use for '
-                    'running commands as root'),
+                    'running commands as root.'),
     cfg.StrOpt('tempdir',
                default=None,
-               help='Explicitly specify the temporary working directory'),
+               help='Explicitly specify the temporary working directory.'),
 ]
 
 CONF = cfg.CONF
@@ -61,7 +59,7 @@ def _get_root_helper():
 
 def execute(*cmd, **kwargs):
     """Convenience wrapper around oslo's execute() method."""
-    if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
+    if kwargs.get('run_as_root') and not 'root_helper' in kwargs:
         kwargs['root_helper'] = _get_root_helper()
     result = processutils.execute(*cmd, **kwargs)
     LOG.debug(_('Execution completed, command line is "%s"'), ' '.join(cmd))
@@ -72,7 +70,7 @@ def execute(*cmd, **kwargs):
 
 def trycmd(*args, **kwargs):
     """Convenience wrapper around oslo's trycmd() method."""
-    if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
+    if kwargs.get('run_as_root') and not 'root_helper' in kwargs:
         kwargs['root_helper'] = _get_root_helper()
     return processutils.trycmd(*args, **kwargs)
 
@@ -90,9 +88,9 @@ def ssh_connect(connection):
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(connection.get('host'),
                     username=connection.get('username'),
-                    password=connection.get('password', None),
+                    password=connection.get('password'),
                     port=connection.get('port', 22),
-                    key_filename=connection.get('key_filename', None),
+                    key_filename=connection.get('key_filename'),
                     timeout=connection.get('timeout', 10))
 
         # send TCP keepalive packets every 20 seconds
@@ -422,7 +420,7 @@ def mkfs(fs, path, label=None):
             label_opt = '-L'
         args.extend([label_opt, label])
     args.append(path)
-    execute(*args)
+    execute(*args, run_as_root=True)
 
 
 def unlink_without_raise(path):

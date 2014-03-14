@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -21,6 +20,7 @@ Client side of the conductor RPC API.
 
 from oslo.config import cfg
 
+from ironic.common import exception
 from ironic.common import hash_ring as hash
 from ironic.conductor import manager
 from ironic.db import api as dbapi
@@ -54,10 +54,13 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
               accept node id instead of node object.
         1.7 - Added topic parameter to RPC methods.
         1.8 - Added change_node_maintenance_mode.
+        1.9 - Added destroy_node.
+        1.10 - Remove get_node_power_state
+        1.11 - Added get_console_information, set_console_mode.
 
     """
 
-    RPC_API_VERSION = '1.7'
+    RPC_API_VERSION = '1.11'
 
     def __init__(self, topic=None):
         if topic is None:
@@ -80,6 +83,7 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
 
         :param node: a node object.
         :returns: an RPC topic string.
+        :raises: NoValidHost
 
         """
         try:
@@ -87,21 +91,9 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
             dest = ring.get_hosts(node.uuid)
             return self.topic + "." + dest[0]
         except KeyError:
-            return self.topic
-
-    def get_node_power_state(self, context, node_id, topic=None):
-        """Ask a conductor for the node power state.
-
-        :param context: request context.
-        :param node_id: node id or uuid.
-        :param topic: RPC topic. Defaults to self.topic.
-        :returns: power status.
-
-        """
-        return self.call(context,
-                         self.make_msg('get_node_power_state',
-                                       node_id=node_id),
-                         topic=topic or self.topic)
+            reason = (_('No conductor service registered which supports '
+                        'driver %s.') % node.driver)
+            raise exception.NoValidHost(reason=reason)
 
     def update_node(self, context, node_obj, topic=None):
         """Synchronously, have a conductor update the node's information.
@@ -127,19 +119,22 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
                          topic=topic or self.topic)
 
     def change_node_power_state(self, context, node_id, new_state, topic=None):
-        """Asynchronously change power state of a node.
+        """Synchronously, acquire lock and start the conductor background task
+        to change power state of a node.
 
         :param context: request context.
         :param node_id: node id or uuid.
         :param new_state: one of ironic.common.states power state values
         :param topic: RPC topic. Defaults to self.topic.
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task.
 
         """
-        self.cast(context,
-                  self.make_msg('change_node_power_state',
-                                node_id=node_id,
-                                new_state=new_state),
-                  topic=topic or self.topic)
+        return self.call(context,
+                         self.make_msg('change_node_power_state',
+                                       node_id=node_id,
+                                       new_state=new_state),
+                         topic=topic or self.topic)
 
     def vendor_passthru(self, context, node_id, driver_method, info,
                         topic=None):
@@ -221,12 +216,13 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
                                        node_id=node_id),
                          topic=topic or self.topic)
 
-    def change_node_maintenance_mode(self, context, node_id, mode):
+    def change_node_maintenance_mode(self, context, node_id, mode, topic=None):
         """Set node maintenance mode on or off.
 
         :param context: request context.
         :param node_id: node id or uuid.
         :param mode: True or False.
+        :param topic: RPC topic. Defaults to self.topic.
         :returns: a node object.
         :raises: NodeMaintenanceFailure.
 
@@ -234,4 +230,54 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
         return self.call(context,
                          self.make_msg('change_node_maintenance_mode',
                                        node_id=node_id,
-                                       mode=mode))
+                                       mode=mode),
+                         topic=topic or self.topic)
+
+    def destroy_node(self, context, node_id, topic=None):
+        """Delete a node.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: NodeAssociated if the node contains an instance
+            associated with it.
+        :raises: NodeInWrongPowerState if the node is not powered off.
+
+        """
+        return self.call(context,
+                         self.make_msg('destroy_node',
+                                       node_id=node_id),
+                         topic=topic or self.topic)
+
+    def get_console_information(self, context, node_id, topic=None):
+        """Get connection information about the console.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param topic: RPC topic. Defaults to self.topic.
+        :raises: UnsupportedDriverExtension if the node's driver doesn't
+                 support console.
+        :raises: InvalidParameterValue when the wrong driver info is specified.
+        """
+        return self.call(context,
+                         self.make_msg('get_console_information',
+                                       node_id=node_id),
+                         topic=topic or self.topic)
+
+    def set_console_mode(self, context, node_id, enabled, topic=None):
+        """Enable/Disable the console.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param topic: RPC topic. Defaults to self.topic.
+        :param enabled: Boolean value; whether the console is enabled or
+                        disabled.
+        :raises: UnsupportedDriverExtension if the node's driver doesn't
+                 support console.
+        :raises: InvalidParameterValue when the wrong driver info is specified.
+        """
+        self.cast(context,
+                  self.make_msg('set_console_mode',
+                                node_id=node_id,
+                                enabled=enabled),
+                  topic=topic or self.topic)

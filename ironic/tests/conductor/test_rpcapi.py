@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -23,6 +22,7 @@ import fixtures
 
 from oslo.config import cfg
 
+from ironic.common import exception
 from ironic.common import states
 from ironic.conductor import rpcapi as conductor_rpcapi
 from ironic.db import api as dbapi
@@ -66,9 +66,9 @@ class RPCAPITestCase(base.DbTestCase):
                                        'drivers': ['other-driver']})
 
         rpcapi = conductor_rpcapi.ConductorAPI(topic='fake-topic')
-        expected_topic = 'fake-topic'
-        self.assertEqual(expected_topic,
-                         rpcapi.get_topic_for(self.fake_node_obj))
+        self.assertRaises(exception.NoValidHost,
+                         rpcapi.get_topic_for,
+                         self.fake_node_obj)
 
     def _test_rpcapi(self, method, rpc_method, **kwargs):
         ctxt = context.get_admin_context()
@@ -100,15 +100,10 @@ class RPCAPITestCase(base.DbTestCase):
 
         retval = getattr(rpcapi, method)(ctxt, **kwargs)
 
-        self.assertEqual(retval, expected_retval)
+        self.assertEqual(expected_retval, retval)
         expected_args = [ctxt, expected_topic, expected_msg]
         for arg, expected_arg in zip(self.fake_args, expected_args):
-            self.assertEqual(arg, expected_arg)
-
-    def test_get_node_power_state(self):
-        self._test_rpcapi('get_node_power_state',
-                          'call',
-                           node_id=123)
+            self.assertEqual(expected_arg, arg)
 
     def test_update_node(self):
         self._test_rpcapi('update_node',
@@ -117,7 +112,7 @@ class RPCAPITestCase(base.DbTestCase):
 
     def test_change_node_power_state(self):
         self._test_rpcapi('change_node_power_state',
-                          'cast',
+                          'call',
                           node_id=self.fake_node['uuid'],
                           new_state=states.POWER_ON)
 
@@ -133,7 +128,7 @@ class RPCAPITestCase(base.DbTestCase):
                 'ironic.openstack.common.rpc.call', _fake_rpc_method))
         retval = rpcapi.vendor_passthru(ctxt, node_id=self.fake_node['uuid'],
                                     driver_method='foo', info={'bar': 'baz'})
-        self.assertEqual(retval, expected_retval)
+        self.assertEqual(expected_retval, retval)
 
     def test_do_node_deploy(self):
         self._test_rpcapi('do_node_deploy',
@@ -155,3 +150,19 @@ class RPCAPITestCase(base.DbTestCase):
                           'call',
                           node_id=self.fake_node['uuid'],
                           mode=True)
+
+    def test_destroy_node(self):
+        self._test_rpcapi('destroy_node',
+                          'call',
+                          node_id=self.fake_node['uuid'])
+
+    def test_get_console_information(self):
+        self._test_rpcapi('get_console_information',
+                          'call',
+                          node_id=self.fake_node['uuid'])
+
+    def test_set_console_mode(self):
+        self._test_rpcapi('set_console_mode',
+                          'cast',
+                          node_id=self.fake_node['uuid'],
+                          enabled=True)

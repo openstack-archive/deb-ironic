@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2013 International Business Machines Corporation
@@ -21,13 +20,13 @@ Test class for Native IPMI power driver module.
 """
 import mock
 
+from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.db import api as db_api
 from ironic.drivers.modules import ipminative
 from ironic.openstack.common import context
-from ironic.openstack.common import jsonutils as json
 from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
@@ -36,7 +35,7 @@ from oslo.config import cfg
 
 CONF = cfg.CONF
 
-INFO_DICT = json.loads(db_utils.ipmi_info)
+INFO_DICT = db_utils.get_test_impi_info()
 
 
 class IPMINativePrivateMethodTestCase(base.TestCase):
@@ -76,7 +75,7 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
 
         state = ipminative._power_status(self.info)
         ipmicmd.get_power.assert_called_once_with()
-        self.assertEqual(state, states.POWER_ON)
+        self.assertEqual(states.POWER_ON, state)
 
     def test__power_status_off(self):
         ipmicmd = self.ipmi_mock.return_value
@@ -84,7 +83,7 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
 
         state = ipminative._power_status(self.info)
         ipmicmd.get_power.assert_called_once_with()
-        self.assertEqual(state, states.POWER_OFF)
+        self.assertEqual(states.POWER_OFF, state)
 
     def test__power_status_error(self):
         ipmicmd = self.ipmi_mock.return_value
@@ -92,7 +91,7 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
 
         state = ipminative._power_status(self.info)
         ipmicmd.get_power.assert_called_once_with()
-        self.assertEqual(state, states.ERROR)
+        self.assertEqual(states.ERROR, state)
 
     def test__power_on(self):
         ipmicmd = self.ipmi_mock.return_value
@@ -101,7 +100,7 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
         self.config(retry_timeout=400, group='ipmi')
         state = ipminative._power_on(self.info)
         ipmicmd.set_power.assert_called_once_with('on', 400)
-        self.assertEqual(state, states.POWER_ON)
+        self.assertEqual(states.POWER_ON, state)
 
     def test__power_off(self):
         ipmicmd = self.ipmi_mock.return_value
@@ -110,7 +109,7 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
         self.config(retry_timeout=500, group='ipmi')
         state = ipminative._power_off(self.info)
         ipmicmd.set_power.assert_called_once_with('off', 500)
-        self.assertEqual(state, states.POWER_OFF)
+        self.assertEqual(states.POWER_OFF, state)
 
     def test__reboot(self):
         ipmicmd = self.ipmi_mock.return_value
@@ -119,7 +118,7 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
         self.config(retry_timeout=600, group='ipmi')
         state = ipminative._reboot(self.info)
         ipmicmd.set_power.assert_called_once_with('boot', 600)
-        self.assertEqual(state, states.POWER_ON)
+        self.assertEqual(states.POWER_ON, state)
 
 
 class IPMINativeDriverTestCase(db_base.DbTestCase):
@@ -129,8 +128,8 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
     def setUp(self):
         super(IPMINativeDriverTestCase, self).setUp()
         self.context = context.get_admin_context()
-        self.driver = mgr_utils.get_mocked_node_manager(
-                      driver='fake_ipminative')
+        mgr_utils.mock_the_extension_manager(driver="fake_ipminative")
+        self.driver = driver_factory.get_driver("fake_ipminative")
 
         n = db_utils.get_test_node(
                 driver='fake_ipminative',
@@ -141,26 +140,28 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
 
     def test_get_power_state(self):
         with mock.patch('pyghmi.ipmi.command.Command') as ipmi_mock:
-            ipmicmd = ipmi_mock.return_value
+            # Getting the mocked command.
+            cmd_mock = ipmi_mock.return_value
+            # Getting the get power mock.
+            get_power_mock = cmd_mock.get_power
 
             return_values = [{'powerstate': 'error'},
                              {'powerstate': 'on'},
                              {'powerstate': 'off'}]
 
-            def side_effect():
-                return return_values.pop()
-
-            ipmicmd.get_power.side_effect = side_effect
+            get_power_mock.side_effect = lambda: return_values.pop()
 
             pstate = self.driver.power.get_power_state(None, self.node)
-            self.assertEqual(pstate, states.POWER_OFF)
+            self.assertEqual(states.POWER_OFF, pstate)
 
             pstate = self.driver.power.get_power_state(None, self.node)
-            self.assertEqual(pstate, states.POWER_ON)
+            self.assertEqual(states.POWER_ON, pstate)
 
             pstate = self.driver.power.get_power_state(None, self.node)
-            self.assertEqual(pstate, states.ERROR)
-            ipmicmd.get_power.assert_called
+            self.assertEqual(states.ERROR, pstate)
+            self.assertEqual(3, get_power_mock.call_count,
+                             "pyghmi.ipmi.command.Command.get_power was not"
+                             " called 3 times.")
 
     def test_set_power_on_ok(self):
         with mock.patch.object(ipminative, '_power_on') as power_on_mock:
@@ -204,7 +205,7 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
 
             with task_manager.acquire(self.context,
                                      [self.node['uuid']]) as task:
-                self.driver.power._set_boot_device(task,
+                self.driver.vendor._set_boot_device(task,
                                                    self.node,
                                                    'pxe')
             ipmicmd.set_bootdev.assert_called_once_with('pxe')
@@ -212,7 +213,7 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
     def test_set_boot_device_bad_device(self):
         with task_manager.acquire(self.context, [self.node['uuid']]) as task:
             self.assertRaises(exception.InvalidParameterValue,
-                    self.driver.power._set_boot_device,
+                    self.driver.vendor._set_boot_device,
                     task,
                     self.node,
                     'fake-device')
@@ -239,3 +240,36 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                                   task,
                                   self.node)
             ipmicmd.set_power.assert_called_once_with('boot', 500)
+
+    def test_vendor_passthru_validate__set_boot_device_good(self):
+        self.driver.vendor.validate(self.node,
+                                    method='set_boot_device',
+                                    device='pxe')
+
+    def test_vendor_passthru_val__set_boot_device_fail_unknown_device(self):
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.driver.vendor.validate,
+                          self.node, method='set_boot_device',
+                          device='non-existent')
+
+    def test_vendor_passthru_val__set_boot_device_fail_missed_device_arg(self):
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.driver.vendor.validate,
+                          self.node, method='set_boot_device')
+
+    def test_vendor_passthru_validate_method_notmatch(self):
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.driver.vendor.validate,
+                          self.node, method='non-existent-method')
+
+    def test_vendor_passthru_call__set_boot_device(self):
+        with task_manager.acquire(self.context, [self.node['uuid']],
+                                  shared=False) as task:
+            with mock.patch.object(ipminative.VendorPassthru,
+                                   '_set_boot_device') as boot_mock:
+                self.driver.vendor.vendor_passthru(task,
+                                                   self.node,
+                                                   method='set_boot_device',
+                                                   device='pxe')
+                boot_mock.assert_called_once_with(task, self.node,
+                                                  'pxe', False)

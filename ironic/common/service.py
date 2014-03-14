@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- encoding: utf-8 -*-
 #
 # Copyright © 2012 eNovance <licensing@enovance.com>
@@ -28,18 +27,20 @@ from ironic.openstack.common import rpc
 from ironic.openstack.common.rpc import service as rpc_service
 
 
-cfg.CONF.register_opts([
+service_opts = [
     cfg.IntOpt('periodic_interval',
                default=60,
-               help='seconds between running periodic tasks'),
+               help='Seconds between running periodic tasks.'),
     cfg.StrOpt('host',
                default=socket.getfqdn(),
                help='Name of this node.  This can be an opaque identifier.  '
                'It is not necessarily a hostname, FQDN, or IP address. '
                'However, the node name must be valid within '
                'an AMQP key, and if using ZeroMQ, a valid '
-               'hostname, FQDN, or IP address'),
-])
+               'hostname, FQDN, or IP address.'),
+]
+
+cfg.CONF.register_opts(service_opts)
 
 
 class PeriodicService(rpc_service.Service, periodic_task.PeriodicTasks):

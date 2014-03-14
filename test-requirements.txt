@@ -6,10 +6,10 @@ mock>=1.0
 Babel>=1.3
 MySQL-python
 psycopg2
-python-subunit
-testrepository>=0.0.17
-testtools>=0.9.32
+python-subunit>=0.0.18
+testrepository>=0.0.18
+testtools>=0.9.34
 
 # Doc requirements
 sphinx>=1.1.2,<1.2
-sphinxcontrib-pecanwsme>=0.5
+sphinxcontrib-pecanwsme>=0.6

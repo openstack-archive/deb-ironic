@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2013 International Business Machines Corporation
@@ -33,7 +32,7 @@ from pyghmi.ipmi import command as ipmi_command
 opts = [
     cfg.IntOpt('retry_timeout',
                default=10,
-               help='Maximum time in seconds to retry IPMI operations'),
+               help='Maximum time in seconds to retry IPMI operations.'),
     ]
 
 CONF = cfg.CONF
@@ -62,7 +61,7 @@ def _parse_driver_info(node):
             " to IPMI driver: %s."
              ) % missing_info)
 
-    # get additonal info
+    # get additional info
     bmc_info['uuid'] = node.get('uuid')
 
     return bmc_info
@@ -198,9 +197,10 @@ def _power_status(driver_info):
 class NativeIPMIPower(base.PowerInterface):
     """The power driver using native python-ipmi library."""
 
-    def validate(self, node):
+    def validate(self, task, node):
         """Check that node['driver_info'] contains IPMI credentials.
 
+        :param task: a task from TaskManager.
         :param node: a single node to validate.
         :raises: InvalidParameterValue when required ipmi credentials
                  are missing.
@@ -262,6 +262,9 @@ class NativeIPMIPower(base.PowerInterface):
         driver_info = _parse_driver_info(node)
         _reboot(driver_info)
 
+
+class VendorPassthru(base.VendorInterface):
+
     @task_manager.require_exclusive_lock
     def _set_boot_device(self, task, node, device, persistent=False):
         """Set the boot device for a node.
@@ -291,3 +294,37 @@ class NativeIPMIPower(base.PowerInterface):
                           "with the following error: %(error)s")
                           % {'node_id': driver_info['uuid'], 'error': str(e)})
             raise exception.IPMIFailure(cmd=str(e))
+
+    def validate(self, node, **kwargs):
+        """Validate vendor-specific actions.
+        :param node: The node
+        :param kwargs: the keyword arguments supplied
+
+        :raises: InvalidParameterValue if an invalid boot device is specified,
+                 required ipmi credentials are missing or an invalid method
+                 is requested to the driver.
+        """
+        method = kwargs['method']
+        if method == 'set_boot_device':
+            device = kwargs.get('device', None)
+            if device not in ipmi_command.boot_devices:
+                raise exception.InvalidParameterValue(_(
+                    "Invalid boot device %s specified.") % device)
+        else:
+            raise exception.InvalidParameterValue(_(
+                "Unsupported method (%s) passed to IPMINative driver.")
+                % method)
+        _parse_driver_info(node)
+
+    def vendor_passthru(self, task, node, **kwargs):
+        """Receive requests for vendor-specific actions.
+        :param task: a TaskManager instance.
+        :param node: The node
+        :param kwargs: the keyword arguments supplied
+        """
+        method = kwargs['method']
+        if method == 'set_boot_device':
+            return self._set_boot_device(
+                        task, node,
+                        kwargs.get('device'),
+                        kwargs.get('persistent', False))

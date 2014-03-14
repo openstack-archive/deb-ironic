@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Red Hat, Inc.
 # All Rights Reserved.
 #
@@ -23,7 +20,7 @@ class TestRoot(base.FunctionalTest):
 
     def test_get_root(self):
         data = self.get_json('/', path_prefix='')
-        self.assertEqual(data['default_version']['id'], 'v1')
+        self.assertEqual('v1', data['default_version']['id'])
         # Check fields are not empty
         [self.assertNotIn(f, ['', []]) for f in data.keys()]
 
@@ -32,7 +29,7 @@ class TestV1Root(base.FunctionalTest):
 
     def test_get_v1_root(self):
         data = self.get_json('/')
-        self.assertEqual(data['id'], 'v1')
+        self.assertEqual('v1', data['id'])
         # Check fields are not empty
         for f in data.keys():
             self.assertNotIn(f, ['', []])

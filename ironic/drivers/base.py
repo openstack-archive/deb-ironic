@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # -*- encoding: utf-8 -*-
 #
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -83,13 +82,14 @@ class DeployInterface(object):
     """Interface for deploy-related actions."""
 
     @abc.abstractmethod
-    def validate(self, node):
+    def validate(self, task, node):
         """Validate the driver-specific Node deployment info.
 
         This method validates whether the 'driver_info' property of the
         supplied node contains the required information for this driver to
         deploy images to the node.
 
+        :param task: a task from TaskManager.
         :param node: a single Node to validate.
         :raises: InvalidParameterValue
         """
@@ -185,13 +185,14 @@ class PowerInterface(object):
     """Interface for power-related actions."""
 
     @abc.abstractmethod
-    def validate(self, node):
+    def validate(self, task, node):
         """Validate the driver-specific Node power info.
 
         This method validates whether the 'driver_info' property of the
         supplied node contains the required information for this driver to
         manage the power state of the node.
 
+        :param task: a task from TaskManager.
         :param node: a single Node to validate.
         :raises: InvalidParameterValue
         """
@@ -223,13 +224,14 @@ class ConsoleInterface(object):
     """Interface for console-related actions."""
 
     @abc.abstractmethod
-    def validate(self, node):
+    def validate(self, task, node):
         """Validate the driver-specific Node console info.
 
         This method validates whether the 'driver_info' property of the
         supplied node contains the required information for this driver to
         provide console access to the Node.
 
+        :param task: a task from TaskManager.
         :param node: a single Node to validate.
         :raises: InvalidParameterValue
         """
@@ -248,15 +250,28 @@ class ConsoleInterface(object):
         TODO
         """
 
+    @abc.abstractmethod
+    def get_console(self, task, node):
+        """Get connection information about the console.
+
+        This method should return the necessary information for the
+        client to access the console.
+
+        :param task: a task from TaskManager.
+        :param node: a single Node.
+        :returns: the console connection information.
+        """
+
 
 @six.add_metaclass(abc.ABCMeta)
 class RescueInterface(object):
     """Interface for rescue-related actions."""
 
     @abc.abstractmethod
-    def validate(self, node):
+    def validate(self, task, node):
         """Validate the rescue info stored in the node' properties.
 
+        :param task: a task from TaskManager.
         :param node: a single Node to validate.
         :raises: InvalidParameterValue
         """
@@ -285,9 +300,10 @@ class VendorInterface(object):
     """
 
     @abc.abstractmethod
-    def validate(self, node, **kwargs):
+    def validate(self, task, node, **kwargs):
         """Validate vendor-specific actions.
 
+        :param task: a task from TaskManager.
         :param node: a single Node.
         :param kwargs: info for action.
         :raises: InvalidParameterValue

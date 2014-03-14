@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright (c) 2012 NTT DOCOMO, INC.
 #    Copyright 2011 OpenStack Foundation
 #    Copyright 2011 Ilya Alekseyev
@@ -62,6 +60,17 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         self.useFixture(fixtures.MonkeyPatch('time.sleep', noop))
 
+    def _mock_calls(self, name_list):
+        patch_list = [mock.patch.object(utils, name) for name in name_list]
+        mock_list = [patcher.start() for patcher in patch_list]
+        for patcher in patch_list:
+            self.addCleanup(patcher.stop)
+
+        parent_mock = mock.MagicMock()
+        for mocker, name in zip(mock_list, name_list):
+            parent_mock.attach_mock(mocker, name)
+        return parent_mock
+
     def test_deploy(self):
         """Check loosely all functions are called with right args."""
         address = '127.0.0.1'
@@ -72,6 +81,8 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         pxe_config_path = '/tmp/abc/pxeconfig'
         root_mb = 128
         swap_mb = 64
+        ephemeral_mb = 0
+        ephemeral_format = None
 
         dev = '/dev/fake'
         root_part = '/dev/fake-part1'
@@ -79,18 +90,10 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         root_uuid = '12345678-1234-1234-12345678-12345678abcdef'
 
         name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
-                     'logout_iscsi', 'make_partitions', 'is_block_device',
-                     'dd', 'mkswap', 'block_uuid', 'switch_pxe_config',
-                     'notify']
-        patch_list = [mock.patch.object(utils, name) for name in name_list]
-        mock_list = [patcher.start() for patcher in patch_list]
-        for patcher in patch_list:
-            self.addCleanup(patcher.stop)
-
-        parent_mock = mock.MagicMock()
-        for mocker, name in zip(mock_list, name_list):
-            parent_mock.attach_mock(mocker, name)
-
+                     'logout_iscsi', 'delete_iscsi', 'make_partitions',
+                     'is_block_device', 'dd', 'mkswap', 'block_uuid',
+                     'switch_pxe_config', 'notify']
+        parent_mock = self._mock_calls(name_list)
         parent_mock.get_dev.return_value = dev
         parent_mock.get_image_mb.return_value = 1
         parent_mock.is_block_device.return_value = True
@@ -100,24 +103,26 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
                           mock.call.is_block_device(dev),
-                          mock.call.make_partitions(dev, root_mb, swap_mb),
+                          mock.call.make_partitions(dev, root_mb, swap_mb,
+                                                    ephemeral_mb),
                           mock.call.is_block_device(root_part),
                           mock.call.is_block_device(swap_part),
                           mock.call.dd(image_path, root_part),
                           mock.call.mkswap(swap_part),
                           mock.call.block_uuid(root_part),
                           mock.call.logout_iscsi(address, port, iqn),
+                          mock.call.delete_iscsi(address, port, iqn),
                           mock.call.switch_pxe_config(pxe_config_path,
                                                       root_uuid),
                           mock.call.notify(address, 10000)]
 
         utils.deploy(address, port, iqn, lun, image_path, pxe_config_path,
-                     root_mb, swap_mb)
+                     root_mb, swap_mb, ephemeral_mb, ephemeral_format)
 
         self.assertEqual(calls_expected, parent_mock.mock_calls)
 
-    def test_always_logout_iscsi(self):
-        """logout_iscsi() must be called once login_iscsi() is called."""
+    def test_deploy_with_ephemeral(self):
+        """Check loosely all functions are called with right args."""
         address = '127.0.0.1'
         port = 3306
         iqn = 'iqn.xyz'
@@ -126,6 +131,124 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         pxe_config_path = '/tmp/abc/pxeconfig'
         root_mb = 128
         swap_mb = 64
+        ephemeral_mb = 256
+        ephemeral_format = 'exttest'
+
+        dev = '/dev/fake'
+        ephemeral_part = '/dev/fake-part1'
+        swap_part = '/dev/fake-part2'
+        root_part = '/dev/fake-part3'
+        root_uuid = '12345678-1234-1234-12345678-12345678abcdef'
+
+        name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
+                     'logout_iscsi', 'delete_iscsi', 'make_partitions',
+                     'is_block_device', 'dd', 'mkswap', 'block_uuid',
+                     'switch_pxe_config', 'notify', 'mkfs_ephemeral']
+        parent_mock = self._mock_calls(name_list)
+        parent_mock.get_dev.return_value = dev
+        parent_mock.get_image_mb.return_value = 1
+        parent_mock.is_block_device.return_value = True
+        parent_mock.block_uuid.return_value = root_uuid
+        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+                          mock.call.get_image_mb(image_path),
+                          mock.call.discovery(address, port),
+                          mock.call.login_iscsi(address, port, iqn),
+                          mock.call.is_block_device(dev),
+                          mock.call.make_partitions(dev, root_mb, swap_mb,
+                                                    ephemeral_mb),
+                          mock.call.is_block_device(root_part),
+                          mock.call.is_block_device(swap_part),
+                          mock.call.is_block_device(ephemeral_part),
+                          mock.call.dd(image_path, root_part),
+                          mock.call.mkswap(swap_part),
+                          mock.call.mkfs_ephemeral(ephemeral_part,
+                                                   ephemeral_format),
+                          mock.call.block_uuid(root_part),
+                          mock.call.logout_iscsi(address, port, iqn),
+                          mock.call.delete_iscsi(address, port, iqn),
+                          mock.call.switch_pxe_config(pxe_config_path,
+                                                      root_uuid),
+                          mock.call.notify(address, 10000)]
+
+        utils.deploy(address, port, iqn, lun, image_path, pxe_config_path,
+                     root_mb, swap_mb, ephemeral_mb, ephemeral_format)
+
+        self.assertEqual(calls_expected, parent_mock.mock_calls)
+
+    def test_deploy_preserve_ephemeral(self):
+        """Check if all functions are called with right args."""
+        address = '127.0.0.1'
+        port = 3306
+        iqn = 'iqn.xyz'
+        lun = 1
+        image_path = '/tmp/xyz/image'
+        pxe_config_path = '/tmp/abc/pxeconfig'
+        root_mb = 128
+        swap_mb = 64
+        ephemeral_mb = 256
+        ephemeral_format = 'exttest'
+
+        dev = '/dev/fake'
+        ephemeral_part = '/dev/fake-part1'
+        swap_part = '/dev/fake-part2'
+        root_part = '/dev/fake-part3'
+        root_uuid = '12345678-1234-1234-12345678-12345678abcdef'
+
+        mock_mkfs_eph = mock.patch.object(utils, 'mkfs_ephemeral').start()
+        self.addCleanup(mock_mkfs_eph.stop)
+
+        name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
+                     'logout_iscsi', 'delete_iscsi', 'make_partitions',
+                     'is_block_device', 'dd', 'mkswap', 'block_uuid',
+                     'switch_pxe_config', 'notify']
+        parent_mock = self._mock_calls(name_list)
+        parent_mock.get_dev.return_value = dev
+        parent_mock.get_image_mb.return_value = 1
+        parent_mock.is_block_device.return_value = True
+        parent_mock.block_uuid.return_value = root_uuid
+        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+                          mock.call.get_image_mb(image_path),
+                          mock.call.discovery(address, port),
+                          mock.call.login_iscsi(address, port, iqn),
+                          mock.call.is_block_device(dev),
+                          mock.call.make_partitions(dev, root_mb, swap_mb,
+                                                    ephemeral_mb),
+                          mock.call.is_block_device(root_part),
+                          mock.call.is_block_device(swap_part),
+                          mock.call.is_block_device(ephemeral_part),
+                          mock.call.dd(image_path, root_part),
+                          mock.call.mkswap(swap_part),
+                          mock.call.block_uuid(root_part),
+                          mock.call.logout_iscsi(address, port, iqn),
+                          mock.call.delete_iscsi(address, port, iqn),
+                          mock.call.switch_pxe_config(pxe_config_path,
+                                                      root_uuid),
+                          mock.call.notify(address, 10000)]
+
+        utils.deploy(address, port, iqn, lun, image_path, pxe_config_path,
+                     root_mb, swap_mb, ephemeral_mb, ephemeral_format,
+                     preserve_ephemeral=True)
+        self.assertEqual(calls_expected, parent_mock.mock_calls)
+        # mkfs_ephemeral should not be called
+        self.assertFalse(mock_mkfs_eph.called)
+
+    def test_always_logout_and_delete_iscsi(self):
+        """Check if logout_iscsi() and delete_iscsi() are called.
+
+        Make sure that logout_iscsi() and delete_iscsi() are called once
+        login_iscsi() is invoked.
+
+        """
+        address = '127.0.0.1'
+        port = 3306
+        iqn = 'iqn.xyz'
+        lun = 1
+        image_path = '/tmp/xyz/image'
+        pxe_config_path = '/tmp/abc/pxeconfig'
+        root_mb = 128
+        swap_mb = 64
+        ephemeral_mb = 256
+        ephemeral_format = 'exttest'
 
         dev = '/dev/fake'
 
@@ -133,7 +256,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
             pass
 
         name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
-                     'logout_iscsi', 'work_on_disk']
+                     'logout_iscsi', 'delete_iscsi', 'work_on_disk']
         patch_list = [mock.patch.object(utils, name) for name in name_list]
         mock_list = [patcher.start() for patcher in patch_list]
         for patcher in patch_list:
@@ -151,13 +274,16 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
                           mock.call.work_on_disk(dev, root_mb, swap_mb,
-                                                 image_path),
-                          mock.call.logout_iscsi(address, port, iqn)]
+                                                 ephemeral_mb,
+                                                 ephemeral_format, image_path,
+                                                 False),
+                          mock.call.logout_iscsi(address, port, iqn),
+                          mock.call.delete_iscsi(address, port, iqn)]
 
-        self.assertRaises(TestException,
-                         utils.deploy,
-                         address, port, iqn, lun, image_path,
-                         pxe_config_path, root_mb, swap_mb)
+        self.assertRaises(TestException, utils.deploy,
+                          address, port, iqn, lun, image_path,
+                          pxe_config_path, root_mb, swap_mb, ephemeral_mb,
+                          ephemeral_format)
 
         self.assertEqual(calls_expected, parent_mock.mock_calls)
 
@@ -175,7 +301,7 @@ class SwitchPxeConfigTestCase(tests_base.TestCase):
                                '12345678-1234-1234-1234-1234567890abcdef')
         with open(self.fname, 'r') as f:
             pxeconf = f.read()
-        self.assertEqual(pxeconf, _PXECONF_BOOT)
+        self.assertEqual(_PXECONF_BOOT, pxeconf)
 
 
 class OtherFunctionTestCase(tests_base.TestCase):
@@ -193,13 +319,13 @@ class OtherFunctionTestCase(tests_base.TestCase):
 
         self.useFixture(fixtures.MonkeyPatch('os.path.getsize', fake_getsize))
         size = 0
-        self.assertEqual(utils.get_image_mb('x'), 0)
+        self.assertEqual(0, utils.get_image_mb('x'))
         size = 1
-        self.assertEqual(utils.get_image_mb('x'), 1)
+        self.assertEqual(1, utils.get_image_mb('x'))
         size = mb
-        self.assertEqual(utils.get_image_mb('x'), 1)
+        self.assertEqual(1, utils.get_image_mb('x'))
         size = mb + 1
-        self.assertEqual(utils.get_image_mb('x'), 2)
+        self.assertEqual(2, utils.get_image_mb('x'))
 
 
 class WorkOnDiskTestCase(tests_base.TestCase):
@@ -209,6 +335,8 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.image_path = '/tmp/xyz/image'
         self.root_mb = 128
         self.swap_mb = 64
+        self.ephemeral_mb = 0
+        self.ephemeral_format = None
         self.dev = '/dev/fake'
         self.root_part = '/dev/fake-part1'
         self.swap_part = '/dev/fake-part2'
@@ -222,9 +350,11 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.mock_ibd.return_value = False
         self.assertRaises(exception.InstanceDeployFailure,
                           utils.work_on_disk, self.dev, self.root_mb,
-                          self.swap_mb, self.image_path)
+                          self.swap_mb, self.ephemeral_mb,
+                          self.ephemeral_format, self.image_path, False)
         self.mock_ibd.assert_called_once_with(self.dev)
-        self.mock_mp.assert_not_called()
+        self.assertFalse(self.mock_mp.called,
+                         "make_partitions mock was unexpectedly called.")
 
     def test_no_root_partition(self):
         self.mock_ibd.side_effect = [True, False]
@@ -232,10 +362,11 @@ class WorkOnDiskTestCase(tests_base.TestCase):
                  mock.call(self.root_part)]
         self.assertRaises(exception.InstanceDeployFailure,
                           utils.work_on_disk, self.dev, self.root_mb,
-                          self.swap_mb, self.image_path)
+                          self.swap_mb, self.ephemeral_mb,
+                          self.ephemeral_format, self.image_path, False)
         self.assertEqual(self.mock_ibd.call_args_list, calls)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
-                                             self.swap_mb)
+                                             self.swap_mb, self.ephemeral_mb)
 
     def test_no_swap_partition(self):
         self.mock_ibd.side_effect = [True, True, False]
@@ -244,7 +375,28 @@ class WorkOnDiskTestCase(tests_base.TestCase):
                  mock.call(self.swap_part)]
         self.assertRaises(exception.InstanceDeployFailure,
                           utils.work_on_disk, self.dev, self.root_mb,
-                          self.swap_mb, self.image_path)
+                          self.swap_mb, self.ephemeral_mb,
+                          self.ephemeral_format, self.image_path, False)
         self.assertEqual(self.mock_ibd.call_args_list, calls)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
-                                             self.swap_mb)
+                                             self.swap_mb, self.ephemeral_mb)
+
+    def test_no_ephemeral_partition(self):
+        ephemeral_part = '/dev/fake-part1'
+        swap_part = '/dev/fake-part2'
+        root_part = '/dev/fake-part3'
+        ephemeral_mb = 256
+        ephemeral_format = 'exttest'
+
+        self.mock_ibd.side_effect = [True, True, True, False]
+        calls = [mock.call(self.dev),
+                 mock.call(root_part),
+                 mock.call(swap_part),
+                 mock.call(ephemeral_part)]
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils.work_on_disk, self.dev, self.root_mb,
+                          self.swap_mb, ephemeral_mb, ephemeral_format,
+                          self.image_path, False)
+        self.assertEqual(self.mock_ibd.call_args_list, calls)
+        self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
+                                             self.swap_mb, ephemeral_mb)

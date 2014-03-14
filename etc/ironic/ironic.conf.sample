@@ -4,10 +4,10 @@
 # Options defined in ironic.netconf
 #
 
-# ip address of this host (string value)
+# IP address of this host. (string value)
 #my_ip=10.0.0.1
 
-# use ipv6 (boolean value)
+# Use IPv6. (boolean value)
 #use_ipv6=false
 
 
@@ -15,7 +15,8 @@
 # Options defined in ironic.api.app
 #
 
-# Method to use for auth: noauth or keystone. (string value)
+# Method to use for authentication: noauth or keystone.
+# (string value)
 #auth_strategy=keystone
 
 
@@ -23,7 +24,7 @@
 # Options defined in ironic.common.exception
 #
 
-# make exception message format errors fatal (boolean value)
+# Make exception message format errors fatal. (boolean value)
 #fatal_exception_format_errors=false
 
 
@@ -50,7 +51,7 @@
 # Options defined in ironic.common.images
 #
 
-# Force backing images to raw format (boolean value)
+# Force backing images to raw format. (boolean value)
 #force_raw_images=true
 
 
@@ -58,14 +59,15 @@
 # Options defined in ironic.common.paths
 #
 
-# Directory where the ironic python module is installed
+# Directory where the ironic python module is installed.
 # (string value)
 #pybasedir=/usr/lib/python/site-packages/ironic
 
-# Directory where ironic binaries are installed (string value)
+# Directory where ironic binaries are installed. (string
+# value)
 #bindir=$pybasedir/bin
 
-# Top-level directory for maintaining ironic's state (string
+# Top-level directory for maintaining ironic's state. (string
 # value)
 #state_path=$pybasedir
 
@@ -74,11 +76,27 @@
 # Options defined in ironic.common.policy
 #
 
-# JSON file representing policy (string value)
+# JSON file representing policy. (string value)
 #policy_file=policy.json
 
-# Rule checked when requested rule is not found (string value)
+# Rule checked when requested rule is not found. (string
+# value)
 #policy_default_rule=default
+
+
+#
+# Options defined in ironic.common.service
+#
+
+# Seconds between running periodic tasks. (integer value)
+#periodic_interval=60
+
+# Name of this node.  This can be an opaque identifier.  It is
+# not necessarily a hostname, FQDN, or IP address. However,
+# the node name must be valid within an AMQP key, and if using
+# ZeroMQ, a valid hostname, FQDN, or IP address. (string
+# value)
+#host=ironic
 
 
 #
@@ -86,10 +104,10 @@
 #
 
 # Path to the rootwrap configuration file to use for running
-# commands as root (string value)
+# commands as root. (string value)
 #rootwrap_config=/etc/ironic/rootwrap.conf
 
-# Explicitly specify the temporary working directory (string
+# Explicitly specify the temporary working directory. (string
 # value)
 #tempdir=<None>
 
@@ -98,10 +116,10 @@
 # Options defined in ironic.openstack.common.db.sqlalchemy.session
 #
 
-# the filename to use with sqlite (string value)
+# The file name to use with SQLite (string value)
 #sqlite_db=ironic.sqlite
 
-# If true, use synchronous mode for sqlite (boolean value)
+# If True, SQLite uses synchronous mode (boolean value)
 #sqlite_synchronous=true
 
 
@@ -117,7 +135,7 @@
 # Options defined in ironic.openstack.common.lockutils
 #
 
-# Whether to disable inter-process locks (boolean value)
+# Whether to disable inter-process locks. (boolean value)
 #disable_process_locking=false
 
 # Directory to use for lock files. (string value)
@@ -264,9 +282,9 @@
 # by impl_zmq. (integer value)
 #rpc_cast_timeout=30
 
-# Modules of exceptions that are permitted to be recreatedupon
-# receiving exception data from an rpc call. (list value)
-#allowed_rpc_exception_modules=ironic.openstack.common.exception,nova.exception,cinder.exception,exceptions
+# Modules of exceptions that are permitted to be recreated
+# upon receiving exception data from an rpc call. (list value)
+#allowed_rpc_exception_modules=nova.exception,cinder.exception,exceptions
 
 # If passed, use a fake RabbitMQ provider (boolean value)
 #fake_rabbit=false
@@ -280,17 +298,21 @@
 # Options defined in ironic.openstack.common.rpc.amqp
 #
 
-# Enable a fast single reply queue if using AMQP based RPC
-# like RabbitMQ or Qpid. (boolean value)
-#amqp_rpc_single_reply_queue=false
+# Use durable queues in amqp. (boolean value)
+# Deprecated group/name - [DEFAULT]/rabbit_durable_queues
+#amqp_durable_queues=false
+
+# Auto-delete queues in amqp. (boolean value)
+#amqp_auto_delete=false
 
 
 #
 # Options defined in ironic.openstack.common.rpc.impl_kombu
 #
 
-# SSL version to use (valid only if SSL enabled) (string
-# value)
+# If SSL is enabled, the SSL version to use. Valid values are
+# TLSv1, SSLv23 and SSLv3. SSLv2 might be available on some
+# distributions. (string value)
 #kombu_ssl_version=
 
 # SSL key file (valid only if SSL enabled) (string value)
@@ -314,36 +336,32 @@
 # RabbitMQ HA cluster host:port pairs (list value)
 #rabbit_hosts=$rabbit_host:$rabbit_port
 
-# connect over SSL for RabbitMQ (boolean value)
+# Connect over SSL for RabbitMQ (boolean value)
 #rabbit_use_ssl=false
 
-# the RabbitMQ userid (string value)
+# The RabbitMQ userid (string value)
 #rabbit_userid=guest
 
-# the RabbitMQ password (string value)
+# The RabbitMQ password (string value)
 #rabbit_password=guest
 
-# the RabbitMQ virtual host (string value)
+# The RabbitMQ virtual host (string value)
 #rabbit_virtual_host=/
 
-# how frequently to retry connecting with RabbitMQ (integer
+# How frequently to retry connecting with RabbitMQ (integer
 # value)
 #rabbit_retry_interval=1
 
-# how long to backoff for between retries when connecting to
+# How long to backoff for between retries when connecting to
 # RabbitMQ (integer value)
 #rabbit_retry_backoff=2
 
-# maximum retries with trying to connect to RabbitMQ (the
-# default of 0 implies an infinite retry count) (integer
-# value)
+# Maximum number of RabbitMQ connection retries. Default is 0
+# (infinite retry count) (integer value)
 #rabbit_max_retries=0
 
-# use durable queues in RabbitMQ (boolean value)
-#rabbit_durable_queues=false
-
-# use H/A queues in RabbitMQ (x-ha-policy: all).You need to
-# wipe RabbitMQ database when changing this option. (boolean
+# Use HA queues in RabbitMQ (x-ha-policy: all). If you change
+# this option, you must wipe the RabbitMQ database. (boolean
 # value)
 #rabbit_ha_queues=false
 
@@ -380,6 +398,14 @@
 
 # Disable Nagle algorithm (boolean value)
 #qpid_tcp_nodelay=true
+
+# The qpid topology version to use.  Version 1 is what was
+# originally used by impl_qpid.  Version 2 includes some
+# backwards-incompatible changes that allow broker federation
+# to work.  Users should update to version 2 when they are
+# able to take everything down, as it requires a clean break.
+# (integer value)
+#qpid_topology_version=1
 
 
 #
@@ -424,26 +450,58 @@
 #matchmaker_heartbeat_ttl=600
 
 
+[api]
+
+#
+# Options defined in ironic.api
+#
+
+# The listen IP for the Ironic API server. (string value)
+#host_ip=0.0.0.0
+
+# The port for the Ironic API server. (integer value)
+#port=6385
+
+# The maximum number of items returned in a single response
+# from a collection resource. (integer value)
+#max_limit=1000
+
+
 [conductor]
 
 #
 # Options defined in ironic.conductor.manager
 #
 
-# Url of Ironic API service. If not set Ironic can get current
-# value from Keystone service catalog. (string value)
+# URL of Ironic API service. If not set ironic can get the
+# current value from the keystone service catalog. (string
+# value)
 #api_url=<None>
 
 # Seconds between conductor heart beats. (integer value)
 #heartbeat_interval=10
 
-# Maximum time since the last check-in of a conductor (integer
-# value)
+# Maximum time (in seconds) since the last check-in of a
+# conductor. (integer value)
 #heartbeat_timeout=60
 
 # Interval between syncing the node power state to the
 # database, in seconds. (integer value)
 #sync_power_state_interval=60
+
+# Interval between checks of provision timeouts, in seconds.
+# (integer value)
+#check_provision_state_interval=60
+
+# Timeout (seconds) for waiting callback from deploy ramdisk.
+# 0 - unlimited. (integer value)
+#deploy_callback_timeout=1800
+
+# During sync_power_state, should the hardware power state be
+# set to the state recorded in the database (True) or should
+# the database be updated based on the hardware state (False).
+# (boolean value)
+#force_power_state_during_sync=true
 
 
 [database]
@@ -452,7 +510,7 @@
 # Options defined in ironic.db.sqlalchemy.models
 #
 
-# MySQL engine (string value)
+# MySQL engine to use. (string value)
 #mysql_engine=InnoDB
 
 
@@ -485,10 +543,11 @@
 # slave database (string value)
 #slave_connection=
 
-# timeout before idle sql connections are reaped (integer
+# Timeout before idle sql connections are reaped (integer
 # value)
 # Deprecated group/name - [DEFAULT]/sql_idle_timeout
 # Deprecated group/name - [DATABASE]/sql_idle_timeout
+# Deprecated group/name - [sql]/idle_timeout
 #idle_timeout=3600
 
 # Minimum number of SQL connections to keep open in a pool
@@ -503,13 +562,13 @@
 # Deprecated group/name - [DATABASE]/sql_max_pool_size
 #max_pool_size=<None>
 
-# maximum db connection retries during startup. (setting -1
+# Maximum db connection retries during startup. (setting -1
 # implies an infinite retry count) (integer value)
 # Deprecated group/name - [DEFAULT]/sql_max_retries
 # Deprecated group/name - [DATABASE]/sql_max_retries
 #max_retries=10
 
-# interval between retries of opening a sql connection
+# Interval between retries of opening a sql connection
 # (integer value)
 # Deprecated group/name - [DEFAULT]/sql_retry_interval
 # Deprecated group/name - [DATABASE]/reconnect_interval
@@ -537,88 +596,59 @@
 #pool_timeout=<None>
 
 
+[glance]
+
+#
+# Options defined in ironic.common.glance_service.v2.image_service
+#
+
+# A list of URL schemes that can be downloaded directly via
+# the direct_url.  Currently supported schemes: [file]. (list
+# value)
+#allowed_direct_url_schemes=
+
+
+#
+# Options defined in ironic.common.image_service
+#
+
+# Default glance hostname or IP address. (string value)
+#glance_host=$my_ip
+
+# Default glance port. (integer value)
+#glance_port=9292
+
+# Default protocol to use when connecting to glance. Set to
+# https for SSL. (string value)
+#glance_protocol=http
+
+# A list of the glance api servers available to nova. Prefix
+# with https:// for SSL-based glance API servers. Format is
+# [hostname|IP]:port. (string value)
+#glance_api_servers=<None>
+
+# Allow to perform insecure SSL (https) requests to glance.
+# (boolean value)
+#glance_api_insecure=false
+
+# Number of retries when downloading an image from glance.
+# (integer value)
+#glance_num_retries=0
+
+# Default protocol to use when connecting to glance. Set to
+# https for SSL. (string value)
+#auth_strategy=keystone
+
+
 [ipmi]
 
 #
 # Options defined in ironic.drivers.modules.ipminative
 #
 
-# Maximum time in seconds to retry IPMI operations (integer
+# Maximum time in seconds to retry IPMI operations. (integer
 # value)
 #retry_timeout=10
-
-
-[ssl]
-
-#
-# Options defined in ironic.openstack.common.sslutils
-#
-
-# CA certificate file to use to verify connecting clients
-# (string value)
-#ca_file=<None>
-
-# Certificate file to use when starting the server securely
-# (string value)
-#cert_file=<None>
-
-# Private key file to use when starting the server securely
-# (string value)
-#key_file=<None>
-
-
-[matchmaker_ring]
-
-#
-# Options defined in ironic.openstack.common.rpc.matchmaker_ring
-#
-
-# Matchmaker ring file (JSON) (string value)
-# Deprecated group/name - [DEFAULT]/matchmaker_ringfile
-#ringfile=/etc/oslo/matchmaker_ring.json
-
-
-[rpc_notifier2]
-
-#
-# Options defined in ironic.openstack.common.notifier.rpc_notifier2
-#
-
-# AMQP topic(s) used for OpenStack notifications (list value)
-#topics=notifications
-
-
-[api]
-
-#
-# Options defined in ironic.api
-#
-
-# The listen IP for the Ironic API server (string value)
-#host_ip=0.0.0.0
-
-# The port for the Ironic API server (integer value)
-#port=6385
-
-# The maximum number of items returned in a single response
-# from a collection resource (integer value)
-#max_limit=1000
-
-
-[matchmaker_redis]
-
-#
-# Options defined in ironic.openstack.common.rpc.matchmaker_redis
-#
-
-# Host to locate redis (string value)
-#host=127.0.0.1
-
-# Use this port to connect to redis host. (integer value)
-#port=6379
-
-# Password for Redis server. (optional) (string value)
-#password=<None>
 
 
 [keystone_authtoken]
@@ -740,49 +770,57 @@
 # Catalog header. (boolean value)
 #include_service_catalog=true
 
-
-[glance]
-
-#
-# Options defined in ironic.common.glance_service.v2.image_service
-#
-
-# A list of url scheme that can be downloaded directly via the
-# direct_url.  Currently supported schemes: [file]. (list
+# Used to control the use and type of token binding. Can be
+# set to: "disabled" to not check token binding. "permissive"
+# (default) to validate binding information if the bind type
+# is of a form known to the server and ignore it if not.
+# "strict" like "permissive" but if the bind type is unknown
+# the token will be rejected. "required" any form of token
+# binding is needed to be allowed. Finally the name of a
+# binding method that must be present in tokens. (string
 # value)
-#allowed_direct_url_schemes=
+#enforce_token_bind=permissive
 
+
+[matchmaker_redis]
 
 #
-# Options defined in ironic.common.image_service
+# Options defined in ironic.openstack.common.rpc.matchmaker_redis
 #
 
-# default glance hostname or ip (string value)
-#glance_host=$my_ip
+# Host to locate redis (string value)
+#host=127.0.0.1
 
-# default glance port (integer value)
-#glance_port=9292
+# Use this port to connect to redis host. (integer value)
+#port=6379
 
-# Default protocol to use when connecting to glance. Set to
-# https for SSL. (string value)
-#glance_protocol=http
+# Password for Redis server. (optional) (string value)
+#password=<None>
 
-# A list of the glance api servers available to nova. Prefix
-# with https:// for ssl-based glance api servers.
-# ([hostname|ip]:port) (string value)
-#glance_api_servers=<None>
 
-# Allow to perform insecure SSL (https) requests to glance
-# (boolean value)
-#glance_api_insecure=false
+[matchmaker_ring]
 
-# Number retries when downloading an image from glance
-# (integer value)
-#glance_num_retries=0
+#
+# Options defined in ironic.openstack.common.rpc.matchmaker_ring
+#
 
-# Default protocol to use when connecting to glance. Set to
-# https for SSL. (string value)
-#auth_strategy=keystone
+# Matchmaker ring file (JSON) (string value)
+# Deprecated group/name - [DEFAULT]/matchmaker_ringfile
+#ringfile=/etc/oslo/matchmaker_ring.json
+
+
+[neutron]
+
+#
+# Options defined in ironic.common.neutron
+#
+
+# URL for connecting to neutron. (string value)
+#url=http://127.0.0.1:9696
+
+# Timeout value for connecting to neutron in seconds. (integer
+# value)
+#url_timeout=30
 
 
 [pxe]
@@ -791,47 +829,85 @@
 # Options defined in ironic.drivers.modules.pxe
 #
 
-# Default kernel image ID used in deployment phase (string
-# value)
-#deploy_kernel=<None>
-
-# Default ramdisk image ID used in deployment phase (string
-# value)
-#deploy_ramdisk=<None>
-
-# Template file for injected network config (string value)
-#net_config_template=$pybasedir/ironic/net-dhcp.ubuntu.template
-
-# additional append parameters for baremetal PXE boot (string
+# Additional append parameters for baremetal PXE boot. (string
 # value)
 #pxe_append_params=nofb nomodeset vga=normal
 
-# Template file for PXE configuration (string value)
+# Template file for PXE configuration. (string value)
 #pxe_config_template=$pybasedir/drivers/modules/pxe_config.template
 
-# Timeout for PXE deployments. Default: 0 (unlimited) (integer
-# value)
-#pxe_deploy_timeout=0
-
-# IP address of Ironic compute node's tftp server (string
+# IP address of Ironic compute node's tftp server. (string
 # value)
 #tftp_server=$my_ip
 
-# Ironic compute node's tftp root path (string value)
+# Ironic compute node's tftp root path. (string value)
 #tftp_root=/tftpboot
 
-# Directory where images are stored on disk (string value)
+# Directory where images are stored on disk. (string value)
 #images_path=/var/lib/ironic/images/
 
-# Directory where master tftp images are stored on disk
+# Directory where master tftp images are stored on disk.
 # (string value)
 #tftp_master_path=/tftpboot/master_images
 
-# Directory where master tftp images are stored on disk
+# Directory where master instance images are stored on disk.
 # (string value)
 #instance_master_path=/var/lib/ironic/master_images
 
 # Neutron bootfile DHCP parameter. (string value)
 #pxe_bootfile_name=pxelinux.0
+
+
+[rpc_notifier2]
+
+#
+# Options defined in ironic.openstack.common.notifier.rpc_notifier2
+#
+
+# AMQP topic(s) used for OpenStack notifications (list value)
+#topics=notifications
+
+
+[seamicro]
+
+#
+# Options defined in ironic.drivers.modules.seamicro
+#
+
+# Maximum retries for SeaMicro operations (integer value)
+#max_retry=3
+
+# Seconds to wait for power action to be completed (integer
+# value)
+#action_timeout=10
+
+
+[ssh]
+
+#
+# Options defined in ironic.drivers.modules.ssh
+#
+
+# libvirt uri (string value)
+#libvirt_uri=qemu:///system
+
+
+[ssl]
+
+#
+# Options defined in ironic.openstack.common.sslutils
+#
+
+# CA certificate file to use to verify connecting clients
+# (string value)
+#ca_file=<None>
+
+# Certificate file to use when starting the server securely
+# (string value)
+#cert_file=<None>
+
+# Private key file to use when starting the server securely
+# (string value)
+#key_file=<None>
 
 

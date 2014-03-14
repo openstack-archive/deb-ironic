@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 # All Rights Reserved.
 #
@@ -17,6 +15,7 @@
 
 from oslo.config import cfg
 
+from ironic.common import exception
 from ironic.common import hash_ring as hash
 from ironic.tests import base
 
@@ -105,3 +104,16 @@ class HashRingTestCase(base.TestCase):
         ring = hash.HashRing(hosts, replicas=1)
         self.assertEqual(['foo'], ring.get_hosts('fake',
                                                  ignore_hosts=['baz']))
+
+    def test_create_ring_invalid_data(self):
+        hosts = None
+        self.assertRaises(exception.Invalid,
+                          hash.HashRing,
+                          hosts)
+
+    def test_get_hosts_invalid_data(self):
+        hosts = ['foo', 'bar']
+        ring = hash.HashRing(hosts)
+        self.assertRaises(exception.Invalid,
+                          ring.get_hosts,
+                          None)

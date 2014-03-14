@@ -1,7 +1,4 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # -*- encoding: utf-8 -*-
-#
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 #
 # Copyright 2013 Red Hat, Inc.
 # All Rights Reserved.
@@ -32,5 +29,5 @@ class PolicyTestCase(base.TestCase):
 
     def test_policy_file_not_found(self):
         ironic_policy.reset()
-        CONF.set_override('policy_file', '/non/existant/policy/file')
+        CONF.set_override('policy_file', '/non/existent/policy/file')
         self.assertRaises(exception.ConfigNotFound, ironic_policy.init)

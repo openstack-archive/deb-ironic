@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # -*- encoding: utf-8 -*-
 #
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
@@ -22,6 +21,7 @@ from ironic.drivers import base
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules import pxe
+from ironic.drivers.modules import seamicro
 from ironic.drivers.modules import ssh
 
 
@@ -29,8 +29,8 @@ class PXEAndIPMIToolDriver(base.BaseDriver):
     """PXE + IPMITool driver.
 
     This driver implements the `core` functionality, combinding
-    :class:ironic.drivers.ipmi.IPMI for power on/off and reboot with
-    :class:ironic.driver.pxe.PXE for image deployment. Implementations are in
+    :class:`ironic.drivers.ipmi.IPMI` for power on/off and reboot with
+    :class:`ironic.driver.pxe.PXE` for image deployment. Implementations are in
     those respective classes; this class is merely the glue between them.
     """
 
@@ -47,8 +47,8 @@ class PXEAndSSHDriver(base.BaseDriver):
     NOTE: This driver is meant only for testing environments.
 
     This driver implements the `core` functionality, combinding
-    :class:ironic.drivers.ssh.SSH for power on/off and reboot of virtual
-    machines tunneled over SSH, with :class:ironic.driver.pxe.PXE for image
+    :class:`ironic.drivers.ssh.SSH` for power on/off and reboot of virtual
+    machines tunneled over SSH, with :class:`ironic.driver.pxe.PXE` for image
     deployment. Implementations are in those respective classes; this class is
     merely the glue between them.
     """
@@ -64,9 +64,9 @@ class PXEAndIPMINativeDriver(base.BaseDriver):
     """PXE + Native IPMI driver.
 
     This driver implements the `core` functionality, combining
-    :class:ironic.drivers.modules.ipminative.NativeIPMIPower for power
+    :class:`ironic.drivers.modules.ipminative.NativeIPMIPower` for power
     on/off and reboot with
-    :class:ironic.driver.modules.pxe.PXE for image deployment.
+    :class:`ironic.driver.modules.pxe.PXE` for image deployment.
     Implementations are in those respective classes;
     this class is merely the glue between them.
     """
@@ -76,3 +76,24 @@ class PXEAndIPMINativeDriver(base.BaseDriver):
         self.deploy = pxe.PXEDeploy()
         self.rescue = self.deploy
         self.vendor = pxe.VendorPassthru()
+
+
+class PXEAndSeaMicroDriver(base.BaseDriver):
+    """PXE + SeaMicro driver.
+
+    This driver implements the `core` functionality, combining
+    :class:ironic.drivers.modules.seamicro.Power for power
+    on/off and reboot with
+    :class:ironic.driver.modules.pxe.PXE for image deployment.
+    Implementations are in those respective classes;
+    this class is merely the glue between them.
+    """
+
+    def __init__(self):
+        self.power = seamicro.Power()
+        self.deploy = pxe.PXEDeploy()
+        self.rescue = self.deploy
+        self.seamicro_vendor = seamicro.VendorPassthru()
+        self.pxe_vendor = pxe.VendorPassthru()
+        self.vendor = seamicro.SeaMicroPXEMultipleVendorInterface(
+            self.seamicro_vendor, self.pxe_vendor)

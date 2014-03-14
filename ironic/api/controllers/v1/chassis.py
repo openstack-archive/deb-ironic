@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2013 Red Hat, Inc.
 # All Rights Reserved.
 #
@@ -31,7 +28,7 @@ from ironic.api.controllers.v1 import collection
 from ironic.api.controllers.v1 import link
 from ironic.api.controllers.v1 import node
 from ironic.api.controllers.v1 import types
-from ironic.api.controllers.v1 import utils
+from ironic.api.controllers.v1 import utils as api_utils
 from ironic.common import exception
 from ironic import objects
 from ironic.openstack.common import excutils
@@ -61,10 +58,10 @@ class Chassis(base.APIBase):
     extra = {wtypes.text: types.MultiType(wtypes.text, six.integer_types)}
     "The metadata of the chassis"
 
-    links = [link.Link]
+    links = wsme.wsattr([link.Link], readonly=True)
     "A list containing a self link and associated chassis links"
 
-    nodes = [link.Link]
+    nodes = wsme.wsattr([link.Link], readonly=True)
     "Links to the collection of nodes contained in this chassis"
 
     def __init__(self, **kwargs):
@@ -130,8 +127,8 @@ class ChassisController(rest.RestController):
 
     def _get_chassis_collection(self, marker, limit, sort_key, sort_dir,
                                 expand=False, resource_url=None):
-        limit = utils.validate_limit(limit)
-        sort_dir = utils.validate_sort_dir(sort_dir)
+        limit = api_utils.validate_limit(limit)
+        sort_dir = api_utils.validate_sort_dir(sort_dir)
         marker_obj = None
         if marker:
             marker_obj = objects.Chassis.get_by_uuid(pecan.request.context,
@@ -187,7 +184,7 @@ class ChassisController(rest.RestController):
                                                   chassis_uuid)
         return Chassis.convert_with_links(rpc_chassis)
 
-    @wsme_pecan.wsexpose(Chassis, body=Chassis)
+    @wsme_pecan.wsexpose(Chassis, body=Chassis, status_code=201)
     def post(self, chassis):
         """Create a new chassis.
 
@@ -213,9 +210,8 @@ class ChassisController(rest.RestController):
         try:
             chassis = Chassis(**jsonpatch.apply_patch(rpc_chassis.as_dict(),
                                                    jsonpatch.JsonPatch(patch)))
-        except jsonpatch.JsonPatchException as e:
-            LOG.exception(e)
-            raise wsme.exc.ClientSideError(_("Patching Error: %s") % e)
+        except api_utils.JSONPATCH_EXCEPTIONS as e:
+            raise exception.PatchError(patch=patch, reason=e)
 
         # Update only the fields that have changed
         for field in objects.Chassis.fields:

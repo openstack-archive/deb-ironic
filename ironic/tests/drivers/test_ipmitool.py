@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
@@ -26,6 +25,7 @@ import tempfile
 import mock
 from oslo.config import cfg
 
+from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import states
 from ironic.common import utils
@@ -33,7 +33,7 @@ from ironic.conductor import task_manager
 from ironic.db import api as db_api
 from ironic.drivers.modules import ipmitool as ipmi
 from ironic.openstack.common import context
-from ironic.openstack.common import jsonutils as json
+from ironic.openstack.common import processutils
 from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
@@ -41,7 +41,7 @@ from ironic.tests.db import utils as db_utils
 
 CONF = cfg.CONF
 
-INFO_DICT = json.loads(db_utils.ipmi_info)
+INFO_DICT = db_utils.get_test_impi_info()
 
 
 class IPMIToolPrivateMethodTestCase(base.TestCase):
@@ -57,10 +57,10 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
         with ipmi._make_password_file(self.info.get('password')) as pw_file:
             del_chk_pw_file = pw_file
             self.assertTrue(os.path.isfile(pw_file))
-            self.assertEqual(os.stat(pw_file)[stat.ST_MODE] & 0o777, 0o600)
+            self.assertEqual(0o600, os.stat(pw_file)[stat.ST_MODE] & 0o777)
             with open(pw_file, "r") as f:
                 password = f.read()
-            self.assertEqual(password, self.info.get('password'))
+            self.assertEqual(self.info.get('password'), password)
         self.assertFalse(os.path.isfile(del_chk_pw_file))
 
     def test__parse_driver_info(self):
@@ -71,6 +71,11 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
         self.assertIsNotNone(self.info.get('uuid'))
 
         info = dict(INFO_DICT)
+
+        # test the default value for 'priv_level'
+        node = db_utils.get_test_node(driver_info=info)
+        ret = ipmi._parse_driver_info(node)
+        self.assertEqual('ADMINISTRATOR', ret['priv_level'])
 
         # ipmi_username / ipmi_password are not mandatory
         del info['ipmi_username']
@@ -87,6 +92,13 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
                           ipmi._parse_driver_info,
                           node)
 
+        # test the invalid priv_level value
+        self.info['priv_level'] = 'ABCD'
+        node = db_utils.get_test_node(driver_info=info)
+        self.assertRaises(exception.InvalidParameterValue,
+                          ipmi._parse_driver_info,
+                          node)
+
     def test__exec_ipmitool(self):
         pw_file_handle = tempfile.NamedTemporaryFile()
         pw_file = pw_file_handle.name
@@ -95,6 +107,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             'ipmitool',
             '-I', 'lanplus',
             '-H', self.info['address'],
+            '-L', self.info['priv_level'],
             '-U', self.info['username'],
             '-f', file_handle,
             'A', 'B', 'C',
@@ -121,6 +134,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             'ipmitool',
             '-I', 'lanplus',
             '-H', self.info['address'],
+            '-L', self.info['priv_level'],
             '-U', self.info['username'],
             '-f', file_handle,
             'A', 'B', 'C',
@@ -145,6 +159,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             'ipmitool',
             '-I', 'lanplus',
             '-H', self.info['address'],
+            '-L', self.info['priv_level'],
             '-f', file_handle,
             'A', 'B', 'C',
             ]
@@ -159,6 +174,32 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
                 self.assertTrue(mock_pwf.called)
                 mock_exec.assert_called_once_with(*args, attempts=3)
 
+    def test__exec_ipmitool_exception(self):
+        pw_file_handle = tempfile.NamedTemporaryFile()
+        pw_file = pw_file_handle.name
+        file_handle = open(pw_file, "w")
+        args = [
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', self.info['address'],
+            '-L', self.info['priv_level'],
+            '-U', self.info['username'],
+            '-f', file_handle,
+            'A', 'B', 'C',
+            ]
+
+        with mock.patch.object(ipmi, '_make_password_file',
+                               autospec=True) as mock_pwf:
+            mock_pwf.return_value = file_handle
+            with mock.patch.object(utils, 'execute',
+                                   autospec=True) as mock_exec:
+                mock_exec.side_effect = processutils.ProcessExecutionError("x")
+                self.assertRaises(processutils.ProcessExecutionError,
+                                  ipmi._exec_ipmitool,
+                                  self.info, 'A B C')
+                mock_pwf.assert_called_once_with(self.info['password'])
+                mock_exec.assert_called_once_with(*args, attempts=3)
+
     def test__power_status_on(self):
         with mock.patch.object(ipmi, '_exec_ipmitool',
                                autospec=True) as mock_exec:
@@ -167,7 +208,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             state = ipmi._power_status(self.info)
 
             mock_exec.assert_called_once_with(self.info, "power status")
-            self.assertEqual(state, states.POWER_ON)
+            self.assertEqual(states.POWER_ON, state)
 
     def test__power_status_off(self):
         with mock.patch.object(ipmi, '_exec_ipmitool',
@@ -177,7 +218,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             state = ipmi._power_status(self.info)
 
             mock_exec.assert_called_once_with(self.info, "power status")
-            self.assertEqual(state, states.POWER_OFF)
+            self.assertEqual(states.POWER_OFF, state)
 
     def test__power_status_error(self):
         with mock.patch.object(ipmi, '_exec_ipmitool',
@@ -187,7 +228,16 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             state = ipmi._power_status(self.info)
 
             mock_exec.assert_called_once_with(self.info, "power status")
-            self.assertEqual(state, states.ERROR)
+            self.assertEqual(states.ERROR, state)
+
+    def test__power_status_exception(self):
+        with mock.patch.object(ipmi, '_exec_ipmitool',
+                side_effect=processutils.ProcessExecutionError("error"),
+                autospec=True) as mock_exec:
+            self.assertRaises(exception.IPMIFailure,
+                              ipmi._power_status,
+                              self.info)
+            mock_exec.assert_called_once_with(self.info, "power status")
 
     def test__power_on_max_retries(self):
         self.config(retry_timeout=2, group='ipmi')
@@ -210,7 +260,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             state = ipmi._power_on(self.info)
 
             self.assertEqual(mock_exec.call_args_list, expected)
-            self.assertEqual(state, states.ERROR)
+            self.assertEqual(states.ERROR, state)
 
 
 class IPMIToolDriverTestCase(db_base.DbTestCase):
@@ -219,7 +269,8 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
         super(IPMIToolDriverTestCase, self).setUp()
         self.context = context.get_admin_context()
         self.dbapi = db_api.get_instance()
-        self.driver = mgr_utils.get_mocked_node_manager(driver='fake_ipmitool')
+        mgr_utils.mock_the_extension_manager(driver="fake_ipmitool")
+        self.driver = driver_factory.get_driver("fake_ipmitool")
 
         self.node = db_utils.get_test_node(
                 driver='fake_ipmitool',
@@ -238,15 +289,25 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                autospec=True) as mock_exec:
 
             pstate = self.driver.power.get_power_state(None, self.node)
-            self.assertEqual(pstate, states.POWER_OFF)
+            self.assertEqual(states.POWER_OFF, pstate)
 
             pstate = self.driver.power.get_power_state(None, self.node)
-            self.assertEqual(pstate, states.POWER_ON)
+            self.assertEqual(states.POWER_ON, pstate)
 
             pstate = self.driver.power.get_power_state(None, self.node)
-            self.assertEqual(pstate, states.ERROR)
+            self.assertEqual(states.ERROR, pstate)
 
             self.assertEqual(mock_exec.call_args_list, expected)
+
+    def test_get_power_state_exception(self):
+        with mock.patch.object(ipmi, '_exec_ipmitool',
+                side_effect=processutils.ProcessExecutionError("error"),
+                autospec=True) as mock_exec:
+            self.assertRaises(exception.IPMIFailure,
+                              self.driver.power.get_power_state,
+                              None,
+                              self.node)
+        mock_exec.assert_called_once_with(self.info, "power status")
 
     def test_set_power_on_ok(self):
         self.config(retry_timeout=0, group='ipmi')
@@ -301,7 +362,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
     def test_set_power_invalid_state(self):
         with task_manager.acquire(self.context, [self.node['uuid']]) as task:
-            self.assertRaises(exception.IronicException,
+            self.assertRaises(exception.InvalidParameterValue,
                     self.driver.power.set_power_state,
                     task,
                     self.node,
@@ -314,14 +375,14 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
             with task_manager.acquire(self.context,
                                      [self.node['uuid']]) as task:
-                self.driver.power._set_boot_device(task, self.node, 'pxe')
+                self.driver.vendor._set_boot_device(task, self.node, 'pxe')
 
             mock_exec.assert_called_once_with(self.info, "chassis bootdev pxe")
 
     def test_set_boot_device_bad_device(self):
         with task_manager.acquire(self.context, [self.node['uuid']]) as task:
             self.assertRaises(exception.InvalidParameterValue,
-                    self.driver.power._set_boot_device,
+                    self.driver.vendor._set_boot_device,
                     task,
                     self.node,
                     'fake-device')
@@ -364,3 +425,36 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                             self.node)
 
                 self.assertEqual(manager.mock_calls, expected)
+
+    def test_vendor_passthru_validate__set_boot_device_good(self):
+        self.driver.vendor.validate(self.node,
+                                    method='set_boot_device',
+                                    device='pxe')
+
+    def test_vendor_passthru_validate__set_boot_device_fail(self):
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.driver.vendor.validate,
+                          self.node, method='set_boot_device',
+                          device='fake')
+
+    def test_vendor_passthru_validate__set_boot_device_fail_no_device(self):
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.driver.vendor.validate,
+                          self.node, method='set_boot_device')
+
+    def test_vendor_passthru_validate_method_notmatch(self):
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.driver.vendor.validate,
+                          self.node, method='fake_method')
+
+    def test_vendor_passthru_call_set_boot_device(self):
+        with task_manager.acquire(self.context, [self.node['uuid']],
+                                  shared=False) as task:
+            with mock.patch.object(ipmi.VendorPassthru,
+                                   '_set_boot_device') as boot_mock:
+                self.driver.vendor.vendor_passthru(task,
+                                                   self.node,
+                                                   method='set_boot_device',
+                                                   device='pxe')
+            boot_mock.assert_called_once_with(task, self.node,
+                                              'pxe', False)

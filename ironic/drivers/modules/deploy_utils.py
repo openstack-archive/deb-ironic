@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 # Copyright (c) 2012 NTT DOCOMO, INC.
 # All Rights Reserved.
 #
@@ -17,11 +15,10 @@
 
 
 import os
-import time
-
 import re
 import socket
 import stat
+import time
 
 from ironic.common import exception
 from ironic.common import utils
@@ -70,14 +67,30 @@ def logout_iscsi(portal_address, portal_port, target_iqn):
                   check_exit_code=[0])
 
 
-def make_partitions(dev, root_mb, swap_mb):
+def delete_iscsi(portal_address, portal_port, target_iqn):
+    """Delete the iSCSI target."""
+    utils.execute('iscsiadm',
+                  '-m', 'node',
+                  '-p', '%s:%s' % (portal_address, portal_port),
+                  '-T', target_iqn,
+                  '-o', 'delete',
+                  run_as_root=True,
+                  check_exit_code=[0])
+
+
+def make_partitions(dev, root_mb, swap_mb, ephemeral_mb):
     """Create partitions for root and swap on a disk device."""
     # Lead in with 1MB to allow room for the partition table itself, otherwise
     # the way sfdisk adjusts doesn't shift the partition up to compensate, and
     # we lose the space.
     # http://bazaar.launchpad.net/~ubuntu-branches/ubuntu/raring/util-linux/
     # raring/view/head:/fdisk/sfdisk.c#L1940
-    stdin_command = ('1,%d,83;\n,%d,82;\n0,0;\n0,0;\n' % (root_mb, swap_mb))
+    if ephemeral_mb:
+        stdin_command = ('1,%d,83;\n,%d,82;\n,%d,83;\n0,0;\n' %
+                (ephemeral_mb, swap_mb, root_mb))
+    else:
+        stdin_command = ('1,%d,83;\n,%d,82;\n0,0;\n0,0;\n' %
+                (root_mb, swap_mb))
     utils.execute('sfdisk', '-uM', dev, process_input=stdin_command,
             run_as_root=True,
             attempts=3,
@@ -105,11 +118,11 @@ def dd(src, dst):
 
 def mkswap(dev, label='swap1'):
     """Execute mkswap on a device."""
-    utils.execute('mkswap',
-                  '-L', label,
-                  dev,
-                  run_as_root=True,
-                  check_exit_code=[0])
+    utils.mkfs('swap', dev, label)
+
+
+def mkfs_ephemeral(dev, ephemeral_format, label="ephemeral0"):
+    utils.mkfs(ephemeral_format, dev, label)
 
 
 def block_uuid(dev):
@@ -160,15 +173,38 @@ def get_image_mb(image_path):
     return image_mb
 
 
-def work_on_disk(dev, root_mb, swap_mb, image_path):
-    """Creates partitions and write an image to the root partition."""
-    root_part = "%s-part1" % dev
-    swap_part = "%s-part2" % dev
+def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
+                 image_path, preserve_ephemeral=False):
+    """Create partitions and copy an image to the root partition.
+
+    :param dev: Path for the device to work on.
+    :param root_mb: Size of the root partition in megabytes.
+    :param swap_mb: Size of the swap partition in megabytes.
+    :param ephemeral_mb: Size of the ephemeral partition in megabytes. If 0,
+        no ephemeral partition will be created.
+    :param ephemeral_format: The type of file system to format the ephemeral
+        partition.
+    :param image_path: Path for the instance's disk image.
+    :param preserve_ephemeral: If True, no filesystem is written to the
+        ephemeral block device, preserving whatever content it had (if the
+        partition table has not changed).
+
+    """
+    # NOTE(lucasagomes): When there's an ephemeral partition we want
+    # root to be last because that would allow root to resize and make it
+    # safer to do takeovernode with slightly larger images
+    if ephemeral_mb:
+        ephemeral_part = "%s-part1" % dev
+        swap_part = "%s-part2" % dev
+        root_part = "%s-part3" % dev
+    else:
+        root_part = "%s-part1" % dev
+        swap_part = "%s-part2" % dev
 
     if not is_block_device(dev):
         raise exception.InstanceDeployFailure(_("Parent device '%s' not found")
                                               % dev)
-    make_partitions(dev, root_mb, swap_mb)
+    make_partitions(dev, root_mb, swap_mb, ephemeral_mb)
 
     if not is_block_device(root_part):
         raise exception.InstanceDeployFailure(_("Root device '%s' not found")
@@ -176,8 +212,15 @@ def work_on_disk(dev, root_mb, swap_mb, image_path):
     if not is_block_device(swap_part):
         raise exception.InstanceDeployFailure(_("Swap device '%s' not found")
                                               % swap_part)
+    if ephemeral_mb and not is_block_device(ephemeral_part):
+        raise exception.InstanceDeployFailure(
+                         _("Ephemeral device '%s' not found") % ephemeral_part)
+
     dd(image_path, root_part)
     mkswap(swap_part)
+
+    if ephemeral_mb and not preserve_ephemeral:
+        mkfs_ephemeral(ephemeral_part, ephemeral_format)
 
     try:
         root_uuid = block_uuid(root_part)
@@ -188,8 +231,27 @@ def work_on_disk(dev, root_mb, swap_mb, image_path):
 
 
 def deploy(address, port, iqn, lun, image_path, pxe_config_path,
-           root_mb, swap_mb):
-    """All-in-one function to deploy a node."""
+           root_mb, swap_mb, ephemeral_mb, ephemeral_format,
+           preserve_ephemeral=False):
+    """All-in-one function to deploy a node.
+
+    :param address: The iSCSI IP address.
+    :param port: The iSCSI port number.
+    :param iqn: The iSCSI qualified name.
+    :param lun: The iSCSI logical unit number.
+    :param image_path: Path for the instance's disk image.
+    :param pxe_config_path: Path for the instance PXE config file.
+    :param root_mb: Size of the root partition in megabytes.
+    :param swap_mb: Size of the swap partition in megabytes.
+    :param ephemeral_mb: Size of the ephemeral partition in megabytes. If 0,
+        no ephemeral partition will be created.
+    :param ephemeral_format: The type of file system to format the ephemeral
+        partition.
+    :param preserve_ephemeral: If True, no filesystem is written to the
+        ephemeral block device, preserving whatever content it had (if the
+        partition table has not changed).
+
+    """
     dev = get_dev(address, port, iqn, lun)
     image_mb = get_image_mb(image_path)
     if image_mb > root_mb:
@@ -197,7 +259,9 @@ def deploy(address, port, iqn, lun, image_path, pxe_config_path,
     discovery(address, port)
     login_iscsi(address, port, iqn)
     try:
-        root_uuid = work_on_disk(dev, root_mb, swap_mb, image_path)
+        root_uuid = work_on_disk(dev, root_mb, swap_mb, ephemeral_mb,
+                                 ephemeral_format, image_path,
+                                 preserve_ephemeral)
     except processutils.ProcessExecutionError as err:
         with excutils.save_and_reraise_exception():
             LOG.error(_("Deploy to address %s failed.") % address)
@@ -210,6 +274,7 @@ def deploy(address, port, iqn, lun, image_path, pxe_config_path,
             LOG.error(e)
     finally:
         logout_iscsi(address, port, iqn)
+        delete_iscsi(address, port, iqn)
     switch_pxe_config(pxe_config_path, root_uuid)
     # Ensure the node started netcat on the port after POST the request.
     time.sleep(3)

@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
@@ -42,10 +41,17 @@ CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 VALID_BOOT_DEVICES = ['pxe', 'disk', 'safe', 'cdrom', 'bios']
+VALID_PRIV_LEVELS = ['ADMINISTRATOR', 'CALLBACK', 'OPERATOR', 'USER']
 
 
 @contextlib.contextmanager
 def _make_password_file(password):
+    """Makes a temporary file that contains the password.
+
+    :param password: the password
+    :returns: the absolute pathname of the temporary file
+    :raises: Exception from creating or writing to the temporary file
+    """
     try:
         fd, path = tempfile.mkstemp()
         os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
@@ -60,31 +66,59 @@ def _make_password_file(password):
 
 
 def _parse_driver_info(node):
+    """Gets the parameters required for ipmitool to access the node.
+
+    :param node: the Node of interest.
+    :returns: dictionary of parameters.
+    :raises: InvalidParameterValue if any required parameters are missing.
+
+    """
     info = node.get('driver_info', {})
-    address = info.get('ipmi_address', None)
-    username = info.get('ipmi_username', None)
-    password = info.get('ipmi_password', None)
-    port = info.get('ipmi_terminal_port', None)
+    address = info.get('ipmi_address')
+    username = info.get('ipmi_username')
+    password = info.get('ipmi_password')
+    port = info.get('ipmi_terminal_port')
+    priv_level = info.get('ipmi_priv_level', 'ADMINISTRATOR')
 
     if not address:
         raise exception.InvalidParameterValue(_(
             "IPMI address not supplied to IPMI driver."))
+
+    if priv_level not in VALID_PRIV_LEVELS:
+        valid_priv_lvls = ', '.join(VALID_PRIV_LEVELS)
+        raise exception.InvalidParameterValue(_(
+            "Invalid privilege level value:%(priv_level)s, the valid value"
+            " can be one of %(valid_levels)s") %
+            {'priv_level': priv_level, 'valid_levels': valid_priv_lvls})
 
     return {
             'address': address,
             'username': username,
             'password': password,
             'port': port,
-            'uuid': node.get('uuid')
+            'uuid': node.get('uuid'),
+            'priv_level': priv_level
            }
 
 
 def _exec_ipmitool(driver_info, command):
+    """Execute the ipmitool command.
+
+    This uses the lanplus interface to communicate with the BMC device driver.
+
+    :param driver_info: the ipmitool parameters for accessing a node.
+    :param command: the ipmitool command to be executed.
+    :returns: (stdout, stderr) from executing the command.
+    :raises: some Exception from making the password file or from executing
+        the command.
+
+    """
     args = ['ipmitool',
             '-I',
             'lanplus',
             '-H',
             driver_info['address'],
+            '-L', driver_info.get('priv_level')
             ]
 
     if driver_info['username']:
@@ -105,8 +139,13 @@ def _exec_ipmitool(driver_info, command):
 
 
 def _power_on(driver_info):
-    """Turn the power to this node ON."""
+    """Turn the power ON for this node.
 
+    :param driver_info: the ipmitool parameters for accessing a node.
+    :returns: one of ironic.common.states POWER_ON or ERROR.
+    :raises: IPMIFailure on an error from ipmitool (from _power_status call).
+
+    """
     # use mutable objects so the looped method can change them
     state = [None]
     retries = [0]
@@ -119,6 +158,8 @@ def _power_on(driver_info):
             raise loopingcall.LoopingCallDone()
 
         if retries[0] > CONF.ipmi.retry_timeout:
+            LOG.error(_('IPMI power on timed out after %(tries)s retries.'),
+                        {'tries': retries[0]})
             state[0] = states.ERROR
             raise loopingcall.LoopingCallDone()
         try:
@@ -138,8 +179,13 @@ def _power_on(driver_info):
 
 
 def _power_off(driver_info):
-    """Turn the power to this node OFF."""
+    """Turn the power OFF for this node.
 
+    :param driver_info: the ipmitool parameters for accessing a node.
+    :returns: one of ironic.common.states POWER_OFF or ERROR.
+    :raises: IPMIFailure on an error from ipmitool (from _power_status call).
+
+    """
     # use mutable objects so the looped method can change them
     state = [None]
     retries = [0]
@@ -152,6 +198,8 @@ def _power_off(driver_info):
             raise loopingcall.LoopingCallDone()
 
         if retries[0] > CONF.ipmi.retry_timeout:
+            LOG.error(_('IPMI power off timed out after %(tries)s retries.'),
+                        {'tries': retries[0]})
             state[0] = states.ERROR
             raise loopingcall.LoopingCallDone()
         try:
@@ -171,7 +219,22 @@ def _power_off(driver_info):
 
 
 def _power_status(driver_info):
-    out_err = _exec_ipmitool(driver_info, "power status")
+    """Get the power status for a node.
+
+    :param driver_info: the ipmitool access parameters for a node.
+    :returns: one of ironic.common.states POWER_OFF, POWER_ON or ERROR.
+    :raises: IPMIFailure on an error from ipmitool.
+
+    """
+    cmd = "power status"
+    try:
+        out_err = _exec_ipmitool(driver_info, cmd)
+    except Exception as e:
+        LOG.warning(_("IPMI power status failed for node %(node_id)s with "
+                      "error: %(error)s.")
+                    % {'node_id': driver_info['uuid'], 'error': e})
+        raise exception.IPMIFailure(cmd=cmd)
+
     if out_err[0] == "Chassis Power is on\n":
         return states.POWER_ON
     elif out_err[0] == "Chassis Power is off\n":
@@ -182,22 +245,43 @@ def _power_status(driver_info):
 
 class IPMIPower(base.PowerInterface):
 
-    def validate(self, node):
+    def validate(self, task, node):
         """Check that node['driver_info'] contains IPMI credentials.
 
+        :param task: a task from TaskManager.
         :param node: Single node object.
-        :raises: InvalidParameterValue
+        :raises: InvalidParameterValue if required ipmi parameters are missing.
+
         """
         _parse_driver_info(node)
 
     def get_power_state(self, task, node):
-        """Get the current power state."""
+        """Get the current power state.
+
+        :param task: a TaskManager instance.
+        :param node: The Node.
+        :returns: one of ironic.common.states POWER_OFF, POWER_ON or ERROR.
+        :raises: InvalidParameterValue if required ipmi parameters are missing.
+        :raises: IPMIFailure on an error from ipmitool (from _power_status
+            call).
+
+        """
         driver_info = _parse_driver_info(node)
         return _power_status(driver_info)
 
     @task_manager.require_exclusive_lock
     def set_power_state(self, task, node, pstate):
-        """Turn the power on or off."""
+        """Turn the power on or off.
+
+        :param task: a TaskManager instance.
+        :param node: The Node.
+        :param pstate: The desired power state, one of ironic.common.states
+            POWER_ON, POWER_OFF.
+        :raises: InvalidParameterValue if required ipmi parameters are missing
+            or if an invalid power state was specified.
+        :raises: PowerStateFailure if the power couldn't be set to pstate.
+
+        """
         driver_info = _parse_driver_info(node)
 
         if pstate == states.POWER_ON:
@@ -213,13 +297,24 @@ class IPMIPower(base.PowerInterface):
 
     @task_manager.require_exclusive_lock
     def reboot(self, task, node):
-        """Cycles the power to a node."""
+        """Cycles the power to a node.
+
+        :param task: a TaskManager instance.
+        :param node: The Node.
+        :raises: InvalidParameterValue if required ipmi parameters are missing.
+        :raises: PowerStateFailure if the final state of the node is not
+            POWER_ON.
+
+        """
         driver_info = _parse_driver_info(node)
         _power_off(driver_info)
         state = _power_on(driver_info)
 
         if state != states.POWER_ON:
             raise exception.PowerStateFailure(pstate=states.POWER_ON)
+
+
+class VendorPassthru(base.VendorInterface):
 
     @task_manager.require_exclusive_lock
     def _set_boot_device(self, task, node, device, persistent=False):
@@ -230,7 +325,8 @@ class IPMIPower(base.PowerInterface):
         :param device: Boot device. One of [pxe, disk, cdrom, safe, bios].
         :param persistent: Whether to set next-boot, or make the change
             permanent. Default: False.
-        :raises: InvalidParameterValue if an invalid boot device is specified.
+        :raises: InvalidParameterValue if an invalid boot device is specified
+            or if required ipmi parameters are missing.
         :raises: IPMIFailure on an error from ipmitool.
 
         """
@@ -246,3 +342,25 @@ class IPMIPower(base.PowerInterface):
             # TODO(deva): validate (out, err) and add unit test for failure
         except Exception:
             raise exception.IPMIFailure(cmd=cmd)
+
+    def validate(self, node, **kwargs):
+        method = kwargs['method']
+        if method == 'set_boot_device':
+            device = kwargs.get('device', None)
+            if device not in VALID_BOOT_DEVICES:
+                raise exception.InvalidParameterValue(_(
+                    "Invalid boot device %s specified.") % device)
+        else:
+            raise exception.InvalidParameterValue(_(
+                "Unsupported method (%s) passed to IPMItool driver.")
+                % method)
+
+        return True
+
+    def vendor_passthru(self, task, node, **kwargs):
+        method = kwargs['method']
+        if method == 'set_boot_device':
+            return self._set_boot_device(
+                        task, node,
+                        kwargs.get('device'),
+                        kwargs.get('persistent', False))

@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # -*- encoding: utf-8 -*-
 
 # Copyright © 2012 New Dream Network, LLC (DreamHost)
@@ -28,7 +27,7 @@ from ironic.common import policy
 auth_opts = [
     cfg.StrOpt('auth_strategy',
         default='keystone',
-        help='Method to use for auth: noauth or keystone.'),
+        help='Method to use for authentication: noauth or keystone.'),
     ]
 
 CONF = cfg.CONF

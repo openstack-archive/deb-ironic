@@ -1,6 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-# -*- encoding: utf-8 -*-
-#
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
 #    a copy of the License at
@@ -13,19 +10,26 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from sqlalchemy import Table, Column, Text, DateTime, MetaData
+"""Add provision_updated_at
+
+Revision ID: 21b331f883ef
+Revises: 2581ebaf0cb2
+Create Date: 2014-02-19 13:45:30.150632
+
+"""
+
+# revision identifiers, used by Alembic.
+revision = '21b331f883ef'
+down_revision = '2581ebaf0cb2'
+
+from alembic import op
+import sqlalchemy as sa
 
 
-def upgrade(migrate_engine):
-    meta = MetaData()
-    meta.bind = migrate_engine
-
-    chassis = Table('chassis', meta, autoload=True)
-
-    chassis.create_column(Column('extra', Text))
-    chassis.create_column(Column('created_at', DateTime))
-    chassis.create_column(Column('updated_at', DateTime))
+def upgrade():
+    op.add_column('nodes', sa.Column('provision_updated_at', sa.DateTime(),
+                  nullable=True))
 
 
-def downgrade(migrate_engine):
-    raise NotImplementedError('Downgrade from version 007 is unsupported.')
+def downgrade():
+    op.drop_column('nodes', 'provision_updated_at')

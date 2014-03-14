@@ -1,4 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
 # coding=utf-8
 #
 #
@@ -14,11 +13,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import datetime
+
 import mock
 
 from ironic.db import api as db_api
 from ironic.db.sqlalchemy import models
 from ironic import objects
+from ironic.openstack.common import timeutils
 from ironic.tests.db import base
 from ironic.tests.db import utils
 
@@ -64,12 +66,28 @@ class TestNodeObject(base.DbTestCase):
         with mock.patch.object(self.dbapi, 'get_node', side_effect=returns,
                                autospec=True) as mock_get_node:
             n = objects.Node.get_by_uuid(self.context, uuid)
-            self.assertEqual(n.properties, {"fake": "first"})
+            self.assertEqual({"fake": "first"}, n.properties)
             n.refresh()
-            self.assertEqual(n.properties, {"fake": "second"})
-            self.assertEqual(mock_get_node.call_args_list, expected)
+            self.assertEqual({"fake": "second"}, n.properties)
+            self.assertEqual(expected, mock_get_node.call_args_list)
 
     def test_objectify(self):
+        def _get_db_node():
+            n = models.Node()
+            n.update(self.fake_node)
+            return n
+
+        @objects.objectify(objects.Node)
+        def _convert_db_node():
+            return _get_db_node()
+
+        self.assertIsInstance(_get_db_node(), models.Node)
+        self.assertIsInstance(_convert_db_node(), objects.Node)
+
+    def test_objectify_deserialize_provision_updated_at(self):
+        dt = timeutils.isotime(datetime.datetime(2000, 1, 1, 0, 0))
+        self.fake_node['provision_updated_at'] = dt
+
         def _get_db_node():
             n = models.Node()
             n.update(self.fake_node)
