@@ -23,6 +23,11 @@ override_dh_auto_install:
 	dh_auto_install -O--buildsystem=python_distutils
 	install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
 
+override_dh_auto_test:
+ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
+	PYTHONPATH=. python setup.py testr --slowest
+endif
+
 override_dh_sphinxdoc:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	PYTHONPATH=$(CURDIR) sphinx-build doc/source $(CURDIR)/debian/ironic-doc/usr/share/doc/ironic-doc/html
