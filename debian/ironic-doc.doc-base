@@ -1,0 +1,9 @@
+Document: ironic-doc
+Title: Ironic Documentation
+Author: OpenStack
+Abstract: Sphinx documentation for Ironic
+Section: Programming/Python
+
+Format: HTML
+Index: /usr/share/doc/ironic-doc/html/index.html
+Files: /usr/share/doc/ironic-doc/html/*
