@@ -25,7 +25,10 @@ override_dh_auto_install:
 
 override_dh_auto_test:
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
-	PYTHONPATH=. python setup.py testr --slowest
+	TEMP_REZ=`mktemp -t` ; \
+		PYTHONPATH=. python setup.py testr --slowest --testr-args='--subunit  ' | tee $$TEMP_REZ | subunit2pyunit ; \
+		cat $$TEMP_REZ | subunit-stats ; \
+		rm -f $$TEMP_REZ
 endif
 
 override_dh_sphinxdoc:

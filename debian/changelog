@@ -1,3 +1,9 @@
+ironic (2014.1~b3-2) experimental; urgency=low
+
+  * Fixed subunit output.
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 16 Mar 2014 15:02:05 +0800
+
 ironic (2014.1~b3-1) experimental; urgency=low
 
   * Initial release. (Closes: #730484)
