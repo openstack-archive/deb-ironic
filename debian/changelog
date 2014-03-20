@@ -1,7 +1,12 @@
+ironic (2014.1~b3-3) experimental; urgency=medium
+
+  * Changed section of ironic-doc to the doc section.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 20 Mar 2014 02:35:21 +0000
+
 ironic (2014.1~b3-2) experimental; urgency=low
 
   * Fixed subunit output.
-  * Changed section of ironic-doc to the doc section.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 16 Mar 2014 15:02:05 +0800
 
