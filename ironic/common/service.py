@@ -20,10 +20,11 @@ import socket
 
 from oslo.config import cfg
 
+from ironic.common import config
 from ironic.openstack.common import context
+from ironic.openstack.common import importutils
 from ironic.openstack.common import log
 from ironic.openstack.common import periodic_task
-from ironic.openstack.common import rpc
 from ironic.openstack.common.rpc import service as rpc_service
 
 
@@ -48,20 +49,28 @@ class PeriodicService(rpc_service.Service, periodic_task.PeriodicTasks):
     def start(self):
         super(PeriodicService, self).start()
         admin_context = context.RequestContext('admin', 'admin', is_admin=True)
-        self.tg.add_timer(cfg.CONF.periodic_interval,
-                          self.manager.periodic_tasks,
-                          context=admin_context)
+        self.tg.add_dynamic_timer(
+                self.manager.periodic_tasks,
+                periodic_interval_max=cfg.CONF.periodic_interval,
+                context=admin_context)
 
 
 def prepare_service(argv=[]):
-    rpc.set_defaults(control_exchange='ironic')
+    config.parse_args(argv)
     cfg.set_defaults(log.log_opts,
                      default_log_levels=['amqplib=WARN',
                                          'qpid.messaging=INFO',
                                          'sqlalchemy=WARN',
                                          'keystoneclient=INFO',
                                          'stevedore=INFO',
-                                         'eventlet.wsgi.server=WARN'
+                                         'eventlet.wsgi.server=WARN',
+                                         'iso8601=WARN',
+                                         'paramiko=WARN',
                                          ])
-    cfg.CONF(argv[1:], project='ironic')
     log.setup('ironic')
+
+
+def load_manager(manager_modulename, manager_classname, host):
+    manager_module = importutils.import_module(manager_modulename)
+    manager_class = getattr(manager_module, manager_classname)
+    return manager_class(host, manager_module.MANAGER_TOPIC)

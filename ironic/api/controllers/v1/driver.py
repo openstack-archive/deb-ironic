@@ -16,13 +16,13 @@
 import pecan
 from pecan import rest
 
+import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
 
-from ironic.api.controllers.v1 import base
-from ironic.openstack.common import log
-
-LOG = log.getLogger(__name__)
+from ironic.api.controllers import base
+from ironic.api.controllers import link
+from ironic.common import exception
 
 
 class Driver(base.APIBase):
@@ -34,12 +34,30 @@ class Driver(base.APIBase):
     hosts = [wtypes.text]
     "A list of active conductors that support this driver"
 
+    links = wsme.wsattr([link.Link], readonly=True)
+    "A list containing self and bookmark links"
+
     @classmethod
-    def convert(cls, name, hosts):
+    def convert_with_links(cls, name, hosts):
         driver = Driver()
         driver.name = name
         driver.hosts = hosts
+        driver.links = [
+            link.Link.make_link('self',
+                                pecan.request.host_url,
+                                'drivers', name),
+            link.Link.make_link('bookmark',
+                                 pecan.request.host_url,
+                                 'drivers', name,
+                                 bookmark=True)
+        ]
         return driver
+
+    @classmethod
+    def sample(cls):
+        sample = cls(name="sample-driver",
+                     hosts=["fake-host"])
+        return sample
 
 
 class DriverList(base.APIBase):
@@ -49,11 +67,18 @@ class DriverList(base.APIBase):
     "A list containing drivers objects"
 
     @classmethod
-    def convert(cls, drivers):
+    def convert_with_links(cls, drivers):
         collection = DriverList()
-        collection.drivers = [Driver.convert(dname, list(drivers[dname]))
-                              for dname in drivers]
+        collection.drivers = [
+            Driver.convert_with_links(dname, list(drivers[dname]))
+            for dname in drivers]
         return collection
+
+    @classmethod
+    def sample(cls):
+        sample = cls()
+        sample.drivers = [Driver.sample()]
+        return sample
 
 
 class DriversController(rest.RestController):
@@ -68,4 +93,20 @@ class DriversController(rest.RestController):
         #              This is a result of a bug in sphinxcontrib-pecanwsme
         # https://github.com/dreamhost/sphinxcontrib-pecanwsme/issues/8
         driver_list = pecan.request.dbapi.get_active_driver_dict()
-        return DriverList.convert(driver_list)
+        return DriverList.convert_with_links(driver_list)
+
+    @wsme_pecan.wsexpose(Driver, wtypes.text)
+    def get_one(self, driver_name):
+        """Retrieve a single driver.
+        """
+        # NOTE(russell_h): There is no way to make this more efficient than
+        # retrieving a list of drivers using the current sqlalchemy schema, but
+        # this path must be exposed for Pecan to route any paths we might
+        # choose to expose below it.
+
+        driver_dict = pecan.request.dbapi.get_active_driver_dict()
+        for name, hosts in driver_dict.iteritems():
+            if name == driver_name:
+                return Driver.convert_with_links(name, list(hosts))
+
+        raise exception.DriverNotFound(driver_name=driver_name)

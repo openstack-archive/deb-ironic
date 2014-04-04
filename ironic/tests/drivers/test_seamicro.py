@@ -15,7 +15,6 @@
 import uuid
 
 import mock
-from seamicroclient import exceptions as seamicro_client_exception
 
 from ironic.common import driver_factory
 from ironic.common import exception
@@ -23,12 +22,17 @@ from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.db import api as dbapi
 from ironic.drivers.modules import seamicro
+from ironic.openstack.common import importutils
 from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
 
 INFO_DICT = db_utils.get_test_seamicro_info()
+
+seamicroclient = importutils.try_import("seamicroclient")
+if seamicroclient:
+    from seamicroclient import exceptions as seamicro_client_exception
 
 
 class Fake_Server():
@@ -137,6 +141,11 @@ class SeaMicroPrivateMethodsTestCase(base.TestCase):
         self.Server = Fake_Server
         self.Volume = Fake_Volume
         self.Pool = Fake_Pool
+        self.config(action_timeout=0, group='seamicro')
+        self.config(max_retry=2, group='seamicro')
+
+        self.patcher = mock.patch('eventlet.greenthread.sleep')
+        self.mock_sleep = self.patcher.start()
 
     def _create_test_node(self, **kwargs):
         n = db_utils.get_test_node(**kwargs)
@@ -163,7 +172,7 @@ class SeaMicroPrivateMethodsTestCase(base.TestCase):
     @mock.patch.object(seamicro, "_get_server")
     def test__power_on_good(self, mock_get_server):
         mock_get_server.return_value = self.Server(active=False)
-        pstate = seamicro._power_on(self.node, timeout=2)
+        pstate = seamicro._power_on(self.node)
         self.assertEqual(states.POWER_ON, pstate)
 
     @mock.patch.object(seamicro, "_get_server")
@@ -174,13 +183,13 @@ class SeaMicroPrivateMethodsTestCase(base.TestCase):
         server = self.Server(active=False)
         server.power_on = fake_power_on
         mock_get_server.return_value = server
-        pstate = seamicro._power_on(self.node, timeout=2)
+        pstate = seamicro._power_on(self.node)
         self.assertEqual(states.ERROR, pstate)
 
     @mock.patch.object(seamicro, "_get_server")
     def test__power_off_good(self, mock_get_server):
         mock_get_server.return_value = self.Server(active=True)
-        pstate = seamicro._power_off(self.node, timeout=2)
+        pstate = seamicro._power_off(self.node)
         self.assertEqual(states.POWER_OFF, pstate)
 
     @mock.patch.object(seamicro, "_get_server")
@@ -190,13 +199,13 @@ class SeaMicroPrivateMethodsTestCase(base.TestCase):
         server = self.Server(active=True)
         server.power_off = fake_power_off
         mock_get_server.return_value = server
-        pstate = seamicro._power_off(self.node, timeout=2)
+        pstate = seamicro._power_off(self.node)
         self.assertEqual(states.ERROR, pstate)
 
     @mock.patch.object(seamicro, "_get_server")
     def test__reboot_good(self, mock_get_server):
         mock_get_server.return_value = self.Server(active=True)
-        pstate = seamicro._reboot(self.node, timeout=2)
+        pstate = seamicro._reboot(self.node)
         self.assertEqual(states.POWER_ON, pstate)
 
     @mock.patch.object(seamicro, "_get_server")
@@ -206,7 +215,7 @@ class SeaMicroPrivateMethodsTestCase(base.TestCase):
         server = self.Server(active=False)
         server.reset = fake_reboot
         mock_get_server.return_value = server
-        pstate = seamicro._reboot(self.node, timeout=2)
+        pstate = seamicro._reboot(self.node)
         self.assertEqual(states.ERROR, pstate)
 
     @mock.patch.object(seamicro, "_get_volume")
@@ -251,6 +260,8 @@ class SeaMicroPowerDriverTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(SeaMicroPowerDriverTestCase, self).setUp()
+        if not seamicroclient:
+            self.skipTest("Seamicroclient library not found")
         mgr_utils.mock_the_extension_manager(driver='fake_seamicro')
         self.driver = driver_factory.get_driver('fake_seamicro')
         self.node = db_utils.get_test_node(driver='fake_seamicro',
@@ -351,8 +362,8 @@ class SeaMicroPowerDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, [self.node['uuid']],
                                   shared=True) as task:
             for method in seamicro.VENDOR_PASSTHRU_METHODS:
-                task.resources[0].driver.vendor.validate(self.node,
-                                                         **{'method': method})
+                task.resources[0].driver.vendor.validate(
+                        task, self.node, **{'method': method})
 
     def test_vendor_passthru_validate_fail(self):
         with task_manager.acquire(self.context, [self.node['uuid']],
@@ -491,7 +502,7 @@ class SeaMicroPowerDriverTestCase(db_base.DbTestCase):
         mock_get_server.return_value = self.Server(active="true")
         with task_manager.acquire(self.context, [info['uuid']],
                                   shared=False) as task:
-            kwargs = {'boot_device': boot_device, 'method': 'set_boot_device'}
+            kwargs = {'device': boot_device, 'method': 'set_boot_device'}
             task.resources[0].driver.vendor.\
                 vendor_passthru(task, self.node, **kwargs)
         mock_get_server.assert_called_once_with(info)
@@ -512,7 +523,7 @@ class SeaMicroPowerDriverTestCase(db_base.DbTestCase):
         mock_get_server.return_value = self.Server(active="true")
         with task_manager.acquire(self.context, [info['uuid']],
                                   shared=False) as task:
-            kwargs = {'boot_device': boot_device, 'method': 'set_boot_device'}
+            kwargs = {'device': boot_device, 'method': 'set_boot_device'}
             self.assertRaises(exception.InvalidParameterValue,
                               task.resources[0].driver.vendor.
                               vendor_passthru, task, self.node, **kwargs)
@@ -529,7 +540,7 @@ class SeaMicroPowerDriverTestCase(db_base.DbTestCase):
         mock_get_server.return_value = server
         with task_manager.acquire(self.context, [info['uuid']],
                                   shared=False) as task:
-            kwargs = {'boot_device': boot_device, 'method': 'set_boot_device'}
+            kwargs = {'device': boot_device, 'method': 'set_boot_device'}
             self.assertRaises(exception.IronicException,
                               task.resources[0].driver.vendor.
                               vendor_passthru, task, self.node, **kwargs)

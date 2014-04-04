@@ -87,6 +87,10 @@ def _get_command_sets(virt_type):
                 "grep macAddress | awk -F '\"' '{print $2}' || true"),
         }
     elif virt_type == "virsh":
+        # NOTE(NobodyCam): changes to the virsh commands will impact CI
+        #                  see https://review.openstack.org/83906
+        #                  Change-Id: I160e4202952b7551b855dc7d91784d6a184cb0ed
+        #                  for more detail.
         virsh_cmds = {
             'base_cmd': '/usr/bin/virsh',
             'start_cmd': 'start {_NodeName_}',
@@ -158,6 +162,7 @@ def _parse_driver_info(node):
     except ValueError:
         raise exception.InvalidParameterValue(_(
             "SSHPowerDriver requires ssh_port to be integer value"))
+    key_contents = info.get('ssh_key_contents')
     key_filename = info.get('ssh_key_filename')
     virt_type = info.get('ssh_virt_type')
 
@@ -180,13 +185,17 @@ def _parse_driver_info(node):
     if not address or not username:
         raise exception.InvalidParameterValue(_(
             "SSHPowerDriver requires both address and username be set."))
+    # Only one credential may be set (avoids complexity around having
+    # precedence etc).
+    if len(filter(None, (password, key_filename, key_contents))) != 1:
+        raise exception.InvalidParameterValue(_(
+            "SSHPowerDriver requires one and only one of password, "
+            "key_contents and key_filename to be set."))
     if password:
         res['password'] = password
+    elif key_contents:
+        res['key_contents'] = key_contents
     else:
-        if not key_filename:
-            raise exception.InvalidParameterValue(_(
-                "SSHPowerDriver requires either password or "
-                "key_filename be set."))
         if not os.path.isfile(key_filename):
             raise exception.InvalidParameterValue(_(
                 "SSH key file %s not found.") % key_filename)

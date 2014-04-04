@@ -28,7 +28,6 @@ from ironic.conductor import rpcapi as conductor_rpcapi
 from ironic.db import api as dbapi
 from ironic import objects
 from ironic.openstack.common import context
-from ironic.openstack.common import jsonutils as json
 from ironic.tests.db import base
 from ironic.tests.db import utils as dbutils
 
@@ -41,8 +40,7 @@ class RPCAPITestCase(base.DbTestCase):
         super(RPCAPITestCase, self).setUp()
         self.context = context.get_admin_context()
         self.dbapi = dbapi.get_instance()
-        self.fake_node = json.to_primitive(dbutils.get_test_node(
-                driver='fake-driver'))
+        self.fake_node = dbutils.get_test_node(driver='fake-driver')
         self.fake_node_obj = objects.Node._from_db_object(
                                                     objects.Node(),
                                                     self.fake_node)
@@ -117,27 +115,20 @@ class RPCAPITestCase(base.DbTestCase):
                           new_state=states.POWER_ON)
 
     def test_pass_vendor_info(self):
-        ctxt = context.get_admin_context()
-        rpcapi = conductor_rpcapi.ConductorAPI(topic='fake-topic')
-        expected_retval = 'hello world'
-
-        def _fake_rpc_method(*args, **kwargs):
-                return expected_retval
-
-        self.useFixture(fixtures.MonkeyPatch(
-                'ironic.openstack.common.rpc.call', _fake_rpc_method))
-        retval = rpcapi.vendor_passthru(ctxt, node_id=self.fake_node['uuid'],
-                                    driver_method='foo', info={'bar': 'baz'})
-        self.assertEqual(expected_retval, retval)
+        self._test_rpcapi('vendor_passthru',
+                          'call',
+                          node_id=self.fake_node['uuid'],
+                          driver_method='test-driver-method',
+                          info={"test_info": "test_value"})
 
     def test_do_node_deploy(self):
         self._test_rpcapi('do_node_deploy',
-                          'cast',
+                          'call',
                           node_id=self.fake_node['uuid'])
 
     def test_do_node_tear_down(self):
         self._test_rpcapi('do_node_tear_down',
-                          'cast',
+                          'call',
                           node_id=self.fake_node['uuid'])
 
     def test_validate_driver_interfaces(self):
@@ -163,6 +154,12 @@ class RPCAPITestCase(base.DbTestCase):
 
     def test_set_console_mode(self):
         self._test_rpcapi('set_console_mode',
-                          'cast',
+                          'call',
                           node_id=self.fake_node['uuid'],
                           enabled=True)
+
+    def test_update_port(self):
+        fake_port = dbutils.get_test_port()
+        self._test_rpcapi('update_port',
+                          'call',
+                          port_obj=fake_port)

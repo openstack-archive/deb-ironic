@@ -58,7 +58,9 @@ class BaseDriver(object):
     """
 
     rescue = None
-    standard_interfaces.append('rescue')
+    # NOTE(deva): hide rescue from the interface list in Icehouse
+    #             because the API for this has not been created yet.
+    # standard_interfaces.append('rescue')
     """`Standard` attribute for accessing rescue features.
 
     A reference to an instance of :class:RescueInterface.
@@ -306,7 +308,9 @@ class VendorInterface(object):
         :param task: a task from TaskManager.
         :param node: a single Node.
         :param kwargs: info for action.
-        :raises: InvalidParameterValue
+        :raises: UnsupportedDriverExtension if 'method' can not be mapped to
+                 the supported interfaces.
+        :raises: InvalidParameterValue if **kwargs does not contain 'method'.
         """
 
     @abc.abstractmethod
@@ -316,4 +320,8 @@ class VendorInterface(object):
         :param task: a task from TaskManager.
         :param node: a single Node.
         :param kwargs: info for action.
+
+        :raises: UnsupportedDriverExtension if 'method' can not be mapped to
+                 the supported interfaces.
+        :raises: InvalidParameterValue if **kwargs does not contain 'method'.
         """

@@ -24,9 +24,9 @@ import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
 
-from ironic.api.controllers.v1 import base
+from ironic.api.controllers import base
+from ironic.api.controllers import link
 from ironic.api.controllers.v1 import collection
-from ironic.api.controllers.v1 import link
 from ironic.api.controllers.v1 import port
 from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils as api_utils
@@ -34,15 +34,11 @@ from ironic.common import exception
 from ironic.common import states as ir_states
 from ironic.common import utils
 from ironic import objects
-from ironic.openstack.common import excutils
-from ironic.openstack.common import log
 
 
 CONF = cfg.CONF
 CONF.import_opt('heartbeat_timeout', 'ironic.conductor.manager',
                 group='conductor')
-
-LOG = log.getLogger(__name__)
 
 
 class NodePatchType(types.JsonPatchType):
@@ -113,6 +109,17 @@ class NodeStates(base.APIBase):
         for attr in attr_list:
             setattr(states, attr, getattr(rpc_node, attr))
         return states
+
+    @classmethod
+    def sample(cls):
+        sample = cls(target_power_state=ir_states.POWER_ON,
+                     target_provision_state=ir_states.ACTIVE,
+                     last_error=None,
+                     console_enabled=False,
+                     provision_updated_at=None,
+                     power_state=ir_states.POWER_ON,
+                     provision_state=None)
+        return sample
 
 
 class NodeStatesController(rest.RestController):
@@ -191,16 +198,24 @@ class NodeStatesController(rest.RestController):
         rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
 
-        if rpc_node.target_provision_state is not None:
-            msg = _('Node %s is already being provisioned.') % rpc_node['uuid']
-            LOG.exception(msg)
-            raise wsme.exc.ClientSideError(msg, status_code=409)  # Conflict
-
         if target == rpc_node.provision_state:
             msg = (_("Node %(node)s is already in the '%(state)s' state.") %
                    {'node': rpc_node['uuid'], 'state': target})
-            LOG.exception(msg)
             raise wsme.exc.ClientSideError(msg, status_code=400)
+
+        if target == ir_states.ACTIVE:
+            processing = rpc_node.target_provision_state is not None
+        elif target == ir_states.DELETED:
+            processing = (rpc_node.target_provision_state is not None and
+                        rpc_node.provision_state != ir_states.DEPLOYWAIT)
+        else:
+            raise exception.InvalidStateRequested(state=target, node=node_uuid)
+
+        if processing:
+            msg = (_('Node %s is already being provisioned or decommissioned.')
+                   % rpc_node.uuid)
+            raise wsme.exc.ClientSideError(msg, status_code=409)  # Conflict
+
         # Note that there is a race condition. The node state(s) could change
         # by the time the RPC call is made and the TaskManager manager gets a
         # lock.
@@ -211,8 +226,6 @@ class NodeStatesController(rest.RestController):
         elif target == ir_states.DELETED:
             pecan.request.rpcapi.do_node_tear_down(
                     pecan.request.context, node_uuid, topic)
-        else:
-            raise exception.InvalidStateRequested(state=target, node=node_uuid)
         # FIXME(lucasagomes): Currently WSME doesn't support returning
         # the Location header. Once it's implemented we should use the
         # Location to point to the /states subresource of this node so
@@ -605,11 +618,8 @@ class NodesController(rest.RestController):
             e.code = 400
             raise e
 
-        try:
-            new_node = pecan.request.dbapi.create_node(node.as_dict())
-        except Exception as e:
-            with excutils.save_and_reraise_exception():
-                LOG.exception(e)
+        new_node = pecan.request.dbapi.create_node(node.as_dict())
+
         return Node.convert_with_links(new_node)
 
     @wsme.validate(types.uuid, [NodePatchType])
@@ -656,12 +666,8 @@ class NodesController(rest.RestController):
             e.code = 400
             raise e
 
-        try:
-            new_node = pecan.request.rpcapi.update_node(
-                    pecan.request.context, rpc_node, topic)
-        except Exception as e:
-            with excutils.save_and_reraise_exception():
-                LOG.exception(e)
+        new_node = pecan.request.rpcapi.update_node(
+                         pecan.request.context, rpc_node, topic)
 
         return Node.convert_with_links(new_node)
 

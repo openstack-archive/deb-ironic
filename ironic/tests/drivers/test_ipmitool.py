@@ -41,7 +41,7 @@ from ironic.tests.db import utils as db_utils
 
 CONF = cfg.CONF
 
-INFO_DICT = db_utils.get_test_impi_info()
+INFO_DICT = db_utils.get_test_ipmi_info()
 
 
 class IPMIToolPrivateMethodTestCase(base.TestCase):
@@ -239,7 +239,8 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
                               self.info)
             mock_exec.assert_called_once_with(self.info, "power status")
 
-    def test__power_on_max_retries(self):
+    @mock.patch('eventlet.greenthread.sleep')
+    def test__power_on_max_retries(self, sleep_mock):
         self.config(retry_timeout=2, group='ipmi')
 
         def side_effect(driver_info, command):
@@ -251,9 +252,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
                                autospec=True) as mock_exec:
             mock_exec.side_effect = side_effect
 
-            expected = [mock.call(self.info, "power status"),
-                        mock.call(self.info, "power on"),
-                        mock.call(self.info, "power status"),
+            expected = [mock.call(self.info, "power on"),
                         mock.call(self.info, "power status"),
                         mock.call(self.info, "power status")]
 
@@ -458,3 +457,21 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                                    device='pxe')
             boot_mock.assert_called_once_with(task, self.node,
                                               'pxe', False)
+
+    @mock.patch.object(ipmi, '_exec_ipmitool')
+    def test_validate_ok(self, exec_mock):
+        exec_mock.return_value = ('System GUID: fake', '')
+        with task_manager.acquire(self.context,
+                                  [self.node['uuid']]) as task:
+            task.driver.power.validate(task, task.node)
+            exec_mock.assert_called_once()
+
+    @mock.patch.object(ipmi, '_exec_ipmitool')
+    def test_validate_fail(self, exec_mock):
+        exec_mock.side_effect = Exception
+        with task_manager.acquire(self.context,
+                                  [self.node['uuid']]) as task:
+            self.assertRaises(exception.InvalidParameterValue,
+                              task.driver.power.validate, task,
+                              task.node)
+            exec_mock.assert_called_once()

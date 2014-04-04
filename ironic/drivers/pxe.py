@@ -17,12 +17,15 @@
 PXE Driver and supporting meta-classes.
 """
 
+from ironic.common import exception
 from ironic.drivers import base
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules import pxe
 from ironic.drivers.modules import seamicro
 from ironic.drivers.modules import ssh
+from ironic.drivers import utils
+from ironic.openstack.common import importutils
 
 
 class PXEAndIPMIToolDriver(base.BaseDriver):
@@ -37,8 +40,11 @@ class PXEAndIPMIToolDriver(base.BaseDriver):
     def __init__(self):
         self.power = ipmitool.IPMIPower()
         self.deploy = pxe.PXEDeploy()
-        self.rescue = self.deploy
-        self.vendor = pxe.VendorPassthru()
+        self.pxe_vendor = pxe.VendorPassthru()
+        self.ipmi_vendor = ipmitool.VendorPassthru()
+        self.mapping = {'pass_deploy_info': self.pxe_vendor,
+                        'set_boot_device': self.ipmi_vendor}
+        self.vendor = utils.MixinVendorInterface(self.mapping)
 
 
 class PXEAndSSHDriver(base.BaseDriver):
@@ -56,7 +62,6 @@ class PXEAndSSHDriver(base.BaseDriver):
     def __init__(self):
         self.power = ssh.SSHPower()
         self.deploy = pxe.PXEDeploy()
-        self.rescue = self.deploy
         self.vendor = pxe.VendorPassthru()
 
 
@@ -74,8 +79,11 @@ class PXEAndIPMINativeDriver(base.BaseDriver):
     def __init__(self):
         self.power = ipminative.NativeIPMIPower()
         self.deploy = pxe.PXEDeploy()
-        self.rescue = self.deploy
-        self.vendor = pxe.VendorPassthru()
+        self.pxe_vendor = pxe.VendorPassthru()
+        self.ipmi_vendor = ipminative.VendorPassthru()
+        self.mapping = {'pass_deploy_info': self.pxe_vendor,
+                        'set_boot_device': self.ipmi_vendor}
+        self.vendor = utils.MixinVendorInterface(self.mapping)
 
 
 class PXEAndSeaMicroDriver(base.BaseDriver):
@@ -90,10 +98,14 @@ class PXEAndSeaMicroDriver(base.BaseDriver):
     """
 
     def __init__(self):
+        if not importutils.try_import('seamicroclient'):
+            raise exception.DriverNotFound('PXEAndSeaMicroDriver')
         self.power = seamicro.Power()
         self.deploy = pxe.PXEDeploy()
-        self.rescue = self.deploy
         self.seamicro_vendor = seamicro.VendorPassthru()
         self.pxe_vendor = pxe.VendorPassthru()
-        self.vendor = seamicro.SeaMicroPXEMultipleVendorInterface(
-            self.seamicro_vendor, self.pxe_vendor)
+        self.mapping = {'pass_deploy_info': self.pxe_vendor,
+                        'attach_volume': self.seamicro_vendor,
+                        'set_boot_device': self.seamicro_vendor,
+                        'set_node_vlan_id': self.seamicro_vendor}
+        self.vendor = utils.MixinVendorInterface(self.mapping)

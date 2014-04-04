@@ -17,6 +17,7 @@
 Fake drivers used in testing.
 """
 
+from ironic.common import exception
 from ironic.drivers import base
 from ironic.drivers.modules import fake
 from ironic.drivers.modules import ipminative
@@ -24,6 +25,8 @@ from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules import pxe
 from ironic.drivers.modules import seamicro
 from ironic.drivers.modules import ssh
+from ironic.drivers import utils
+from ironic.openstack.common import importutils
 
 
 class FakeDriver(base.BaseDriver):
@@ -33,9 +36,11 @@ class FakeDriver(base.BaseDriver):
         self.power = fake.FakePower()
         self.deploy = fake.FakeDeploy()
 
-        a = fake.FakeVendorA()
-        b = fake.FakeVendorB()
-        self.vendor = fake.MultipleVendorInterface(a, b)
+        self.a = fake.FakeVendorA()
+        self.b = fake.FakeVendorB()
+        self.mapping = {'first_method': self.a,
+                        'second_method': self.b}
+        self.vendor = utils.MixinVendorInterface(self.mapping)
         self.console = fake.FakeConsole()
 
 
@@ -54,7 +59,6 @@ class FakePXEDriver(base.BaseDriver):
     def __init__(self):
         self.power = fake.FakePower()
         self.deploy = pxe.PXEDeploy()
-        self.rescue = self.deploy
         self.vendor = pxe.VendorPassthru()
 
 
@@ -79,10 +83,8 @@ class FakeSeaMicroDriver(base.BaseDriver):
     """Fake SeaMicro driver."""
 
     def __init__(self):
+        if not importutils.try_import('seamicroclient'):
+            raise exception.DriverNotFound('FakeSeaMicroDriver')
         self.power = seamicro.Power()
         self.deploy = fake.FakeDeploy()
-        self.rescue = self.deploy
-        self.seamicro_vendor = seamicro.VendorPassthru()
-        self.pxe_vendor = pxe.VendorPassthru()
-        self.vendor = seamicro.SeaMicroPXEMultipleVendorInterface(
-            self.seamicro_vendor, self.pxe_vendor)
+        self.vendor = seamicro.VendorPassthru()

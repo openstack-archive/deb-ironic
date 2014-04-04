@@ -12,12 +12,25 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import fixtures
 from keystoneclient import exceptions as ksexception
+import mock
 
 from ironic.common import exception
 from ironic.common import keystone
 from ironic.tests import base
+
+
+class FakeCatalog:
+    def url_for(self, **kwargs):
+        return 'fake-url'
+
+
+class FakeClient:
+    def __init__(self, **kwargs):
+        self.service_catalog = FakeCatalog()
+
+    def has_service_catalog(self):
+        return True
 
 
 class KeystoneTestCase(base.TestCase):
@@ -32,70 +45,68 @@ class KeystoneTestCase(base.TestCase):
     def test_failure_authorization(self):
         self.assertRaises(exception.CatalogFailure, keystone.get_service_url)
 
-    def test_get_url(self):
+    @mock.patch.object(FakeCatalog, 'url_for')
+    @mock.patch('keystoneclient.v2_0.client.Client')
+    def test_get_url(self, mock_ks, mock_uf):
         fake_url = 'http://127.0.0.1:6385'
-
-        class _fake_catalog:
-            def url_for(self, **kwargs):
-                return fake_url
-
-        class _fake_client:
-            def __init__(self, **kwargs):
-                self.service_catalog = _fake_catalog()
-
-            def has_service_catalog(self):
-                return True
-
-        self.useFixture(fixtures.MonkeyPatch(
-                        'keystoneclient.v2_0.client.Client',
-                        _fake_client))
-
+        mock_uf.return_value = fake_url
+        mock_ks.return_value = FakeClient()
         res = keystone.get_service_url()
         self.assertEqual(fake_url, res)
 
-    def test_url_not_found(self):
-
-        class _fake_catalog:
-            def url_for(self, **kwargs):
-                raise ksexception.EndpointNotFound
-
-        class _fake_client:
-            def __init__(self, **kwargs):
-                self.service_catalog = _fake_catalog()
-
-            def has_service_catalog(self):
-                return True
-
-        self.useFixture(fixtures.MonkeyPatch(
-                        'keystoneclient.v2_0.client.Client',
-                        _fake_client))
-
+    @mock.patch.object(FakeCatalog, 'url_for')
+    @mock.patch('keystoneclient.v2_0.client.Client')
+    def test_url_not_found(self, mock_ks, mock_uf):
+        mock_uf.side_effect = ksexception.EndpointNotFound
+        mock_ks.return_value = FakeClient()
         self.assertRaises(exception.CatalogNotFound, keystone.get_service_url)
 
-    def test_no_catalog(self):
-
-        class _fake_client:
-            def __init__(self, **kwargs):
-                pass
-
-            def has_service_catalog(self):
-                return False
-
-        self.useFixture(fixtures.MonkeyPatch(
-                        'keystoneclient.v2_0.client.Client',
-                        _fake_client))
-
+    @mock.patch.object(FakeClient, 'has_service_catalog')
+    @mock.patch('keystoneclient.v2_0.client.Client')
+    def test_no_catalog(self, mock_ks, mock_hsc):
+        mock_hsc.return_value = False
+        mock_ks.return_value = FakeClient()
         self.assertRaises(exception.CatalogFailure, keystone.get_service_url)
 
-    def test_unauthorized(self):
-
-        class _fake_client:
-            def __init__(self, **kwargs):
-                raise ksexception.Unauthorized
-
-        self.useFixture(fixtures.MonkeyPatch(
-                        'keystoneclient.v2_0.client.Client',
-                        _fake_client))
-
+    @mock.patch('keystoneclient.v2_0.client.Client')
+    def test_unauthorized(self, mock_ks):
+        mock_ks.side_effect = ksexception.Unauthorized
         self.assertRaises(exception.CatalogUnauthorized,
                           keystone.get_service_url)
+
+    def test_get_service_url_fail_missing_auth_uri(self):
+        self.config(group='keystone_authtoken', auth_uri=None)
+        self.assertRaises(exception.CatalogFailure,
+                          keystone.get_service_url)
+
+    @mock.patch('keystoneclient.v2_0.client.Client')
+    def test_get_service_url_versionless_v2(self, mock_ks):
+        mock_ks.return_value = FakeClient()
+        self.config(group='keystone_authtoken', auth_uri='http://127.0.0.1')
+        expected_url = 'http://127.0.0.1/v2.0'
+        keystone.get_service_url()
+        mock_ks.assert_called_once_with(username='fake', password='fake',
+                                        tenant_name='fake',
+                                        auth_url=expected_url)
+
+    @mock.patch('keystoneclient.v3.client.Client')
+    def test_get_service_url_versionless_v3(self, mock_ks):
+        mock_ks.return_value = FakeClient()
+        self.config(group='keystone_authtoken', auth_version='v3.0',
+                    auth_uri='http://127.0.0.1')
+        expected_url = 'http://127.0.0.1/v3'
+        keystone.get_service_url()
+        mock_ks.assert_called_once_with(username='fake', password='fake',
+                                        tenant_name='fake',
+                                        auth_url=expected_url)
+
+    @mock.patch('keystoneclient.v2_0.client.Client')
+    def test_get_service_url_version_override(self, mock_ks):
+        mock_ks.return_value = FakeClient()
+        self.config(group='keystone_authtoken',
+                    auth_uri='http://127.0.0.1/v2.0/')
+        expected_url = 'http://127.0.0.1/v2.0'
+        keystone.get_service_url()
+        mock_ks.assert_called_once_with(username='fake', password='fake',
+                                        tenant_name='fake',
+                                        auth_url=expected_url)

@@ -30,6 +30,7 @@ from ironic.common import exception
 from ironic.common.glance_service import base_image_service
 from ironic.common.glance_service import service_utils
 from ironic.common import images
+from ironic.common import keystone
 from ironic.common import neutron
 from ironic.common import states
 from ironic.common import utils
@@ -173,6 +174,13 @@ class PXEValidateParametersTestCase(base.TestCase):
                 pxe._parse_driver_info,
                 node)
 
+    def test__parse_driver_info_swap_defaults_to_1mb(self):
+        info = dict(INFO_DICT)
+        info['pxe_swap_mb'] = 0
+        node = self._create_test_node(driver_info=info)
+        data = pxe._parse_driver_info(node)
+        self.assertEqual(1, data.get('swap_mb'))
+
     def test__get_pxe_mac_path(self):
         mac = '00:11:22:33:44:55:66'
         self.assertEqual('/tftpboot/pxelinux.cfg/01-00-11-22-33-44-55-66',
@@ -237,7 +245,7 @@ class PXEValidateParametersTestCase(base.TestCase):
                 self.lock_file = lock_file
 
             def run(self):
-                time.sleep(2)
+                time.sleep(0.2)
                 open(os.path.join(master_path, 'node_uuid'), 'w').close()
                 pxe._remove_download_in_progress_lock(self.lock_file)
 
@@ -614,6 +622,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
         self.node = self.dbapi.create_node(n)
         self.port = self.dbapi.create_port(db_utils.get_test_port(
                                                          node_id=self.node.id))
+        self.config(group='conductor', api_url='http://127.0.0.1:1234/')
 
     def _create_token_file(self):
         token_path = pxe._get_token_file_path(self.node['uuid'])
@@ -644,6 +653,42 @@ class PXEDriverTestCase(db_base.DbTestCase):
             self.assertRaises(exception.InvalidParameterValue,
                               task.resources[0].driver.deploy.validate,
                               task, new_node)
+
+    @mock.patch.object(keystone, 'get_service_url')
+    def test_validate_good_api_url_from_config_file(self, mock_ks):
+        # not present in the keystone catalog
+        mock_ks.side_effect = exception.CatalogFailure
+
+        with task_manager.acquire(self.context, [self.node.uuid],
+                                  shared=True) as task:
+            task.resources[0].driver.deploy.validate(task, self.node)
+            self.assertFalse(mock_ks.called)
+
+    @mock.patch.object(keystone, 'get_service_url')
+    def test_validate_good_api_url_from_keystone(self, mock_ks):
+        # present in the keystone catalog
+        mock_ks.return_value = 'http://127.0.0.1:1234'
+        # not present in the config file
+        self.config(group='conductor', api_url=None)
+
+        with task_manager.acquire(self.context, [self.node.uuid],
+                                  shared=True) as task:
+            task.resources[0].driver.deploy.validate(task, self.node)
+            mock_ks.assert_called_once_with()
+
+    @mock.patch.object(keystone, 'get_service_url')
+    def test_validate_fail_no_api_url(self, mock_ks):
+        # not present in the keystone catalog
+        mock_ks.side_effect = exception.CatalogFailure
+        # not present in the config file
+        self.config(group='conductor', api_url=None)
+
+        with task_manager.acquire(self.context, [self.node.uuid],
+                                  shared=True) as task:
+            self.assertRaises(exception.InvalidParameterValue,
+                              task.resources[0].driver.deploy.validate,
+                              task, self.node)
+            mock_ks.assert_called_once_with()
 
     def test__get_nodes_mac_addresses(self):
         ports = []
@@ -717,19 +762,26 @@ class PXEDriverTestCase(db_base.DbTestCase):
         with mock.patch.object(pxe, '_update_neutron') as update_neutron_mock:
             with mock.patch.object(manager_utils,
                     'node_power_action') as node_power_mock:
-                with task_manager.acquire(self.context,
+                with mock.patch.object(manager_utils,
+                        'node_set_boot_device') as node_set_boot_mock:
+                    with task_manager.acquire(self.context,
                         self.node['uuid'], shared=False) as task:
-                    state = task.driver.deploy.deploy(task, self.node)
-                    self.assertEqual(states.DEPLOYWAIT, state)
-                    update_neutron_mock.assert_called_once_with(task,
-                                                                self.node)
-                    node_power_mock.assert_called_once_with(task, self.node,
-                                                            states.REBOOT)
+                        state = task.driver.deploy.deploy(task, self.node)
+                        self.assertEqual(state, states.DEPLOYWAIT)
+                        update_neutron_mock.assert_called_once_with(task,
+                                                                    self.node)
+                        node_set_boot_mock.assert_called_once_with(task,
+                                                            self.node,
+                                                            'pxe',
+                                                            persistent=True)
+                        node_power_mock.assert_called_once_with(task,
+                                                                self.node,
+                                                                states.REBOOT)
 
-                    # ensure token file created
-                    t_path = pxe._get_token_file_path(self.node['uuid'])
-                    token = open(t_path, 'r').read()
-                    self.assertEqual(self.context.auth_token, token)
+                        # ensure token file created
+                        t_path = pxe._get_token_file_path(self.node['uuid'])
+                        token = open(t_path, 'r').read()
+                        self.assertEqual(self.context.auth_token, token)
 
     def test_tear_down(self):
         with mock.patch.object(manager_utils,
@@ -740,6 +792,16 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 self.assertEqual(states.DELETED, state)
                 node_power_mock.assert_called_once_with(task, self.node,
                                                         states.POWER_OFF)
+
+    @mock.patch.object(manager_utils, 'node_power_action')
+    def test_tear_down_removes_pxe_deploy_key(self, mock_npa):
+        self.assertIn('pxe_deploy_key', self.node.driver_info)
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.driver.deploy.tear_down(task, self.node)
+
+        self.node.refresh(self.context)
+        self.assertNotIn('pxe_deploy_key', self.node.driver_info)
+        mock_npa.assert_called_once_with(task, self.node, states.POWER_OFF)
 
     def test_take_over(self):
         with mock.patch.object(pxe, '_update_neutron') as update_neutron_mock:
@@ -761,8 +823,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 'ironic.drivers.modules.deploy_utils.deploy',
                 fake_deploy))
 
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=True) as task:
+        with task_manager.acquire(self.context, self.node.uuid) as task:
             task.resources[0].driver.vendor.vendor_passthru(task, self.node,
                     method='pass_deploy_info', address='123456', iqn='aaa-bbb',
                     key='fake-56789')
@@ -784,8 +845,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 'ironic.drivers.modules.deploy_utils.deploy',
                 fake_deploy))
 
-        with task_manager.acquire(self.context, [self.node.uuid],
-                                  shared=True) as task:
+        with task_manager.acquire(self.context, [self.node.uuid]) as task:
             task.resources[0].driver.vendor.vendor_passthru(task, self.node,
                     method='pass_deploy_info', address='123456', iqn='aaa-bbb',
                     key='fake-56789')
@@ -807,8 +867,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 'ironic.drivers.modules.deploy_utils.deploy',
                 fake_deploy))
 
-        with task_manager.acquire(self.context, [self.node.uuid],
-                                  shared=True) as task:
+        with task_manager.acquire(self.context, [self.node.uuid]) as task:
             task.resources[0].driver.vendor.vendor_passthru(task, self.node,
                     method='pass_deploy_info', address='123456', iqn='aaa-bbb',
                     key='fake-56789', error='test ramdisk error')
@@ -822,8 +881,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
         self.node.provision_state = 'FAKE'
         self.node.save(self.context)
 
-        with task_manager.acquire(self.context, [self.node.uuid],
-                                  shared=True) as task:
+        with task_manager.acquire(self.context, [self.node.uuid]) as task:
             task.resources[0].driver.vendor.vendor_passthru(task, self.node,
                     method='pass_deploy_info', address='123456', iqn='aaa-bbb',
                     key='fake-56789', error='test ramdisk error')
@@ -831,8 +889,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
         self.assertEqual(states.POWER_ON, self.node.power_state)
 
     def test_lock_elevated(self):
-        with task_manager.acquire(self.context, [self.node['uuid']],
-                                  shared=True) as task:
+        with task_manager.acquire(self.context, [self.node['uuid']]) as task:
             with mock.patch.object(task.driver.vendor, '_continue_deploy') \
                     as _continue_deploy_mock:
                 task.driver.vendor.vendor_passthru(task, self.node,

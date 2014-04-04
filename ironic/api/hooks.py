@@ -21,7 +21,6 @@ from pecan import hooks
 from webob import exc
 
 from ironic.common import context
-from ironic.common import utils
 from ironic.conductor import rpcapi
 from ironic.db import api as dbapi
 from ironic.openstack.common import policy
@@ -75,10 +74,8 @@ class ContextHook(hooks.PecanHook):
         auth_token = state.request.headers.get('X-Auth-Token')
         creds = {'roles': state.request.headers.get('X-Roles', '').split(',')}
 
+        is_public_api = state.request.environ.get('is_public_api', False)
         is_admin = policy.check('admin', state.request.headers, creds)
-
-        path = utils.safe_rstrip(state.request.path, '/')
-        is_public_api = path in self.public_api_routes
 
         state.request.context = context.RequestContext(
             auth_token=auth_token,
@@ -125,17 +122,20 @@ class NoExceptionTracebackHook(hooks.PecanHook):
     # catches and handles all the errors, so 'on_error' dedicated for unhandled
     # exceptions never fired.
     def after(self, state):
-        # Do not remove traceback when server in debug mode.
-        if cfg.CONF.debug:
-            return
-        # Do nothing if there is no error.
-        if 200 <= state.response.status_int < 400:
-            return
         # Omit empty body. Some errors may not have body at this level yet.
         if not state.response.body:
             return
 
+        # Do nothing if there is no error.
+        if 200 <= state.response.status_int < 400:
+            return
+
         json_body = state.response.json
+        # Do not remove traceback when server in debug mode (except 'Server'
+        # errors when 'debuginfo' will be used for traces).
+        if cfg.CONF.debug and json_body.get('faultcode') != 'Server':
+            return
+
         faultsting = json_body.get('faultstring')
         traceback_marker = 'Traceback (most recent call last):'
         if faultsting and (traceback_marker in faultsting):

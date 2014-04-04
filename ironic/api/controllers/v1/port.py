@@ -23,17 +23,13 @@ import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
 
-from ironic.api.controllers.v1 import base
+from ironic.api.controllers import base
+from ironic.api.controllers import link
 from ironic.api.controllers.v1 import collection
-from ironic.api.controllers.v1 import link
 from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils as api_utils
 from ironic.common import exception
 from ironic import objects
-from ironic.openstack.common import excutils
-from ironic.openstack.common import log
-
-LOG = log.getLogger(__name__)
 
 
 class PortPatchType(types.JsonPatchType):
@@ -252,11 +248,8 @@ class PortsController(rest.RestController):
         if self._from_nodes:
             raise exception.OperationNotPermitted
 
-        try:
-            new_port = pecan.request.dbapi.create_port(port.as_dict())
-        except Exception as e:
-            with excutils.save_and_reraise_exception():
-                LOG.exception(e)
+        new_port = pecan.request.dbapi.create_port(port.as_dict())
+
         return Port.convert_with_links(new_port)
 
     @wsme.validate(types.uuid, [PortPatchType])
@@ -282,8 +275,14 @@ class PortsController(rest.RestController):
             if rpc_port[field] != getattr(port, field):
                 rpc_port[field] = getattr(port, field)
 
-        rpc_port.save()
-        return Port.convert_with_links(rpc_port)
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context,
+                                            rpc_port.node_id)
+        topic = pecan.request.rpcapi.get_topic_for(rpc_node)
+
+        new_port = pecan.request.rpcapi.update_port(
+                                        pecan.request.context, rpc_port, topic)
+
+        return Port.convert_with_links(new_port)
 
     @wsme_pecan.wsexpose(None, types.uuid, status_code=204)
     def delete(self, port_uuid):

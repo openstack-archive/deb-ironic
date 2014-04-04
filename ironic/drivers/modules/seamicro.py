@@ -20,16 +20,19 @@ Provides vendor passthru methods for SeaMicro specific functionality.
 """
 
 from oslo.config import cfg
-from seamicroclient import client as seamicro_client
-from seamicroclient import exceptions as seamicro_client_exception
-
 
 from ironic.common import exception
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.drivers import base
+from ironic.openstack.common import importutils
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import loopingcall
+
+seamicroclient = importutils.try_import('seamicroclient')
+if seamicroclient:
+    from seamicroclient import client as seamicro_client
+    from seamicroclient import exceptions as seamicro_client_exception
 
 opts = [
     cfg.IntOpt('max_retry',
@@ -383,7 +386,7 @@ class Power(base.PowerInterface):
 class VendorPassthru(base.VendorInterface):
     """SeaMicro vendor-specific methods."""
 
-    def validate(self, node, **kwargs):
+    def validate(self, task, node, **kwargs):
         method = kwargs['method']
         if method in VENDOR_PASSTHRU_METHODS:
             return True
@@ -464,9 +467,9 @@ class VendorPassthru(base.VendorInterface):
     def _set_boot_device(self, task, node, **kwargs):
         """Set the boot device of the node.
 
-        @kwargs boot_device: Boot device. One of [pxe, disk]
+        @kwargs device: Boot device. One of [pxe, disk]
         """
-        boot_device = kwargs.get('boot_device')
+        boot_device = kwargs.get('device')
 
         if boot_device is None:
             raise exception.InvalidParameterValue(_("No boot device provided"))
@@ -484,35 +487,3 @@ class VendorPassthru(base.VendorInterface):
         except seamicro_client_exception.ClientException as ex:
             LOG.error(_("set_boot_device error:  %s"), ex.message)
             raise exception.VendorPassthruException(message=ex.message)
-
-
-class SeaMicroPXEMultipleVendorInterface(base.VendorInterface):
-    """Wrapper around SeaMicro and PXE VendorInterfaces."""
-
-    def __init__(self, seamicro_vendor, pxe_vendor):
-        self.seamicro_vendor = seamicro_vendor
-        self.pxe_vendor = pxe_vendor
-        self.mapping = dict((method, self.seamicro_vendor)
-                            for method in VENDOR_PASSTHRU_METHODS)
-
-    def _map(self, **kwargs):
-        """Use SeaMicro interface if method is supported by SeaMicro,
-           else use PXE.
-
-        :returns: an instance of a VendorInterface
-        :raises: InvalidParameterValue if **kwargs does not contain 'method'
-                 or if the method can not be mapped to an interface.
-
-        """
-        method = kwargs.get('method')
-        return self.mapping.get(method) or self.pxe_vendor
-
-    def validate(self, *args, **kwargs):
-        """Call validate on the appropriate interface only."""
-        route = self._map(**kwargs)
-        route.validate(*args, **kwargs)
-
-    def vendor_passthru(self, task, node, **kwargs):
-        """Call vendor_passthru on the appropriate interface only."""
-        route = self._map(**kwargs)
-        return route.vendor_passthru(task, node, **kwargs)

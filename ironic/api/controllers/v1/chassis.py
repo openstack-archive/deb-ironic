@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import datetime
 import jsonpatch
 import six
 
@@ -23,18 +24,14 @@ import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
 
-from ironic.api.controllers.v1 import base
+from ironic.api.controllers import base
+from ironic.api.controllers import link
 from ironic.api.controllers.v1 import collection
-from ironic.api.controllers.v1 import link
 from ironic.api.controllers.v1 import node
 from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils as api_utils
 from ironic.common import exception
 from ironic import objects
-from ironic.openstack.common import excutils
-from ironic.openstack.common import log
-
-LOG = log.getLogger(__name__)
 
 
 class ChassisPatchType(types.JsonPatchType):
@@ -70,29 +67,42 @@ class Chassis(base.APIBase):
             setattr(self, k, kwargs.get(k))
 
     @classmethod
-    def convert_with_links(cls, rpc_chassis, expand=True):
-        chassis = Chassis(**rpc_chassis.as_dict())
+    def _convert_with_links(cls, chassis, url, expand=True):
         if not expand:
             chassis.unset_fields_except(['uuid', 'description'])
         else:
             chassis.nodes = [link.Link.make_link('self',
-                                                 pecan.request.host_url,
+                                                 url,
                                                  'chassis',
                                                  chassis.uuid + "/nodes"),
                              link.Link.make_link('bookmark',
-                                                 pecan.request.host_url,
+                                                 url,
                                                  'chassis',
                                                  chassis.uuid + "/nodes",
                                                  bookmark=True)
                             ]
         chassis.links = [link.Link.make_link('self',
-                                             pecan.request.host_url,
+                                             url,
                                              'chassis', chassis.uuid),
                          link.Link.make_link('bookmark',
-                                             pecan.request.host_url,
+                                             url,
                                              'chassis', chassis.uuid)
                         ]
         return chassis
+
+    @classmethod
+    def convert_with_links(cls, rpc_chassis, expand=True):
+        chassis = Chassis(**rpc_chassis.as_dict())
+        return cls._convert_with_links(chassis, pecan.request.host_url,
+                                       expand)
+
+    @classmethod
+    def sample(cls, expand=True):
+        time = datetime.datetime(2000, 1, 1, 12, 0, 0)
+        sample = cls(uuid='eaaca217-e7d8-47b4-bb41-3f99f20eed89', extra={},
+                     description='Sample chassis', created_at=time)
+        return cls._convert_with_links(sample, 'http://localhost:6385',
+                                       expand)
 
 
 class ChassisCollection(collection.Collection):
@@ -113,6 +123,12 @@ class ChassisCollection(collection.Collection):
         url = url or None
         collection.next = collection.get_next(limit, url=url, **kwargs)
         return collection
+
+    @classmethod
+    def sample(cls, expand=True):
+        sample = cls()
+        sample.chassis = [Chassis.sample(expand=False)]
+        return sample
 
 
 class ChassisController(rest.RestController):
@@ -190,11 +206,8 @@ class ChassisController(rest.RestController):
 
         :param chassis: a chassis within the request body.
         """
-        try:
-            new_chassis = pecan.request.dbapi.create_chassis(chassis.as_dict())
-        except Exception as e:
-            with excutils.save_and_reraise_exception():
-                LOG.exception(e)
+        new_chassis = pecan.request.dbapi.create_chassis(chassis.as_dict())
+
         return Chassis.convert_with_links(new_chassis)
 
     @wsme.validate(types.uuid, [ChassisPatchType])

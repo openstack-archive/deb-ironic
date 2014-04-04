@@ -57,10 +57,13 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
         1.9 - Added destroy_node.
         1.10 - Remove get_node_power_state
         1.11 - Added get_console_information, set_console_mode.
+        1.12 - validate_vendor_action, do_vendor_action replaced by single
+              vendor_passthru method.
+        1.13 - Added update_port.
 
     """
 
-    RPC_API_VERSION = '1.11'
+    RPC_API_VERSION = '1.13'
 
     def __init__(self, topic=None):
         if topic is None:
@@ -138,36 +141,28 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
 
     def vendor_passthru(self, context, node_id, driver_method, info,
                         topic=None):
-        """Pass vendor specific info to a node driver.
+        """Synchronously, acquire lock, validate given parameters and start
+        the conductor background task for specified vendor action.
 
         :param context: request context.
         :param node_id: node id or uuid.
         :param driver_method: name of method for driver.
         :param info: info for node driver.
         :param topic: RPC topic. Defaults to self.topic.
-        :raises: InvalidParameterValue for parameter errors.
-        :raises: UnsupportedDriverExtension for unsupported extensions.
+        :raises: InvalidParameterValue if supplied info is not valid.
+        :raises: UnsupportedDriverExtension if current driver does not have
+                 vendor interface.
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task.
 
         """
         topic = topic or self.topic
-
-        driver_data = self.call(context,
-                                self.make_msg('validate_vendor_action',
-                                    node_id=node_id,
-                                    driver_method=driver_method,
-                                    info=info),
-                                topic=topic)
-
-        # this method can do nothing if 'driver_method' intended only
-        # for obtain 'driver_data'
-        self.cast(context,
-                  self.make_msg('do_vendor_action',
-                                node_id=node_id,
-                                driver_method=driver_method,
-                                info=info),
-                  topic=topic)
-
-        return driver_data
+        return self.call(context,
+                         self.make_msg('vendor_passthru',
+                                       node_id=node_id,
+                                       driver_method=driver_method,
+                                       info=info),
+                         topic=topic)
 
     def do_node_deploy(self, context, node_id, topic=None):
         """Signal to conductor service to perform a deployment.
@@ -175,15 +170,19 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
         :param context: request context.
         :param node_id: node id or uuid.
         :param topic: RPC topic. Defaults to self.topic.
+        :raises: InstanceDeployFailure
+        :raises: InvalidParameterValue if validation fails
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task.
 
         The node must already be configured and in the appropriate
         undeployed state before this method is called.
 
         """
-        self.cast(context,
-                  self.make_msg('do_node_deploy',
-                                node_id=node_id),
-                  topic=topic or self.topic)
+        return self.call(context,
+                         self.make_msg('do_node_deploy',
+                                       node_id=node_id),
+                         topic=topic or self.topic)
 
     def do_node_tear_down(self, context, node_id, topic=None):
         """Signal to conductor service to tear down a deployment.
@@ -191,15 +190,19 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
         :param context: request context.
         :param node_id: node id or uuid.
         :param topic: RPC topic. Defaults to self.topic.
+        :raises: InstanceDeployFailure
+        :raises: InvalidParameterValue if validation fails
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task.
 
         The node must already be configured and in the appropriate
         deployed state before this method is called.
 
         """
-        self.cast(context,
-                  self.make_msg('do_node_tear_down',
-                                node_id=node_id),
-                  topic=topic or self.topic)
+        return self.call(context,
+                        self.make_msg('do_node_tear_down',
+                                      node_id=node_id),
+                        topic=topic or self.topic)
 
     def validate_driver_interfaces(self, context, node_id, topic=None):
         """Validate the `core` and `standardized` interfaces for drivers.
@@ -275,9 +278,29 @@ class ConductorAPI(ironic.openstack.common.rpc.proxy.RpcProxy):
         :raises: UnsupportedDriverExtension if the node's driver doesn't
                  support console.
         :raises: InvalidParameterValue when the wrong driver info is specified.
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task.
         """
-        self.cast(context,
-                  self.make_msg('set_console_mode',
-                                node_id=node_id,
-                                enabled=enabled),
-                  topic=topic or self.topic)
+        return self.call(context,
+                         self.make_msg('set_console_mode',
+                                       node_id=node_id,
+                                       enabled=enabled),
+                         topic=topic or self.topic)
+
+    def update_port(self, context, port_obj, topic=None):
+        """Synchronously, have a conductor update the port's information.
+
+        Update the port's information in the database and return a port object.
+        The conductor will lock related node and trigger specific driver
+        actions if they are needed.
+
+        :param context: request context.
+        :param port_obj: a changed (but not saved) port object.
+        :param topic: RPC topic. Defaults to self.topic.
+        :returns: updated port object, including all fields.
+
+        """
+        return self.call(context,
+                         self.make_msg('update_port',
+                                       port_obj=port_obj),
+                         topic=topic or self.topic)

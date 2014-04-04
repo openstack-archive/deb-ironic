@@ -11,6 +11,7 @@ extensions = ['sphinx.ext.autodoc',
               'sphinxcontrib.httpdomain',
               'sphinxcontrib.pecanwsme.rest',
               'wsmeext.sphinxext',
+              'oslosphinx',
               ]
 
 wsme_protocols = ['restjson', 'restxml']
@@ -39,9 +40,9 @@ copyright = u'OpenStack Foundation'
 # The short X.Y version.
 from ironic import version as ironic_version
 # The full version, including alpha/beta/rc tags.
-release = ironic_version.version_string_with_vcs()
+release = ironic_version.version_info.release_string()
 # The short X.Y version.
-version = ironic_version.canonical_version_string()
+version = ironic_version.version_info.version_string()
 
 # A list of ignored prefixes for module index sorting.
 modindex_common_prefix = ['ironic.']
@@ -60,9 +61,9 @@ pygments_style = 'sphinx'
 
 # The theme to use for HTML and HTML Help pages.  Major themes that come with
 # Sphinx are currently 'default' and 'sphinxdoc'.
-html_theme_path = ["."]
-html_theme = '_theme'
-html_static_path = ['_static']
+#html_theme_path = ["."]
+#html_theme = '_theme'
+#html_static_path = ['_static']
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = '%sdoc' % project

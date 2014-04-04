@@ -23,12 +23,14 @@ from oslo.config import cfg
 from sqlalchemy.orm.exc import NoResultFound
 
 from ironic.common import exception
+from ironic.common import paths
 from ironic.common import states
 from ironic.common import utils
 from ironic.db import api
 from ironic.db.sqlalchemy import models
 from ironic import objects
 from ironic.openstack.common.db import exception as db_exc
+from ironic.openstack.common.db import options as db_options
 from ironic.openstack.common.db.sqlalchemy import session as db_session
 from ironic.openstack.common.db.sqlalchemy import utils as db_utils
 from ironic.openstack.common import log
@@ -36,7 +38,7 @@ from ironic.openstack.common import timeutils
 
 CONF = cfg.CONF
 CONF.import_opt('connection',
-                'ironic.openstack.common.db.sqlalchemy.session',
+                'ironic.openstack.common.db.options',
                 group='database')
 CONF.import_opt('heartbeat_timeout',
                 'ironic.conductor.manager',
@@ -44,8 +46,31 @@ CONF.import_opt('heartbeat_timeout',
 
 LOG = log.getLogger(__name__)
 
-get_engine = db_session.get_engine
-get_session = db_session.get_session
+_DEFAULT_SQL_CONNECTION = 'sqlite:///' + paths.state_path_def('ironic.sqlite')
+db_options.set_defaults(_DEFAULT_SQL_CONNECTION, 'ironic.sqlite')
+
+
+_FACADE = None
+
+
+def _create_facade_lazily():
+    global _FACADE
+    if _FACADE is None:
+        _FACADE = db_session.EngineFacade(
+            CONF.database.connection,
+            **dict(CONF.database.iteritems())
+        )
+    return _FACADE
+
+
+def get_engine():
+    facade = _create_facade_lazily()
+    return facade.get_engine()
+
+
+def get_session(**kwargs):
+    facade = _create_facade_lazily()
+    return facade.get_session(**kwargs)
 
 
 def get_backend():
@@ -407,7 +432,6 @@ class Connection(api.Connection):
                 query = model_query(models.Port, session=session)
                 query = add_port_filter(query, port_id)
                 ref = query.one()
-                _check_port_change_forbidden(ref, session)
                 ref.update(values)
         except NoResultFound:
             raise exception.PortNotFound(port=port_id)

@@ -110,8 +110,8 @@ def _parse_driver_info(node):
     # Internal use only
     d_info['deploy_key'] = info.get('pxe_deploy_key')
 
-    #TODO(ghe): Should we get rid of swap partition?
-    d_info['swap_mb'] = info.get('pxe_swap_mb', 1)
+    # TODO(ghe): Should we get rid of swap partition?
+    d_info['swap_mb'] = info.get('pxe_swap_mb', 0)
     d_info['ephemeral_gb'] = info.get('pxe_ephemeral_gb', 0)
     d_info['ephemeral_format'] = info.get('pxe_ephemeral_format')
 
@@ -124,6 +124,12 @@ def _parse_driver_info(node):
             reason = _("'%s' is not an integer value.") % d_info[param]
             raise exception.InvalidParameterValue(err_msg_invalid %
                                             {'param': param, 'reason': reason})
+
+    # NOTE(lucasagomes): For simpler code paths on the deployment side,
+    #                    we always create a swap partition. if the size is
+    #                    <= 0 we default to 1MB
+    if int(d_info['swap_mb']) <= 0:
+        d_info['swap_mb'] = 1
 
     if d_info['ephemeral_gb'] and not d_info['ephemeral_format']:
         msg = _("The deploy contains an ephemeral partition, but no "
@@ -544,6 +550,17 @@ class PXEDeploy(base.DeployInterface):
                                 "any port associated with it.") % node.uuid)
         _parse_driver_info(node)
 
+        # Try to get the URL of the Ironic API
+        try:
+            # TODO(lucasagomes): Validate the format of the URL
+            CONF.conductor.api_url or keystone.get_service_url()
+        except (exception.CatalogFailure,
+                exception.CatalogNotFound,
+                exception.CatalogUnauthorized):
+            raise exception.InvalidParameterValue(_(
+                "Couldn't get the URL of the Ironic API service from the "
+                "configuration file or keystone catalog."))
+
     @task_manager.require_exclusive_lock
     def deploy(self, task, node):
         """Perform start deployment a node.
@@ -562,6 +579,7 @@ class PXEDeploy(base.DeployInterface):
         #               to deploy ramdisk
         _create_token_file(task, node)
         _update_neutron(task, node)
+        manager_utils.node_set_boot_device(task, node, 'pxe', persistent=True)
         manager_utils.node_power_action(task, node, states.REBOOT)
 
         return states.DEPLOYWAIT
@@ -578,6 +596,12 @@ class PXEDeploy(base.DeployInterface):
         :returns: deploy state DELETED.
         """
         manager_utils.node_power_action(task, node, states.POWER_OFF)
+
+        # Remove the internal pxe_deploy_key attribute
+        driver_info = node.driver_info
+        if driver_info.pop('pxe_deploy_key', None):
+            node.driver_info = driver_info
+            node.save(task.context)
 
         return states.DELETED
 
@@ -635,18 +659,6 @@ class PXEDeploy(base.DeployInterface):
         _update_neutron(task, node)
 
 
-class PXERescue(base.RescueInterface):
-
-    def validate(self, task, node):
-        pass
-
-    def rescue(self, task, node):
-        pass
-
-    def unrescue(self, task, node):
-        pass
-
-
 class VendorPassthru(base.VendorInterface):
     """Interface to mix IPMI and PXE vendor-specific interfaces."""
 
@@ -685,9 +697,6 @@ class VendorPassthru(base.VendorInterface):
         method = kwargs['method']
         if method == 'pass_deploy_info':
             self._get_deploy_info(node, **kwargs)
-        elif method == 'set_boot_device':
-            # todo
-            pass
         else:
             raise exception.InvalidParameterValue(_(
                 "Unsupported method (%s) passed to PXE driver.")
@@ -695,6 +704,7 @@ class VendorPassthru(base.VendorInterface):
 
         return True
 
+    @task_manager.require_exclusive_lock
     def _continue_deploy(self, task, node, **kwargs):
         """Resume a deployment upon getting POST data from deploy ramdisk.
 
@@ -756,13 +766,5 @@ class VendorPassthru(base.VendorInterface):
 
     def vendor_passthru(self, task, node, **kwargs):
         method = kwargs['method']
-        if method == 'set_boot_device':
-            return node.driver.vendor._set_boot_device(
-                        task, node,
-                        kwargs.get('device'),
-                        kwargs.get('persistent'))
-
-        elif method == 'pass_deploy_info':
-            ctx = task.context
-            with task_manager.acquire(ctx, node['uuid']) as inner_task:
-                self._continue_deploy(inner_task, node, **kwargs)
+        if method == 'pass_deploy_info':
+            self._continue_deploy(task, node, **kwargs)
