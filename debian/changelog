@@ -1,3 +1,9 @@
+ironic (2014.1~rc1-1) experimental; urgency=low
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 04 Apr 2014 20:20:50 +0800
+
 ironic (2014.1~b3-3) experimental; urgency=medium
 
   * Changed section of ironic-doc to the doc section.
