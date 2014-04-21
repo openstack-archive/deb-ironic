@@ -1,0 +1,72 @@
+# Translation of ironic's debconf messages to european portuguese
+# Copyright (C) 2014 THE ironic'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the ironic package.
+#
+# Américo Monteiro <a_monteiro@gmx.com>, 2014.
+msgid ""
+msgstr ""
+"Project-Id-Version: ironic 2014.1-1\n"
+"Report-Msgid-Bugs-To: ironic@packages.debian.org\n"
+"POT-Creation-Date: 2013-11-26 16:52+0800\n"
+"PO-Revision-Date: 2014-04-20 17:23+0100\n"
+"Last-Translator: Américo Monteiro <a_monteiro@gmx.com>\n"
+"Language-Team: Portuguese <traduz@debianpt.org>\n"
+"Language: pt\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Lokalize 1.4\n"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid "Set up a database for Ironic?"
+msgstr "Configurar uma base de dados para o Ironic?"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"No database has been set up for Ironic to use. Before continuing, you should "
+"make sure you have the following information:"
+msgstr ""
+"Nenhuma base de dados foi configurada para o Ironic utilizar. Antes de "
+"continuar, deve certificar-se que tem a seguinte informação:"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+" * the type of database that you want to use;\n"
+" * the database server hostname (that server must allow TCP connections from "
+"this\n"
+"   machine);\n"
+" * a username and password to access the database."
+msgstr ""
+" * o tipo de base de dados que deseja usar;\n"
+" * o nome de máquina do servidor da base de dados (esse servidor deve "
+"permitir ligações TCP a partir\n"
+"   desta máquina);\n"
+" * um nome de utilizador e palavra passe para acesso à base de dados."
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"If some of these requirements are missing, do not choose this option and run "
+"with regular SQLite support."
+msgstr ""
+"Se algum deste requerimentos estiver em falta, não escolha esta opção e "
+"corra com suporte SQLite regular."
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"ironic-common\"."
+msgstr ""
+"Você pode alterar esta definição mais tarde ao correr \"dpkg-reconfigure "
+"-plow ironic-common\"."
+

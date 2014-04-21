@@ -2,6 +2,8 @@ ironic (2014.1-2) UNRELEASED; urgency=low
 
   * Added French debconf translation, thanks to Christian Perrier.
     (Closes: #745275).
+  * Added Portuguese debconf translation, thanks to Américo Monteiro
+    <a_monteiro@gmx.com> (Closes: #745337).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 21 Apr 2014 11:24:25 +0800
 
