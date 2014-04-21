@@ -1,3 +1,10 @@
+ironic (2014.1-2) UNRELEASED; urgency=low
+
+  * Added French debconf translation, thanks to Christian Perrier.
+    (Closes: #745275).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 21 Apr 2014 11:24:25 +0800
+
 ironic (2014.1-1) unstable; urgency=medium
 
   * New upstream release.

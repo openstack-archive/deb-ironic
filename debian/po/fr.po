@@ -1,0 +1,358 @@
+# Translation of neutron debconf templates to french. 
+# Copyright (C) 2013, French l10n team <debian-l10n-french@lists.debian.org> 
+# This file is distributed under the same license as the neutron package.
+# Julien Patriarca <leatherface@debian.org>, 2013.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: neutron\n"
+"Report-Msgid-Bugs-To: ironic@packages.debian.org\n"
+"POT-Creation-Date: 2013-11-26 16:52+0800\n"
+"PO-Revision-Date: 2013-10-31 11:05+0100\n"
+"Last-Translator: Julien Patriarca <leatherface@debian.org>\n"
+"Language-Team: FRENCH <debian-l10n-french@lists.debian.org>\n"
+"Language: fr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid "Set up a database for Ironic?"
+msgstr "Faut-il paramétrer une base de données pour Ironic ?"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"No database has been set up for Ironic to use. Before continuing, you should "
+"make sure you have the following information:"
+msgstr ""
+"Aucune base de données n'a été paramétrée pour Ironic. Avant de poursuivre, "
+"vous devriez vous assurer d'avoir les informations suivantes :"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+" * the type of database that you want to use;\n"
+" * the database server hostname (that server must allow TCP connections from "
+"this\n"
+"   machine);\n"
+" * a username and password to access the database."
+msgstr ""
+" - Le type de base de données que vous souhaitez utiliser ;\n"
+" - le nom d'hôte du serveur de base de données (ce serveur\n"
+"   doit accepter les connexions TCP depuis cette machine) ;\n"
+" - un nom d'utilisateur et un mot de passe pour accéder à\n"
+"   cette base de données.     "
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"If some of these requirements are missing, do not choose this option and run "
+"with regular SQLite support."
+msgstr ""
+"Si certains de ces prérequis sont manquants, ignorez cette option et "
+"exécutez l'application avec le support SQLite normal."
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"ironic-common\"."
+msgstr ""
+"Vous pouvez modifier ce réglage plus tard en lançant « dpkg-reconfigure -"
+"plow ironic-common »."
+
+#~ msgid "Authentication server hostname:"
+#~ msgstr "Nom d'hôte du serveur d'authentification :"
+
+#~ msgid ""
+#~ "Please specify the hostname of your Neutron authentication server. "
+#~ "Typically this is also the hostname of your OpenStack Identity Service "
+#~ "(Keystone)."
+#~ msgstr ""
+#~ "Veuillez indiquer le nom d'hôte du serveur d'authentification Neutron. En "
+#~ "général, il s'agit du nom d'hôte du Service d'Identité OpenStack "
+#~ "(Keystone)."
+
+#~ msgid "Authentication server tenant name:"
+#~ msgstr "Nom d'espace client du serveur d'authentification :"
+
+#~ msgid "Please specify the authentication server tenant name."
+#~ msgstr ""
+#~ "Veuillez indiquer le nom d'espace client du serveur d'authentification."
+
+#~ msgid "Authentication server username:"
+#~ msgstr "Nom d'utilisateur du serveur d'authentification :"
+
+#~ msgid "Please specify the username to use with the authentication server."
+#~ msgstr ""
+#~ "Veuillez indiquer le nom d'utilisateur à utiliser sur le serveur "
+#~ "d'authentification."
+
+#~ msgid "Authentication server password:"
+#~ msgstr "Mot de passe du serveur d'authentification :"
+
+#~ msgid "Please specify the password to use with the authentication server."
+#~ msgstr ""
+#~ "Veuillez indiquer le mot de passe à utiliser sur le serveur "
+#~ "d'authentification."
+
+#~ msgid "OpenVSwitch"
+#~ msgstr "OpenVSwitch"
+
+#~ msgid "LinuxBridge"
+#~ msgstr "LinuxBridge"
+
+#~ msgid "ml2"
+#~ msgstr "ml2"
+
+#~ msgid "Brocade"
+#~ msgstr "Brocade"
+
+#~ msgid "Nicira"
+#~ msgstr "Nicira"
+
+#~ msgid "Midonet"
+#~ msgstr "Midonet"
+
+#~ msgid "NEC"
+#~ msgstr "NEC"
+
+#~ msgid "Mellanox"
+#~ msgstr "Mellanox"
+
+#~ msgid "Hyper-V"
+#~ msgstr "Hyper-V"
+
+#~ msgid "RYU"
+#~ msgstr "RYU"
+
+#~ msgid "ml2/ml2_conf.ini"
+#~ msgstr "ml2/ml2_conf.ini"
+
+#~ msgid "MetaPlugin"
+#~ msgstr "MetaPlugin"
+
+#~ msgid "BigSwitch"
+#~ msgstr "BigSwitch"
+
+#~ msgid "Cisco"
+#~ msgstr "Cisco"
+
+#~ msgid "PLUMgrid"
+#~ msgstr "PLUMgrid"
+
+#~ msgid "Neutron plugin:"
+#~ msgstr "Extension pour Neutron :"
+
+#~ msgid ""
+#~ "Neutron uses a plugin architecture to manage networking. When starting "
+#~ "the Neutron server daemon, the configuration file corresponding to the "
+#~ "plugin you wish to use needs to be loaded, by giving it as a parameter "
+#~ "when starting the neutron-server daemon. Also, the core_plugin directive "
+#~ "needs to match. Please select which plugin to use."
+#~ msgstr ""
+#~ "Neutron utilise une architecture à base d'extensions pour gérer la mise "
+#~ "en réseau. Lors du démarrage du démon du serveur Neutron, le fichier de "
+#~ "configuration, correspondant à l'extension que vous souhaitez utiliser, "
+#~ "doit être chargé en le passant comme paramètre lors du lancement du démon "
+#~ "du serveur Neutron. Il faut également que l'instruction de l'extension "
+#~ "centrale corresponde. Veuillez choisir quelle extension utiliser."
+
+#~ msgid "IP address of your RabbitMQ host:"
+#~ msgstr "Adresse IP de votre hôte RabbitMQ :"
+
+#~ msgid ""
+#~ "In order to interoperate with other components of OpenStack, this package "
+#~ "needs to connect to a central RabbitMQ server."
+#~ msgstr ""
+#~ "Afin de pouvoir interagir avec d'autres composants d'OpenStack, ce paquet "
+#~ "doit se connecter à un serveur centralisé RabbitMQ."
+
+#~ msgid "Please specify the IP address of that server."
+#~ msgstr "Veuillez indiquer l'adresse IP de ce serveur."
+
+#~ msgid "Username for connection to the RabbitMQ server:"
+#~ msgstr "Nom d'utilisateur pour la connexion au serveur RabbitMQ :"
+
+#~ msgid "Please specify the username used to connect to the RabbitMQ server."
+#~ msgstr ""
+#~ "Veuillez indiquer le nom d'utilisateur à utiliser pour se connecter au "
+#~ "serveur RabbitMQ."
+
+#~ msgid "Password for connection to the RabbitMQ server:"
+#~ msgstr "Mot de passe pour la connexion au serveur RabbitMQ :"
+
+#~ msgid "Please specify the password used to connect to the RabbitMQ server."
+#~ msgstr ""
+#~ "Veuillez indiquer le mot de passe à utiliser pour se connecter au serveur "
+#~ "RabbitMQ."
+
+#~ msgid "local"
+#~ msgstr "local"
+
+#~ msgid "gre"
+#~ msgstr "gre"
+
+#~ msgid "vlan"
+#~ msgstr "vlan"
+
+#~ msgid "none"
+#~ msgstr "aucun"
+
+#~ msgid "Type of network to allocate for tenant networks:"
+#~ msgstr "Type de réseau à affecter aux réseaux d'espace client :"
+
+#~ msgid ""
+#~ "The value \"local\" is useful only for single-box testing. In order for "
+#~ "tenant networks to provide connectivity between hosts, it is necessary to "
+#~ "either choose \"vlan\" and then configure \"network_vlan_ranges\" or to "
+#~ "choose \"gre\" and then configure \"tunnel_id_ranges\". Choose \"none\" "
+#~ "to disable creation of tenant networks."
+#~ msgstr ""
+#~ "La valeur « local » est utile seulement pour des tests avec un seul nœud. "
+#~ "Afin que les réseaux d'espace client fournissent de la connectivité entre "
+#~ "les hôtes, il est nécessaire de choisir entre « vlan » puis de configurer "
+#~ "« network_vlan_ranges », ou bien de choisir « gre » et alors de "
+#~ "configurer « tunnel_id_ranges ». Veuillez choisir « aucun » pour "
+#~ "désactiver la création de réseaux d'espace client."
+
+#~ msgid "Enable tunneling?"
+#~ msgstr "Activer les tunnels ?"
+
+#~ msgid ""
+#~ "Please choose whether support should be activated for GRE networks on the "
+#~ "server and agents. This requires kernel support for OVS patch ports and "
+#~ "GRE tunneling."
+#~ msgstr ""
+#~ "Veuillez décider si la prise en charge des réseaux GRE doit être activé "
+#~ "sur le serveur et les agents. Ceci nécessite que le noyau gère les "
+#~ "« patch ports » OVS et les tunnels GRE."
+
+#~ msgid "Tunnel id ranges:"
+#~ msgstr "Plages d'identifiants de tunnel :"
+
+#~ msgid ""
+#~ "Please enter a comma-separated list of <tun_min>:<tun_max> tuples "
+#~ "enumerating ranges of GRE tunnel IDs that are available for tenant "
+#~ "network allocation if tenant_network_type is \"gre\"."
+#~ msgstr ""
+#~ "Veuillez indiquer une liste de couples <tun_min>:<tun_max> séparés par "
+#~ "des virgules énumérant les plages d'identifiants des tunnels GRE "
+#~ "disponibles pour l'affectation au réseau d'espace client, si le type de "
+#~ "réseau d'espace client est « gre »."
+
+#~ msgid "Local IP address of this hypervisor:"
+#~ msgstr "Adresse IP locale de cet hyperviseur :"
+
+#~ msgid "Please enter the local IP address for this hypervisor."
+#~ msgstr "Veuillez indiquer l'adresse IP locale de cet hyperviseur."
+
+#~ msgid "Register Neutron in the Keystone endpoint catalog?"
+#~ msgstr ""
+#~ "Enregistrer Neutron dans le catalogue de points d'accès de Keystone ?"
+
+#~ msgid ""
+#~ "Each OpenStack service (each API) should be registered in order to be "
+#~ "accessible. This is done using \"keystone service-create\" and \"keystone "
+#~ "endpoint-create\". This can be done automatically now."
+#~ msgstr ""
+#~ "Chaque service OpenStack (chaque API) doit être enregistré pour être "
+#~ "accessible. Cela peut être fait en utilisant « keystone service-create » "
+#~ "et « keystone endpoint-create ». Cela peut maintenant être fait "
+#~ "automatiquement."
+
+#~ msgid ""
+#~ "Note that you will need to have an up and running Keystone server on "
+#~ "which to connect using the Keystone authentication token."
+#~ msgstr ""
+#~ "Veuillez noter que vous aurez besoin d'avoir un serveur Keystone "
+#~ "fonctionnel sur lequel se connecter pour utiliser le jeton "
+#~ "d'authentification Keystone."
+
+#~ msgid "Keystone server IP address:"
+#~ msgstr "Adresse IP du serveur Keystone :"
+
+#~ msgid ""
+#~ "Please enter the IP address of the Keystone server, so that neutron-api "
+#~ "can contact Keystone to do the Neutron service and endpoint creation."
+#~ msgstr ""
+#~ "Veuillez indiquer l'adresse IP du serveur Keystone, pour que l'API de "
+#~ "Neutron puisse contacter Keystone pour établir le service Neutron et "
+#~ "créer le point d'accès."
+
+#~ msgid "Keystone authentication token:"
+#~ msgstr "Jeton d'authentification Keystone :"
+
+#~ msgid ""
+#~ "To configure its endpoint in Keystone, neutron-server needs the Keystone "
+#~ "auth token."
+#~ msgstr ""
+#~ "Pour configurer son point d'accès dans Keystone, le serveur Neutron a "
+#~ "besoin du jeton d'authentification Keystone."
+
+#~ msgid "Neutron endpoint IP address:"
+#~ msgstr "Adresse IP du point d'accès Neutron :"
+
+#~ msgid "Please enter the IP address that will be used to contact Neutron."
+#~ msgstr ""
+#~ "Veuillez indiquer l'adresse IP qui sera utilisée pour contacter Neutron."
+
+#~ msgid ""
+#~ "This IP address should be accessible from the clients that will use this "
+#~ "service, so if you are installing a public cloud, this should be a public "
+#~ "IP address."
+#~ msgstr ""
+#~ "L'adresse IP devra être accessible depuis les clients qui utiliseront ce "
+#~ "service, donc si vous installez un nuage public ce devra être une adresse "
+#~ "IP publique."
+
+#~ msgid "Name of the region to register:"
+#~ msgstr "Nom de la région à enregistrer :"
+
+#~ msgid ""
+#~ "OpenStack supports using availability zones, with each region "
+#~ "representing a location. Please enter the zone that you wish to use when "
+#~ "registering the endpoint."
+#~ msgstr ""
+#~ "OpenStack supporte l'utilisation de zones disponibles, avec chaque région "
+#~ "représentant un lieu. Veuillez entrer une zone que vous souhaitez "
+#~ "utiliser lors de l'enregistrement d'un point d'accès."
+
+#~ msgid "Auth server hostname:"
+#~ msgstr "Nom d'hôte du serveur d'authentification :"
+
+#~ msgid ""
+#~ "Please specify the URL of your Neutron authentication server. Typically "
+#~ "this is also the URL of your OpenStack Identity Service (Keystone)."
+#~ msgstr ""
+#~ "Veuillez indiquer l'adresse URL de votre serveur d'authentification "
+#~ "Neutron. En général il s'agit du Service d'Identité d'OpenStack "
+#~ "(Keystone)."
+
+#~ msgid "Auth server tenant name:"
+#~ msgstr "Nom d'espace client du serveur d'authentification :"
+
+#~ msgid "Auth server username:"
+#~ msgstr "Nom d'utilisateur du serveur d'authentification :"
+
+#~ msgid "Auth server password:"
+#~ msgstr "Mot de passe du serveur d'authentification :"
+
+#~ msgid "Name of the region to be used by the metadata server:"
+#~ msgstr "Nom de la région à utiliser par le serveur de métadonnées :"
+
+#~ msgid ""
+#~ "Openstack can be used using availability zones, with each region "
+#~ "representing a location. Please enter the zone that the metadata server "
+#~ "should use."
+#~ msgstr ""
+#~ "OpenStack supporte l'utilisation de zones disponibles, avec chaque région "
+#~ "représentant un lieu. Veuillez entrer la zone que le serveur de "
+#~ "métadonnées devra utiliser."
