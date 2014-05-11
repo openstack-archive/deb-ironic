@@ -1,3 +1,10 @@
+ironic (2014.1-3) unstable; urgency=medium
+
+  * Added initial italian Debconf template translation thanks to Beatrice
+    Torracca <beatricet@libero.it> (Closes: #747591).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 11 May 2014 18:41:01 +0800
+
 ironic (2014.1-2) unstable; urgency=medium
 
   * Added French debconf translation, thanks to Christian Perrier.
