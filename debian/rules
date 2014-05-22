@@ -1,5 +1,6 @@
 #!/usr/bin/make -f
 
+PYTHONS:=$(shell pyversions -vr)
 include /usr/share/openstack-pkg-tools/pkgos.make
 
 export OSLO_PACKAGE_VERSION=$(VERSION)
@@ -22,6 +23,9 @@ override_dh_auto_build:
 override_dh_auto_install:
 	dh_auto_install -O--buildsystem=python_distutils
 	install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
+	set -e && for pyvers in $(PYTHONS); do \
+		cp -rf ironic/db/sqlalchemy/alembic $(CURDIR)/debian/python-ironic/usr/lib/python$$pyvers/dist-packages/ironic/db/sqlalchemy ; \
+	done
 
 override_dh_auto_test:
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
