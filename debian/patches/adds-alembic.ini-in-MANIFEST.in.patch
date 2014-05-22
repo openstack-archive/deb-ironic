@@ -1,0 +1,13 @@
+Description: Fixes MANIFEST.in so that alembic.ini is packaged
+Author: Thomas Goirand <zigo@debian.org>
+Bug-Debian: http://bugs.debian.org/748924
+Forwarded: no
+Last-Update: 2014-05-22
+
+--- ironic-2014.1.orig/MANIFEST.in
++++ ironic-2014.1/MANIFEST.in
+@@ -1,3 +1,4 @@
++include ironic/db/sqlalchemy/alembic.ini
+ include AUTHORS
+ include ChangeLog
+ exclude .gitignore

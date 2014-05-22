@@ -1,3 +1,10 @@
+ironic (2014.1-5) unstable; urgency=medium
+
+  * Added a patch for the MANIFEST.in to also package alembic.ini, which was
+    preventing db install (Closes: #748924).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 22 May 2014 23:02:58 +0800
+
 ironic (2014.1-4) unstable; urgency=medium
 
   * Added Spanish debconf translation, thanks to Camaleón <noelamac@gmail.com>

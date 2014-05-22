@@ -1,1 +1,2 @@
 avoid-network-when-building-doc.patch
+adds-alembic.ini-in-MANIFEST.in.patch
