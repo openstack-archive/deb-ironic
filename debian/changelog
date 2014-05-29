@@ -1,3 +1,9 @@
+ironic (2014.1-6) unstable; urgency=medium
+
+  * Switched from restarting daemons to copytruncate in logrotate.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 29 May 2014 14:16:30 +0800
+
 ironic (2014.1-5) unstable; urgency=medium
 
   * Added a patch for the MANIFEST.in to also package alembic.ini, which was
