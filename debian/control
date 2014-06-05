@@ -6,11 +6,12 @@ Uploaders: Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
            Mehdi Abaakouk <sileht@sileht.net>
 Build-Depends: debhelper (>= 9),
-               openstack-pkg-tools (>= 8~),
+               openstack-pkg-tools (>= 12~),
                po-debconf,
                python-all (>= 2.6.6-3~),
                python-pbr (>= 0.6),
-               python-setuptools
+               python-setuptools,
+               python-sphinx
 Build-Depends-Indep: alembic (>= 0.4.1),
                      python-amqplib,
                      python-anyjson (>= 0.3.3),
@@ -43,7 +44,6 @@ Build-Depends-Indep: alembic (>= 0.4.1),
                      python-pyghmi,
                      python-seamicroclient,
                      python-six (>= 1.5.2),
-                     python-sphinx,
                      python-sphinxcontrib-pecanwsme,
                      python-sqlalchemy,
                      python-stevedore (>= 0.14),
@@ -51,8 +51,8 @@ Build-Depends-Indep: alembic (>= 0.4.1),
                      python-testtools (>= 0.9.34),
                      python-webob (>= 1.2.3),
                      python-wsme (>= 0.6),
-                     testrepository (>= 0.0.18),
                      subunit (>= 0.0.18),
+                     testrepository (>= 0.0.18),
                      websockify (>= 0.5.1)
 Standards-Version: 3.9.5
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/ironic.git;a=summary
