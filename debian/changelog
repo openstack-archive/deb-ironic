@@ -1,3 +1,10 @@
+ironic (2014.1-8) unstable; urgency=medium
+
+  * Added German debconf translation thanks to Mario Blättermann
+    <mario.blaettermann@gmail.com> (Closes: #751681).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 16 Jun 2014 16:19:58 +0800
+
 ironic (2014.1-7) unstable; urgency=medium
 
   * Now build-depends on openstack-pkg-tools >= 12~.
