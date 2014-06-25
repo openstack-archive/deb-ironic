@@ -1,3 +1,10 @@
+ironic (2014.1-9) unstable; urgency=medium
+
+  * Added Russian debconf template thanks to Yuri Kozlov <yuray@komyakino.ru>
+    (Closes: #752551).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 25 Jun 2014 14:41:59 +0800
+
 ironic (2014.1-8) unstable; urgency=medium
 
   * Added German debconf translation thanks to Mario Blättermann

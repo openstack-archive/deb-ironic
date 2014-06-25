@@ -1,0 +1,71 @@
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the ironic package.
+#
+# Yuri Kozlov <yuray@komyakino.ru>, 2014.
+msgid ""
+msgstr ""
+"Project-Id-Version: ironic 2014.1-8\n"
+"Report-Msgid-Bugs-To: ironic@packages.debian.org\n"
+"POT-Creation-Date: 2013-11-26 16:52+0800\n"
+"PO-Revision-Date: 2014-06-24 19:19+0400\n"
+"Last-Translator: Yuri Kozlov <yuray@komyakino.ru>\n"
+"Language-Team: Russian <debian-l10n-russian@lists.debian.org>\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<"
+"=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+"X-Generator: Lokalize 1.5\n"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid "Set up a database for Ironic?"
+msgstr "Настроить базу данных для Ironic?"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"No database has been set up for Ironic to use. Before continuing, you should "
+"make sure you have the following information:"
+msgstr ""
+"Для использования Ironic требуется настроить базу данных. Если вы хотите "
+"сделать это сейчас, то проверьте, что у вас есть вся необходимая информация:"
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+" * the type of database that you want to use;\n"
+" * the database server hostname (that server must allow TCP connections from "
+"this\n"
+"   machine);\n"
+" * a username and password to access the database."
+msgstr ""
+" * тип базы данных, который хотите использовать;\n"
+" * имя узла сервера базы данных (этот сервер должен принимать\n"
+"   TCP-соединения с этой машины);\n"
+" * имя пользователя и пароль для доступа к базе данных."
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"If some of these requirements are missing, do not choose this option and run "
+"with regular SQLite support."
+msgstr ""
+"Если не хватает хотя бы одного параметра, ответьте отрицательно и включите "
+"поддержку SQLite."
+
+#. Type: boolean
+#. Description
+#: ../ironic-common.templates:2001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"ironic-common\"."
+msgstr ""
+"Позднее, вы можете изменить эту настройку, запустив «dpkg-reconfigure -plow "
+"ironic-common»."
+
