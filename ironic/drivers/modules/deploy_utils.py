@@ -20,6 +20,7 @@ import socket
 import stat
 import time
 
+from ironic.common import disk_partitioner
 from ironic.common import exception
 from ironic.common import utils
 from ironic.openstack.common import excutils
@@ -40,7 +41,9 @@ def discovery(portal_address, portal_port):
                   '-t', 'st',
                   '-p', '%s:%s' % (portal_address, portal_port),
                   run_as_root=True,
-                  check_exit_code=[0])
+                  check_exit_code=[0],
+                  attempts=5,
+                  delay_on_retry=True)
 
 
 def login_iscsi(portal_address, portal_port, target_iqn):
@@ -51,7 +54,9 @@ def login_iscsi(portal_address, portal_port, target_iqn):
                   '-T', target_iqn,
                   '--login',
                   run_as_root=True,
-                  check_exit_code=[0])
+                  check_exit_code=[0],
+                  attempts=5,
+                  delay_on_retry=True)
     # Ensure the login complete
     time.sleep(3)
 
@@ -64,43 +69,61 @@ def logout_iscsi(portal_address, portal_port, target_iqn):
                   '-T', target_iqn,
                   '--logout',
                   run_as_root=True,
-                  check_exit_code=[0])
+                  check_exit_code=[0],
+                  attempts=5,
+                  delay_on_retry=True)
 
 
 def delete_iscsi(portal_address, portal_port, target_iqn):
     """Delete the iSCSI target."""
+    # Retry delete until it succeeds (exit code 0) or until there is
+    # no longer a target to delete (exit code 21).
     utils.execute('iscsiadm',
                   '-m', 'node',
                   '-p', '%s:%s' % (portal_address, portal_port),
                   '-T', target_iqn,
                   '-o', 'delete',
                   run_as_root=True,
-                  check_exit_code=[0])
+                  check_exit_code=[0, 21],
+                  attempts=5,
+                  delay_on_retry=True)
 
 
-def make_partitions(dev, root_mb, swap_mb, ephemeral_mb):
-    """Create partitions for root and swap on a disk device."""
-    cmd = []
+def make_partitions(dev, root_mb, swap_mb, ephemeral_mb, commit=True):
+    """Create partitions for root, swap and ephemeral on a disk device.
 
-    def add_partition(start, size, fs_type=''):
-        end = start + size
-        cmd.extend(['mkpart', 'primary', fs_type, str(start), str(end)])
-        return end
+    :param root_mb: Size of the root partition in mebibytes (MiB).
+    :param swap_mb: Size of the swap partition in mebibytes (MiB). If 0,
+        no swap partition will be created.
+    :param ephemeral_mb: Size of the ephemeral partition in mebibytes (MiB).
+        If 0, no ephemeral partition will be created.
+    :param commit: True/False. Default for this setting is True. If False
+        partitions will not be written to disk.
+    :returns: A dictionary containing the partition type as Key and partition
+        path as Value for the partitions created by this method.
 
-    offset = 1
+    """
+    part_template = dev + '-part%d'
+    part_dict = {}
+    dp = disk_partitioner.DiskPartitioner(dev)
     if ephemeral_mb:
-        offset = add_partition(offset, ephemeral_mb)
-        offset = add_partition(offset, swap_mb, fs_type='linux-swap')
-        offset = add_partition(offset, root_mb)
-    else:
-        offset = add_partition(offset, root_mb)
-        offset = add_partition(offset, swap_mb, fs_type='linux-swap')
+        part_num = dp.add_partition(ephemeral_mb)
+        part_dict['ephemeral'] = part_template % part_num
 
-    utils.execute('parted', '-a', 'optimal', '-s', dev, '--', 'mklabel',
-                  'msdos', 'unit', 'MiB', *cmd, run_as_root=True, attempts=3,
-                  check_exit_code=[0])
-    # avoid "device is busy"
-    time.sleep(3)
+    if swap_mb:
+        part_num = dp.add_partition(swap_mb, fs_type='linux-swap')
+        part_dict['swap'] = part_template % part_num
+
+    # NOTE(lucasagomes): Make the root partition the last partition. This
+    # enables tools like cloud-init's growroot utility to expand the root
+    # partition until the end of the disk.
+    part_num = dp.add_partition(root_mb)
+    part_dict['root'] = part_template % part_num
+
+    if commit:
+        # write to the disk
+        dp.commit()
+    return part_dict
 
 
 def is_block_device(dev):
@@ -194,36 +217,36 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
         partition table has not changed).
 
     """
-    # NOTE(lucasagomes): When there's an ephemeral partition we want
-    # root to be last because that would allow root to resize and make it
-    # safer to do takeovernode with slightly larger images
-    if ephemeral_mb:
-        ephemeral_part = "%s-part1" % dev
-        swap_part = "%s-part2" % dev
-        root_part = "%s-part3" % dev
-    else:
-        root_part = "%s-part1" % dev
-        swap_part = "%s-part2" % dev
-
     if not is_block_device(dev):
         raise exception.InstanceDeployFailure(_("Parent device '%s' not found")
                                               % dev)
-    make_partitions(dev, root_mb, swap_mb, ephemeral_mb)
+
+    # the only way for preserve_ephemeral to be set to true is if we are
+    # rebuilding an instance with --preserve_ephemeral.
+    commit = not preserve_ephemeral
+    part_dict = make_partitions(dev, root_mb, swap_mb, ephemeral_mb,
+                                commit=commit)
+
+    ephemeral_part = part_dict.get('ephemeral')
+    swap_part = part_dict.get('swap')
+    root_part = part_dict.get('root')
 
     if not is_block_device(root_part):
         raise exception.InstanceDeployFailure(_("Root device '%s' not found")
                                               % root_part)
-    if not is_block_device(swap_part):
+    if swap_part and not is_block_device(swap_part):
         raise exception.InstanceDeployFailure(_("Swap device '%s' not found")
                                               % swap_part)
-    if ephemeral_mb and not is_block_device(ephemeral_part):
+    if ephemeral_part and not is_block_device(ephemeral_part):
         raise exception.InstanceDeployFailure(
                          _("Ephemeral device '%s' not found") % ephemeral_part)
 
     dd(image_path, root_part)
-    mkswap(swap_part)
 
-    if ephemeral_mb and not preserve_ephemeral:
+    if swap_part:
+        mkswap(swap_part)
+
+    if ephemeral_part and not preserve_ephemeral:
         mkfs_ephemeral(ephemeral_part, ephemeral_format)
 
     try:

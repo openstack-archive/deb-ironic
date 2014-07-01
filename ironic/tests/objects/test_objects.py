@@ -31,7 +31,8 @@ gettext.install('ironic')
 
 
 class MyObj(base.IronicObject):
-    version = '1.5'
+    VERSION = '1.5'
+
     fields = {'foo': int,
               'bar': str,
               'missing': str,
@@ -41,7 +42,7 @@ class MyObj(base.IronicObject):
         setattr(self, attrname, 'loaded!')
 
     @base.remotable_classmethod
-    def get(cls, context):
+    def query(cls, context):
         obj = cls()
         obj.foo = 1
         obj.bar = 'bar'
@@ -84,6 +85,10 @@ class MyObj2(object):
     @base.remotable_classmethod
     def get(cls, *args, **kwargs):
         pass
+
+
+class TestSubclassedObject(MyObj):
+    fields = {'new_field': str}
 
 
 class TestMetaclass(test_base.TestCase):
@@ -209,6 +214,7 @@ class _BaseTestCase(test_base.TestCase):
     def setUp(self):
         super(_BaseTestCase, self).setUp()
         self.remote_object_calls = list()
+        self.context = context.get_admin_context()
 
 
 class _LocalTest(_BaseTestCase):
@@ -276,8 +282,7 @@ class _TestObject(object):
         self.assertEqual({}, obj.obj_get_changes())
 
     def test_object_property(self):
-        obj = MyObj()
-        obj.foo = 1
+        obj = MyObj(foo=1)
         self.assertEqual(1, obj.foo)
 
     def test_object_property_type_error(self):
@@ -345,72 +350,65 @@ class _TestObject(object):
     def test_with_alternate_context(self):
         ctxt1 = context.RequestContext('foo', 'foo')
         ctxt2 = context.RequestContext('bar', tenant='alternate')
-        obj = MyObj.get(ctxt1)
+        obj = MyObj.query(ctxt1)
         obj.update_test(ctxt2)
         self.assertEqual('alternate-context', obj.bar)
         self.assertRemotes()
 
     def test_orphaned_object(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj._context = None
         self.assertRaises(exception.OrphanedObjectError,
                           obj.update_test)
         self.assertRemotes()
 
     def test_changed_1(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(set(['foo']), obj.obj_what_changed())
-        obj.update_test(ctxt)
+        obj.update_test(self.context)
         self.assertEqual(set(['foo', 'bar']), obj.obj_what_changed())
         self.assertEqual(123, obj.foo)
         self.assertRemotes()
 
     def test_changed_2(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(set(['foo']), obj.obj_what_changed())
-        obj.save(ctxt)
+        obj.save(self.context)
         self.assertEqual(set([]), obj.obj_what_changed())
         self.assertEqual(123, obj.foo)
         self.assertRemotes()
 
     def test_changed_3(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(set(['foo']), obj.obj_what_changed())
-        obj.refresh(ctxt)
+        obj.refresh(self.context)
         self.assertEqual(set([]), obj.obj_what_changed())
         self.assertEqual(321, obj.foo)
         self.assertEqual('refreshed', obj.bar)
         self.assertRemotes()
 
     def test_changed_4(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         obj.bar = 'something'
         self.assertEqual(set(['bar']), obj.obj_what_changed())
-        obj.modify_save_modify(ctxt)
+        obj.modify_save_modify(self.context)
         self.assertEqual(set(['foo']), obj.obj_what_changed())
         self.assertEqual(42, obj.foo)
         self.assertEqual('meow', obj.bar)
         self.assertRemotes()
 
     def test_static_result(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         self.assertEqual('bar', obj.bar)
         result = obj.marco()
         self.assertEqual('polo', result)
         self.assertRemotes()
 
     def test_updates(self):
-        ctxt = context.get_admin_context()
-        obj = MyObj.get(ctxt)
+        obj = MyObj.query(self.context)
         self.assertEqual(1, obj.foo)
         obj.update_test()
         self.assertEqual('updated', obj.bar)
@@ -439,6 +437,70 @@ class _TestObject(object):
         obj.foo = 1
         self.assertTrue('foo' in obj)
         self.assertFalse('does_not_exist' in obj)
+
+    def test_obj_attr_is_set(self):
+        obj = MyObj(foo=1)
+        self.assertTrue(obj.obj_attr_is_set('foo'))
+        self.assertFalse(obj.obj_attr_is_set('bar'))
+        self.assertRaises(AttributeError, obj.obj_attr_is_set, 'bang')
+
+    def test_get(self):
+        obj = MyObj(foo=1)
+        # Foo has value, should not get the default
+        self.assertEqual(obj.get('foo', 2), 1)
+        # Foo has value, should return the value without error
+        self.assertEqual(obj.get('foo'), 1)
+        # Bar is not loaded, so we should get the default
+        self.assertEqual(obj.get('bar', 'not-loaded'), 'not-loaded')
+        # Bar without a default should lazy-load
+        self.assertEqual(obj.get('bar'), 'loaded!')
+        # Bar now has a default, but loaded value should be returned
+        self.assertEqual(obj.get('bar', 'not-loaded'), 'loaded!')
+        # Invalid attribute should raise AttributeError
+        self.assertRaises(AttributeError, obj.get, 'nothing')
+        # ...even with a default
+        self.assertRaises(AttributeError, obj.get, 'nothing', 3)
+
+    def test_object_inheritance(self):
+        base_fields = base.IronicObject.fields.keys()
+        myobj_fields = ['foo', 'bar', 'missing'] + base_fields
+        myobj3_fields = ['new_field']
+        self.assertTrue(issubclass(TestSubclassedObject, MyObj))
+        self.assertEqual(len(myobj_fields), len(MyObj.fields))
+        self.assertEqual(set(myobj_fields), set(MyObj.fields.keys()))
+        self.assertEqual(len(myobj_fields) + len(myobj3_fields),
+                         len(TestSubclassedObject.fields))
+        self.assertEqual(set(myobj_fields) | set(myobj3_fields),
+                         set(TestSubclassedObject.fields.keys()))
+
+    def test_get_changes(self):
+        obj = MyObj()
+        self.assertEqual({}, obj.obj_get_changes())
+        obj.foo = 123
+        self.assertEqual({'foo': 123}, obj.obj_get_changes())
+        obj.bar = 'test'
+        self.assertEqual({'foo': 123, 'bar': 'test'}, obj.obj_get_changes())
+        obj.obj_reset_changes()
+        self.assertEqual({}, obj.obj_get_changes())
+
+    def test_obj_fields(self):
+        class TestObj(base.IronicObject):
+            fields = {'foo': int}
+            obj_extra_fields = ['bar']
+
+            @property
+            def bar(self):
+                return 'this is bar'
+
+        obj = TestObj()
+        self.assertEqual(set(['created_at', 'updated_at', 'foo', 'bar']),
+                         set(obj.obj_fields))
+
+    def test_obj_constructor(self):
+        obj = MyObj(context=self.context, foo=123, bar='abc')
+        self.assertEqual(123, obj.foo)
+        self.assertEqual('abc', obj.bar)
+        self.assertEqual(set(['foo', 'bar']), obj.obj_what_changed())
 
 
 class TestObject(_LocalTest, _TestObject):
@@ -480,6 +542,45 @@ class TestObjectListBase(test_base.TestCase):
         self.assertFalse(obj is obj2)
         self.assertEqual([x.foo for x in obj],
                          [y.foo for y in obj2])
+
+    def _test_object_list_version_mappings(self, list_obj_class):
+        # Figure out what sort of object this list is for
+        list_field = list_obj_class.fields['objects']
+        item_obj_field = list_field._type._element_type
+        item_obj_name = item_obj_field._type._obj_name
+
+        # Look through all object classes of this type and make sure that
+        # the versions we find are covered by the parent list class
+        for item_class in base.IronicObject._obj_classes[item_obj_name]:
+            self.assertIn(
+                item_class.VERSION,
+                list_obj_class.child_versions.values())
+
+    def test_object_version_mappings(self):
+        # Find all object list classes and make sure that they at least handle
+        # all the current object versions
+        for obj_classes in base.IronicObject._obj_classes.values():
+            for obj_class in obj_classes:
+                if issubclass(obj_class, base.ObjectListBase):
+                    self._test_object_list_version_mappings(obj_class)
+
+    def test_list_changes(self):
+        class Foo(base.ObjectListBase, base.IronicObject):
+            pass
+
+        class Bar(base.IronicObject):
+            fields = {'foo': str}
+
+        obj = Foo(objects=[])
+        self.assertEqual(set(['objects']), obj.obj_what_changed())
+        obj.objects.append(Bar(foo='test'))
+        self.assertEqual(set(['objects']), obj.obj_what_changed())
+        obj.obj_reset_changes()
+        # This should still look dirty because the child is dirty
+        self.assertEqual(set(['objects']), obj.obj_what_changed())
+        obj.objects[0].obj_reset_changes()
+        # This should now look clean because the child is clean
+        self.assertEqual(set(), obj.obj_what_changed())
 
 
 class TestObjectSerializer(test_base.TestCase):

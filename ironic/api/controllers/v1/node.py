@@ -15,7 +15,6 @@
 
 import datetime
 
-import jsonpatch
 from oslo.config import cfg
 import pecan
 from pecan import rest
@@ -56,31 +55,59 @@ class NodePatchType(types.JsonPatchType):
         return ['/chassis_uuid', '/driver']
 
 
+class ConsoleInfo(base.APIBase):
+    """API representation of the console information for a node."""
+
+    console_enabled = types.boolean
+    "The console state: if the console is enabled or not."
+
+    console_info = {wtypes.text: types.MultiType(wtypes.text,
+                                                 six.integer_types)}
+    "The console information. It typically includes the url to access the"
+    "console and the type of the application that hosts the console."
+
+    @classmethod
+    def sample(cls):
+        console = {'type': 'shellinabox', 'url': 'http://<hostname>:4201'}
+        return cls(console_enabled=True, console_info=console)
+
+
 class NodeConsoleController(rest.RestController):
 
-    @wsme_pecan.wsexpose(wtypes.text, types.uuid)
+    @wsme_pecan.wsexpose(ConsoleInfo, types.uuid)
     def get(self, node_uuid):
         """Get connection information about the console.
 
         :param node_uuid: UUID of a node.
         """
-        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context,
+                                            node_uuid)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
-        return pecan.request.rpcapi.get_console_information(
-                                       pecan.request.context, node_uuid, topic)
+        try:
+            console = pecan.request.rpcapi.get_console_information(
+                pecan.request.context, node_uuid, topic)
+            console_state = True
+        except exception.NodeConsoleNotEnabled:
+            console = None
+            console_state = False
+
+        return ConsoleInfo(console_enabled=console_state, console_info=console)
 
     @wsme_pecan.wsexpose(None, types.uuid, types.boolean, status_code=202)
     def put(self, node_uuid, enabled):
         """Start and stop the node console.
 
         :param node_uuid: UUID of a node.
-        :param enabled: Boolean value; whether the console is enabled or
-                        disabled.
+        :param enabled: Boolean value; whether to enable or disable the
+                console.
         """
         rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         pecan.request.rpcapi.set_console_mode(pecan.request.context, node_uuid,
                                               enabled, topic)
+        # Set the HTTP Location Header
+        url_args = '/'.join([node_uuid, 'states', 'console'])
+        pecan.response.location = link.build_url('nodes', url_args)
 
 
 class NodeStates(base.APIBase):
@@ -168,12 +195,9 @@ class NodeStatesController(rest.RestController):
 
         pecan.request.rpcapi.change_node_power_state(pecan.request.context,
                                                      node_uuid, target, topic)
-
-        # FIXME(lucasagomes): Currently WSME doesn't support returning
-        # the Location header. Once it's implemented we should use the
-        # Location to point to the /states subresource of the node so
-        # that clients will know how to track the status of the request
-        # https://bugs.launchpad.net/wsme/+bug/1233687
+        # Set the HTTP Location Header
+        url_args = '/'.join([node_uuid, 'states'])
+        pecan.response.location = link.build_url('nodes', url_args)
 
     @wsme_pecan.wsexpose(None, types.uuid, wtypes.text, status_code=202)
     def provision(self, node_uuid, target):
@@ -203,7 +227,7 @@ class NodeStatesController(rest.RestController):
                    {'node': rpc_node['uuid'], 'state': target})
             raise wsme.exc.ClientSideError(msg, status_code=400)
 
-        if target == ir_states.ACTIVE:
+        if target in (ir_states.ACTIVE, ir_states.REBUILD):
             processing = rpc_node.target_provision_state is not None
         elif target == ir_states.DELETED:
             processing = (rpc_node.target_provision_state is not None and
@@ -220,17 +244,16 @@ class NodeStatesController(rest.RestController):
         # by the time the RPC call is made and the TaskManager manager gets a
         # lock.
 
-        if target == ir_states.ACTIVE:
+        if target in (ir_states.ACTIVE, ir_states.REBUILD):
+            rebuild = (target == ir_states.REBUILD)
             pecan.request.rpcapi.do_node_deploy(
-                    pecan.request.context, node_uuid, topic)
+                    pecan.request.context, node_uuid, rebuild, topic)
         elif target == ir_states.DELETED:
             pecan.request.rpcapi.do_node_tear_down(
                     pecan.request.context, node_uuid, topic)
-        # FIXME(lucasagomes): Currently WSME doesn't support returning
-        # the Location header. Once it's implemented we should use the
-        # Location to point to the /states subresource of this node so
-        # that clients will know how to track the status of the request
-        # https://bugs.launchpad.net/wsme/+bug/1233687
+        # Set the HTTP Location Header
+        url_args = '/'.join([node_uuid, 'states'])
+        pecan.response.location = link.build_url('nodes', url_args)
 
 
 class Node(base.APIBase):
@@ -297,6 +320,10 @@ class Node(base.APIBase):
     console_enabled = types.boolean
     "Indicates whether the console access is enabled or disabled on the node."
 
+    instance_info = {wtypes.text: types.MultiType(wtypes.text,
+                                                  six.integer_types)}
+    "This node's instance info."
+
     driver = wsme.wsattr(wtypes.text, mandatory=True)
     "The driver responsible for controlling the node"
 
@@ -324,19 +351,30 @@ class Node(base.APIBase):
     "Links to the collection of ports on this node"
 
     def __init__(self, **kwargs):
-        self.fields = objects.Node.fields.keys()
-        for k in self.fields:
+        self.fields = []
+        fields = objects.Node.fields.keys()
+        for k in fields:
+            # Skip fields we do not expose.
+            if not hasattr(self, k):
+                continue
+            self.fields.append(k)
             setattr(self, k, kwargs.get(k))
 
+        # NOTE(lucasagomes): chassis_id is an attribute created on-the-fly
+        # by _set_chassis_uuid(), it needs to be present in the fields so
+        # that as_dict() will contain chassis_id field when converting it
+        # before saving it in the database.
+        self.fields.append('chassis_id')
+
         # NOTE(lucasagomes): chassis_uuid is not part of objects.Node.fields
-        #                    because it's an API-only attribute
+        # because it's an API-only attribute.
         self.fields.append('chassis_uuid')
         setattr(self, 'chassis_uuid', kwargs.get('chassis_id'))
 
     @classmethod
     def _convert_with_links(cls, node, url, expand=True):
         if not expand:
-            except_list = ['instance_uuid', 'power_state',
+            except_list = ['instance_uuid', 'maintenance', 'power_state',
                            'provision_state', 'uuid']
             node.unset_fields_except(except_list)
         else:
@@ -377,7 +415,7 @@ class Node(base.APIBase):
                      reservation=None, driver='fake', driver_info={}, extra={},
                      properties={'memory_mb': '1024', 'local_gb': '10',
                      'cpus': '1'}, updated_at=time, created_at=time,
-                     provision_updated_at=time)
+                     provision_updated_at=time, instance_info={})
         # NOTE(matty_dubs): The chassis_uuid getter() is based on the
         # _chassis_uuid variable:
         sample._chassis_uuid = 'edcad704-b2da-41d5-96d9-afd580ecfa12'
@@ -618,8 +656,11 @@ class NodesController(rest.RestController):
             e.code = 400
             raise e
 
-        new_node = pecan.request.dbapi.create_node(node.as_dict())
-
+        new_node = objects.Node(context=pecan.request.context,
+                                **node.as_dict())
+        new_node.create()
+        # Set the HTTP Location Header
+        pecan.response.location = link.build_url('nodes', new_node.uuid)
         return Node.convert_with_links(new_node)
 
     @wsme.validate(types.uuid, [NodePatchType])
@@ -643,15 +684,19 @@ class NodesController(rest.RestController):
             raise wsme.exc.ClientSideError(msg % node_uuid, status_code=409)
 
         try:
-            node = Node(**jsonpatch.apply_patch(rpc_node.as_dict(),
-                                                jsonpatch.JsonPatch(patch)))
+            node = Node(**api_utils.apply_jsonpatch(rpc_node.as_dict(), patch))
         except api_utils.JSONPATCH_EXCEPTIONS as e:
             raise exception.PatchError(patch=patch, reason=e)
 
         # Update only the fields that have changed
         for field in objects.Node.fields:
-            if rpc_node[field] != getattr(node, field):
-                rpc_node[field] = getattr(node, field)
+            try:
+                patch_val = getattr(node, field)
+            except AttributeError:
+                # Ignore fields that aren't exposed in the API
+                continue
+            if rpc_node[field] != patch_val:
+                rpc_node[field] = patch_val
 
         # NOTE(deva): we calculate the rpc topic here in case node.driver
         #             has changed, so that update is sent to the

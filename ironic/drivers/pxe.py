@@ -39,6 +39,7 @@ class PXEAndIPMIToolDriver(base.BaseDriver):
 
     def __init__(self):
         self.power = ipmitool.IPMIPower()
+        self.console = ipmitool.IPMIShellinaboxConsole()
         self.deploy = pxe.PXEDeploy()
         self.pxe_vendor = pxe.VendorPassthru()
         self.ipmi_vendor = ipmitool.VendorPassthru()
@@ -99,7 +100,9 @@ class PXEAndSeaMicroDriver(base.BaseDriver):
 
     def __init__(self):
         if not importutils.try_import('seamicroclient'):
-            raise exception.DriverNotFound('PXEAndSeaMicroDriver')
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason="Unable to import seamicroclient library")
         self.power = seamicro.Power()
         self.deploy = pxe.PXEDeploy()
         self.seamicro_vendor = seamicro.VendorPassthru()

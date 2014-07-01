@@ -2,6 +2,7 @@
 
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 NTT DOCOMO, INC.
+# Copyright 2014 International Business Machines Corporation
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -32,6 +33,7 @@ from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.drivers import base
+from ironic.drivers.modules import console_utils
 from ironic.openstack.common import excutils
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import loopingcall
@@ -42,6 +44,12 @@ LOG = logging.getLogger(__name__)
 
 VALID_BOOT_DEVICES = ['pxe', 'disk', 'safe', 'cdrom', 'bios']
 VALID_PRIV_LEVELS = ['ADMINISTRATOR', 'CALLBACK', 'OPERATOR', 'USER']
+
+
+def _console_pwfile_path(uuid):
+    """Return the file path for storing the ipmi password for a console."""
+    file_name = "%(uuid)s.pw" % {'uuid': uuid}
+    return os.path.join(tempfile.gettempdir(), file_name)
 
 
 @contextlib.contextmanager
@@ -73,12 +81,19 @@ def _parse_driver_info(node):
     :raises: InvalidParameterValue if any required parameters are missing.
 
     """
-    info = node.get('driver_info', {})
+    info = node.driver_info or {}
     address = info.get('ipmi_address')
     username = info.get('ipmi_username')
     password = info.get('ipmi_password')
     port = info.get('ipmi_terminal_port')
     priv_level = info.get('ipmi_priv_level', 'ADMINISTRATOR')
+
+    if port:
+        try:
+            port = int(port)
+        except ValueError:
+            raise exception.InvalidParameterValue(_(
+                "IPMI terminal port is not an integer."))
 
     if not address:
         raise exception.InvalidParameterValue(_(
@@ -96,7 +111,7 @@ def _parse_driver_info(node):
             'username': username,
             'password': password,
             'port': port,
-            'uuid': node.get('uuid'),
+            'uuid': node.uuid,
             'priv_level': priv_level
            }
 
@@ -133,8 +148,9 @@ def _exec_ipmitool(driver_info, command):
         args.append(pw_file)
         args.extend(command.split(" "))
         out, err = utils.execute(*args, attempts=3)
-        LOG.debug(_("ipmitool stdout: '%(out)s', stderr: '%(err)s'"),
-                  {'out': out, 'err': err})
+        LOG.debug("ipmitool stdout: '%(out)s', stderr: '%(err)s', from node "
+                  "%(node_id)s",
+                  {'out': out, 'err': err, 'node_id': driver_info['uuid']})
         return out, err
 
 
@@ -195,8 +211,9 @@ def _set_and_wait(target_state, driver_info):
         if (sleep_time + mutable['total_time']) > CONF.ipmi.retry_timeout:
             # Stop if the next loop would exceed maximum retry_timeout
             LOG.error(_('IPMI power %(state)s timed out after '
-                        '%(tries)s retries.'),
-                        {'state': state_name, 'tries': mutable['iter']})
+                        '%(tries)s retries on node %(node_id)s.'),
+                        {'state': state_name, 'tries': mutable['iter'],
+                        'node_id': driver_info['uuid']})
             mutable['power'] = states.ERROR
             raise loopingcall.LoopingCallDone()
         else:
@@ -280,26 +297,24 @@ class IPMIPower(base.PowerInterface):
                     "%(error)s") % {'node': node.uuid, 'error': e}
             raise exception.InvalidParameterValue(msg)
 
-    def get_power_state(self, task, node):
-        """Get the current power state.
+    def get_power_state(self, task):
+        """Get the current power state of the task's node.
 
-        :param task: a TaskManager instance.
-        :param node: The Node.
+        :param task: a TaskManager instance containing the node to act on.
         :returns: one of ironic.common.states POWER_OFF, POWER_ON or ERROR.
         :raises: InvalidParameterValue if required ipmi parameters are missing.
         :raises: IPMIFailure on an error from ipmitool (from _power_status
             call).
 
         """
-        driver_info = _parse_driver_info(node)
+        driver_info = _parse_driver_info(task.node)
         return _power_status(driver_info)
 
     @task_manager.require_exclusive_lock
-    def set_power_state(self, task, node, pstate):
+    def set_power_state(self, task, pstate):
         """Turn the power on or off.
 
-        :param task: a TaskManager instance.
-        :param node: The Node.
+        :param task: a TaskManager instance containing the node to act on.
         :param pstate: The desired power state, one of ironic.common.states
             POWER_ON, POWER_OFF.
         :raises: InvalidParameterValue if required ipmi parameters are missing
@@ -307,7 +322,7 @@ class IPMIPower(base.PowerInterface):
         :raises: PowerStateFailure if the power couldn't be set to pstate.
 
         """
-        driver_info = _parse_driver_info(node)
+        driver_info = _parse_driver_info(task.node)
 
         if pstate == states.POWER_ON:
             state = _power_on(driver_info)
@@ -321,17 +336,16 @@ class IPMIPower(base.PowerInterface):
             raise exception.PowerStateFailure(pstate=pstate)
 
     @task_manager.require_exclusive_lock
-    def reboot(self, task, node):
-        """Cycles the power to a node.
+    def reboot(self, task):
+        """Cycles the power to the task's node.
 
-        :param task: a TaskManager instance.
-        :param node: The Node.
+        :param task: a TaskManager instance containing the node to act on.
         :raises: InvalidParameterValue if required ipmi parameters are missing.
         :raises: PowerStateFailure if the final state of the node is not
             POWER_ON.
 
         """
-        driver_info = _parse_driver_info(node)
+        driver_info = _parse_driver_info(task.node)
         _power_off(driver_info)
         state = _power_on(driver_info)
 
@@ -342,11 +356,10 @@ class IPMIPower(base.PowerInterface):
 class VendorPassthru(base.VendorInterface):
 
     @task_manager.require_exclusive_lock
-    def _set_boot_device(self, task, node, device, persistent=False):
+    def _set_boot_device(self, task, device, persistent=False):
         """Set the boot device for a node.
 
         :param task: a TaskManager instance.
-        :param node: The Node.
         :param device: Boot device. One of [pxe, disk, cdrom, safe, bios].
         :param persistent: Whether to set next-boot, or make the change
             permanent. Default: False.
@@ -361,14 +374,14 @@ class VendorPassthru(base.VendorInterface):
         cmd = "chassis bootdev %s" % device
         if persistent:
             cmd = cmd + " options=persistent"
-        driver_info = _parse_driver_info(node)
+        driver_info = _parse_driver_info(task.node)
         try:
             out, err = _exec_ipmitool(driver_info, cmd)
             # TODO(deva): validate (out, err) and add unit test for failure
         except Exception:
             raise exception.IPMIFailure(cmd=cmd)
 
-    def validate(self, node, **kwargs):
+    def validate(self, task, **kwargs):
         method = kwargs['method']
         if method == 'set_boot_device':
             device = kwargs.get('device')
@@ -382,10 +395,59 @@ class VendorPassthru(base.VendorInterface):
 
         return True
 
-    def vendor_passthru(self, task, node, **kwargs):
+    def vendor_passthru(self, task, **kwargs):
         method = kwargs['method']
         if method == 'set_boot_device':
             return self._set_boot_device(
-                        task, node,
+                        task,
                         kwargs.get('device'),
                         kwargs.get('persistent', False))
+
+
+class IPMIShellinaboxConsole(base.ConsoleInterface):
+    """A ConsoleInterface that uses ipmitool and shellinabox."""
+
+    def validate(self, task, node):
+        """Validate the Node console info.
+
+        :param node: a single Node to validate.
+        :raises: InvalidParameterValue
+        """
+        driver_info = _parse_driver_info(node)
+        if not driver_info['port']:
+            raise exception.InvalidParameterValue(_(
+                "IPMI terminal port not supplied to IPMI driver."))
+
+    def start_console(self, task):
+        """Start a remote console for the node."""
+        driver_info = _parse_driver_info(task.node)
+
+        path = _console_pwfile_path(driver_info['uuid'])
+        pw_file = console_utils.make_persistent_password_file(
+                path, driver_info['password'])
+
+        ipmi_cmd = "/:%(uid)s:%(gid)s:HOME:ipmitool -H %(address)s" \
+                   " -I lanplus -U %(user)s -f %(pwfile)s"  \
+                   % {'uid': os.getuid(),
+                      'gid': os.getgid(),
+                      'address': driver_info['address'],
+                      'user': driver_info['username'],
+                      'pwfile': pw_file}
+        if CONF.debug:
+            ipmi_cmd += " -v"
+        ipmi_cmd += " sol activate"
+        console_utils.start_shellinabox_console(driver_info['uuid'],
+                                                driver_info['port'],
+                                                ipmi_cmd)
+
+    def stop_console(self, task):
+        """Stop the remote console session for the node."""
+        driver_info = _parse_driver_info(task.node)
+        console_utils.stop_shellinabox_console(driver_info['uuid'])
+        utils.unlink_without_raise(_console_pwfile_path(driver_info['uuid']))
+
+    def get_console(self, task):
+        """Get the type and connection information about the console."""
+        driver_info = _parse_driver_info(task.node)
+        url = console_utils.get_shellinabox_console_url(driver_info['port'])
+        return {'type': 'shellinabox', 'url': url}

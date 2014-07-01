@@ -50,7 +50,6 @@ import six.moves.urllib.parse as urlparse
 import sqlalchemy
 import sqlalchemy.exc
 
-from ironic.db.sqlalchemy import api as sqla_api
 from ironic.db.sqlalchemy import migration
 from ironic.openstack.common.db.sqlalchemy import utils as db_utils
 from ironic.openstack.common import lockutils
@@ -165,7 +164,7 @@ class BaseMigrationTestCase(base.TestCase):
 
         self.engines = {}
         for key, value in self.test_databases.items():
-            self.engines[key] = sqla_api.create_engine(value)
+            self.engines[key] = sqlalchemy.create_engine(value)
 
         # We start each test case with a completely blank slate.
         self.temp_dir = self.useFixture(fixtures.TempDir())
@@ -466,6 +465,9 @@ class TestMigrations(BaseMigrationTestCase, WalkVersionsMixin):
         self._walk_versions(engine, self.config, downgrade=False)
 
     def test_walk_versions(self):
+        if not len(self.engines.values()):
+            self.skipTest("No engines initialized")
+
         for engine in self.engines.values():
             self._walk_versions(engine, self.config, downgrade=False)
 
@@ -512,3 +514,10 @@ class TestMigrations(BaseMigrationTestCase, WalkVersionsMixin):
                                    sqlalchemy.types.Boolean) or
                         isinstance(nodes.c.console_enabled.type,
                                    sqlalchemy.types.Integer))
+
+    def _check_31baaf680d2b(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        col_names = [column.name for column in nodes.c]
+        self.assertIn('instance_info', col_names)
+        self.assertIsInstance(nodes.c.instance_info.type,
+                              sqlalchemy.types.TEXT)

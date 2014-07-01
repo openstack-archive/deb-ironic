@@ -24,6 +24,7 @@ functionality between a power interface and a deploy interface, when both rely
 on seprate vendor_passthru methods.
 """
 
+from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common import states
 from ironic.drivers import base
@@ -44,16 +45,16 @@ class FakePower(base.PowerInterface):
     def validate(self, task, node):
         pass
 
-    def get_power_state(self, task, node):
-        return node.get('power_state', states.NOSTATE)
+    def get_power_state(self, task):
+        return task.node.power_state
 
-    def set_power_state(self, task, node, power_state):
+    def set_power_state(self, task, power_state):
         if power_state not in [states.POWER_ON, states.POWER_OFF]:
             raise exception.InvalidParameterValue(_("set_power_state called "
                     "with an invalid power state: %s.") % power_state)
-        node['power_state'] = power_state
+        task.node.power_state = power_state
 
-    def reboot(self, task, node):
+    def reboot(self, task):
         pass
 
 
@@ -65,26 +66,26 @@ class FakeDeploy(base.DeployInterface):
     def validate(self, task, node):
         pass
 
-    def deploy(self, task, node):
+    def deploy(self, task):
         pass
 
-    def tear_down(self, task, node):
+    def tear_down(self, task):
         pass
 
-    def prepare(self, task, node):
+    def prepare(self, task):
         pass
 
-    def clean_up(self, task, node):
+    def clean_up(self, task):
         pass
 
-    def take_over(self, task, node):
+    def take_over(self, task):
         pass
 
 
 class FakeVendorA(base.VendorInterface):
     """Example implementation of a vendor passthru interface."""
 
-    def validate(self, task, node, **kwargs):
+    def validate(self, task, **kwargs):
         method = kwargs.get('method')
         if method == 'first_method':
             bar = kwargs.get('bar')
@@ -94,21 +95,21 @@ class FakeVendorA(base.VendorInterface):
             return
         _raise_unsupported_error(method)
 
-    def _private_method(self, task, node, bar):
+    def _private_method(self, task, bar):
         return True if bar == 'baz' else False
 
-    def vendor_passthru(self, task, node, **kwargs):
+    def vendor_passthru(self, task, **kwargs):
         method = kwargs.get('method')
         if method == 'first_method':
             bar = kwargs.get('bar')
-            return self._private_method(task, node, bar)
+            return self._private_method(task, bar)
         _raise_unsupported_error(method)
 
 
 class FakeVendorB(base.VendorInterface):
     """Example implementation of a secondary vendor passthru."""
 
-    def validate(self, task, node, **kwargs):
+    def validate(self, task, **kwargs):
         method = kwargs.get('method')
         if method == 'second_method':
             bar = kwargs.get('bar')
@@ -118,14 +119,14 @@ class FakeVendorB(base.VendorInterface):
             return
         _raise_unsupported_error(method)
 
-    def _private_method(self, task, node, bar):
+    def _private_method(self, task, bar):
         return True if bar == 'kazoo' else False
 
-    def vendor_passthru(self, task, node, **kwargs):
+    def vendor_passthru(self, task, **kwargs):
         method = kwargs.get('method')
         if method == 'second_method':
             bar = kwargs.get('bar')
-            return self._private_method(task, node, bar)
+            return self._private_method(task, bar)
         _raise_unsupported_error(method)
 
 
@@ -135,11 +136,29 @@ class FakeConsole(base.ConsoleInterface):
     def validate(self, task, node):
         return True
 
-    def start_console(self, task, node):
+    def start_console(self, task):
         pass
 
-    def stop_console(self, task, node):
+    def stop_console(self, task):
         pass
 
-    def get_console(self, task, node):
+    def get_console(self, task):
         return {}
+
+
+class FakeManagement(base.ManagementInterface):
+    """Example implementation of a simple management interface."""
+
+    def validate(self, task, node):
+        return True
+
+    def get_supported_boot_devices(self):
+        return [boot_devices.PXE]
+
+    def set_boot_device(self, task, device, **kwargs):
+        if device not in self.get_supported_boot_devices():
+            raise exception.InvalidParameterValue(_(
+                "Invalid boot device %s specified.") % device)
+
+    def get_boot_device(self, task):
+        return boot_devices.PXE

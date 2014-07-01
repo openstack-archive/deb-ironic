@@ -17,9 +17,11 @@
 
 import functools
 import logging
-import shutil
+import os
 import sys
 import time
+
+import sendfile
 
 from glanceclient import client
 import six.moves.urllib.parse as urlparse
@@ -158,7 +160,7 @@ class BaseImageService(object):
 
         :returns: A list of dicts containing image metadata.
         """
-        LOG.debug(_("Getting a full list of images metadata from glance."))
+        LOG.debug("Getting a full list of images metadata from glance.")
         params = service_utils.extract_query_params(kwargs, self.version)
 
         images = self.call(method, **params)
@@ -179,7 +181,7 @@ class BaseImageService(object):
 
         :raises: ImageNotFound
         """
-        LOG.debug(_("Getting image metadata from glance. Image: %s")
+        LOG.debug("Getting image metadata from glance. Image: %s"
                   % image_href)
         (image_id, self.glance_host,
          self.glance_port, use_ssl) = service_utils.parse_image_ref(image_href)
@@ -209,14 +211,8 @@ class BaseImageService(object):
             url = urlparse.urlparse(location)
             if url.scheme == "file":
                 with open(url.path, "r") as f:
-                    #TODO(ghe): Use system call for downloading files.
-                    # Bug #1199522
-
-                    # FIXME(jbresnah) a system call to cp could have
-                    # significant performance advantages, however we
-                    # do not have the path to files at this point in
-                    # the abstraction.
-                    shutil.copyfileobj(f, data)
+                    filesize = os.path.getsize(f.name)
+                    sendfile.sendfile(data.fileno(), f.fileno(), 0, filesize)
                 return
 
         image_chunks = self.call(method, image_id)

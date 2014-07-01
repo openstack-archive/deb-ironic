@@ -14,12 +14,10 @@
 #    under the License.
 
 import datetime
-import jsonpatch
 import six
 
 import pecan
 from pecan import rest
-
 import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
@@ -86,7 +84,8 @@ class Chassis(base.APIBase):
                                              'chassis', chassis.uuid),
                          link.Link.make_link('bookmark',
                                              url,
-                                             'chassis', chassis.uuid)
+                                             'chassis', chassis.uuid,
+                                             bookmark=True)
                         ]
         return chassis
 
@@ -207,7 +206,8 @@ class ChassisController(rest.RestController):
         :param chassis: a chassis within the request body.
         """
         new_chassis = pecan.request.dbapi.create_chassis(chassis.as_dict())
-
+        # Set the HTTP Location Header
+        pecan.response.location = link.build_url('chassis', new_chassis.uuid)
         return Chassis.convert_with_links(new_chassis)
 
     @wsme.validate(types.uuid, [ChassisPatchType])
@@ -221,8 +221,8 @@ class ChassisController(rest.RestController):
         rpc_chassis = objects.Chassis.get_by_uuid(pecan.request.context,
                                                   chassis_uuid)
         try:
-            chassis = Chassis(**jsonpatch.apply_patch(rpc_chassis.as_dict(),
-                                                   jsonpatch.JsonPatch(patch)))
+            chassis = Chassis(**api_utils.apply_jsonpatch(
+                                            rpc_chassis.as_dict(), patch))
         except api_utils.JSONPATCH_EXCEPTIONS as e:
             raise exception.PatchError(patch=patch, reason=e)
 

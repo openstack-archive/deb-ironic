@@ -34,6 +34,7 @@ from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.drivers import base
+from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import processutils
 
@@ -137,7 +138,7 @@ def _ssh_execute(ssh_obj, cmd_to_exec):
         output_list = processutils.ssh_execute(ssh_obj,
                                                cmd_to_exec)[0].split('\n')
     except Exception as e:
-        LOG.debug(_("Cannot execute SSH cmd %(cmd)s. Reason: %(err)s.")
+        LOG.debug("Cannot execute SSH cmd %(cmd)s. Reason: %(err)s."
                 % {'cmd': cmd_to_exec, 'err': e})
         raise exception.SSHCommandFailed(cmd=cmd_to_exec)
 
@@ -153,7 +154,7 @@ def _parse_driver_info(node):
         or incorrect.
 
     """
-    info = node.get('driver_info', {})
+    info = node.driver_info or {}
     address = info.get('ssh_address')
     username = info.get('ssh_username')
     password = info.get('ssh_password')
@@ -172,7 +173,7 @@ def _parse_driver_info(node):
            'username': username,
            'port': port,
            'virt_type': virt_type,
-           'uuid': node.get('uuid')
+           'uuid': node.uuid
           }
 
     if not virt_type:
@@ -261,12 +262,12 @@ def _get_hosts_name_for_node(ssh_obj, driver_info):
     cmd_to_exec = "%s %s" % (driver_info['cmd_set']['base_cmd'],
                              driver_info['cmd_set']['list_all'])
     full_node_list = _ssh_execute(ssh_obj, cmd_to_exec)
-    LOG.debug(_("Retrieved Node List: %s") % repr(full_node_list))
+    LOG.debug("Retrieved Node List: %s" % repr(full_node_list))
     # for each node check Mac Addresses
     for node in full_node_list:
         if not node:
             continue
-        LOG.debug(_("Checking Node: %s's Mac address.") % node)
+        LOG.debug("Checking Node: %s's Mac address." % node)
         cmd_to_exec = "%s %s" % (driver_info['cmd_set']['base_cmd'],
                                  driver_info['cmd_set']['get_node_macs'])
         cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', node)
@@ -279,7 +280,7 @@ def _get_hosts_name_for_node(ssh_obj, driver_info):
                 if not node_mac:
                     continue
                 if _normalize_mac(host_mac) in _normalize_mac(node_mac):
-                    LOG.debug(_("Found Mac address: %s") % node_mac)
+                    LOG.debug("Found Mac address: %s" % node_mac)
                     matched_name = node
                     break
 
@@ -343,19 +344,6 @@ def _power_off(ssh_obj, driver_info):
         return states.ERROR
 
 
-def _get_nodes_mac_addresses(task, node):
-    """Get all mac addresses for a node.
-
-    :param task: An instance of `ironic.manager.task_manager.TaskManager`.
-    :param node: the Node of interest.
-    :returns: a list of all the MAC addresses for the node.
-
-    """
-    for r in task.resources:
-        if r.node.id == node['id']:
-            return [p.address for p in r.ports]
-
-
 class SSHPower(base.PowerInterface):
     """SSH Power Interface.
 
@@ -377,23 +365,21 @@ class SSHPower(base.PowerInterface):
         :raises: InvalidParameterValue if any connection parameters are
             incorrect or if ssh failed to connect to the node.
         """
-        if not _get_nodes_mac_addresses(task, node):
+        if not driver_utils.get_node_mac_addresses(task):
             raise exception.InvalidParameterValue(_("Node %s does not have "
                                 "any port associated with it.") % node.uuid)
         try:
-            _get_connection(node)
+            _get_connection(task.node)
         except exception.SSHConnectFailed as e:
             raise exception.InvalidParameterValue(_("SSH connection cannot"
                                                     " be established: %s") % e)
 
-    def get_power_state(self, task, node):
-        """Get the current power state.
+    def get_power_state(self, task):
+        """Get the current power state of the task's node.
 
-        Poll the host for the current power state of the node.
+        Poll the host for the current power state of the task's node.
 
-        :param task: An instance of `ironic.manager.task_manager.TaskManager`.
-        :param node: A single node.
-
+        :param task: a TaskManager instance containing the node to act on.
         :returns: power state. One of :class:`ironic.common.states`.
         :raises: InvalidParameterValue if any connection parameters are
             incorrect.
@@ -401,22 +387,20 @@ class SSHPower(base.PowerInterface):
         :raises: SSHCommandFailed on an error from ssh.
         :raises: SSHConnectFailed if ssh failed to connect to the node.
         """
-        driver_info = _parse_driver_info(node)
-        driver_info['macs'] = _get_nodes_mac_addresses(task, node)
-        ssh_obj = _get_connection(node)
+        driver_info = _parse_driver_info(task.node)
+        driver_info['macs'] = driver_utils.get_node_mac_addresses(task)
+        ssh_obj = _get_connection(task.node)
         return _get_power_status(ssh_obj, driver_info)
 
     @task_manager.require_exclusive_lock
-    def set_power_state(self, task, node, pstate):
+    def set_power_state(self, task, pstate):
         """Turn the power on or off.
 
-        Set the power state of a node.
+        Set the power state of the task's node.
 
-        :param task: An instance of `ironic.manager.task_manager.TaskManager`.
-        :param node: A single node.
+        :param task: a TaskManager instance containing the node to act on.
         :param pstate: Either POWER_ON or POWER_OFF from :class:
             `ironic.common.states`.
-
         :raises: InvalidParameterValue if any connection parameters are
             incorrect, or if the desired power state is invalid.
         :raises: NodeNotFound.
@@ -424,9 +408,9 @@ class SSHPower(base.PowerInterface):
         :raises: SSHCommandFailed on an error from ssh.
         :raises: SSHConnectFailed if ssh failed to connect to the node.
         """
-        driver_info = _parse_driver_info(node)
-        driver_info['macs'] = _get_nodes_mac_addresses(task, node)
-        ssh_obj = _get_connection(node)
+        driver_info = _parse_driver_info(task.node)
+        driver_info['macs'] = driver_utils.get_node_mac_addresses(task)
+        ssh_obj = _get_connection(task.node)
 
         if pstate == states.POWER_ON:
             state = _power_on(ssh_obj, driver_info)
@@ -440,14 +424,12 @@ class SSHPower(base.PowerInterface):
             raise exception.PowerStateFailure(pstate=pstate)
 
     @task_manager.require_exclusive_lock
-    def reboot(self, task, node):
-        """Cycles the power to a node.
+    def reboot(self, task):
+        """Cycles the power to the task's node.
 
         Power cycles a node.
 
-        :param task: An instance of `ironic.manager.task_manager.TaskManager`.
-        :param node: A single node.
-
+        :param task: a TaskManager instance containing the node to act on.
         :raises: InvalidParameterValue if any connection parameters are
             incorrect.
         :raises: NodeNotFound.
@@ -455,9 +437,9 @@ class SSHPower(base.PowerInterface):
         :raises: SSHCommandFailed on an error from ssh.
         :raises: SSHConnectFailed if ssh failed to connect to the node.
         """
-        driver_info = _parse_driver_info(node)
-        driver_info['macs'] = _get_nodes_mac_addresses(task, node)
-        ssh_obj = _get_connection(node)
+        driver_info = _parse_driver_info(task.node)
+        driver_info['macs'] = driver_utils.get_node_mac_addresses(task)
+        ssh_obj = _get_connection(task.node)
         current_pstate = _get_power_status(ssh_obj, driver_info)
         if current_pstate == states.POWER_ON:
             _power_off(ssh_obj, driver_info)

@@ -28,14 +28,19 @@ def _raise_unsupported_error(method=None):
 class MixinVendorInterface(base.VendorInterface):
     """Wrapper around multiple VendorInterfaces."""
 
-    def __init__(self, mapping):
+    def __init__(self, mapping, driver_passthru_mapping=None):
         """Wrapper around multiple VendorInterfaces.
 
         :param mapping: dict of {'method': interface} specifying how to combine
                         multiple vendor interfaces into one vendor driver.
+        :param driver_passthru_mapping: dict of {'method': interface}
+                                        specifying how to map
+                                        driver_vendor_passthru calls to
+                                        interfaces.
 
         """
         self.mapping = mapping
+        self.driver_level_mapping = driver_passthru_mapping or {}
 
     def _map(self, **kwargs):
         method = kwargs.get('method')
@@ -52,7 +57,7 @@ class MixinVendorInterface(base.VendorInterface):
         route = self._map(**kwargs)
         route.validate(*args, **kwargs)
 
-    def vendor_passthru(self, task, node, **kwargs):
+    def vendor_passthru(self, task, **kwargs):
         """Call vendor_passthru on the appropriate interface only.
 
         Returns or raises according to the requested vendor_passthru method.
@@ -63,4 +68,28 @@ class MixinVendorInterface(base.VendorInterface):
 
         """
         route = self._map(**kwargs)
-        return route.vendor_passthru(task, node, **kwargs)
+        return route.vendor_passthru(task, **kwargs)
+
+    def driver_vendor_passthru(self, context, method, **kwargs):
+        """Call driver_vendor_passthru on a mapped interface based on the
+        specified method.
+
+        Returns or raises according to the requested driver_vendor_passthru
+
+        :raises: UnsupportedDriverExtension if 'method' cannot be mapped to
+                 a supported interface.
+        """
+        iface = self.driver_level_mapping.get(method)
+        if iface is None:
+            _raise_unsupported_error(method)
+
+        return iface.driver_vendor_passthru(context, method, **kwargs)
+
+
+def get_node_mac_addresses(task):
+    """Get all MAC addresses for the ports belonging to this task's node.
+
+    :param task: a TaskManager instance containing the node to act on.
+    :returns: A list of MAC addresses in the format xx:xx:xx:xx:xx:xx.
+    """
+    return [p.address for p in task.ports]

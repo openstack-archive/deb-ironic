@@ -19,12 +19,14 @@ import datetime
 
 import mock
 from oslo.config import cfg
+from six.moves.urllib import parse as urlparse
 
 from ironic.common import utils
 from ironic.openstack.common import timeutils
 from ironic.tests.api import base
 from ironic.tests.api import utils as apiutils
 from ironic.tests.db import utils as dbutils
+from ironic.tests.objects import utils as obj_utils
 
 
 class TestListChassis(base.FunctionalTest):
@@ -40,6 +42,14 @@ class TestListChassis(base.FunctionalTest):
         self.assertEqual(chassis['uuid'], data['chassis'][0]["uuid"])
         self.assertNotIn('extra', data['chassis'][0])
         self.assertNotIn('nodes', data['chassis'][0])
+
+    def test_get_one(self):
+        cdict = dbutils.get_test_chassis()
+        chassis = self.dbapi.create_chassis(cdict)
+        data = self.get_json('/chassis/%s' % chassis['uuid'])
+        self.assertEqual(chassis['uuid'], data['uuid'])
+        self.assertIn('extra', data)
+        self.assertIn('nodes', data)
 
     def test_detail(self):
         cdict = dbutils.get_test_chassis()
@@ -76,8 +86,9 @@ class TestListChassis(base.FunctionalTest):
         self.assertIn('links', data.keys())
         self.assertEqual(2, len(data['links']))
         self.assertIn(uuid, data['links'][0]['href'])
-        self.assertTrue(self.validate_link(data['links'][0]['href']))
-        self.assertTrue(self.validate_link(data['links'][1]['href']))
+        for l in data['links']:
+            bookmark = l['rel'] == 'bookmark'
+            self.assertTrue(self.validate_link(l['href'], bookmark=bookmark))
 
     def test_collection_links(self):
         chassis = []
@@ -118,9 +129,9 @@ class TestListChassis(base.FunctionalTest):
         self.dbapi.create_chassis(cdict)
 
         for id in range(2):
-            ndict = dbutils.get_test_node(id=id, chassis_id=cdict['id'],
-                                          uuid=utils.generate_uuid())
-            self.dbapi.create_node(ndict)
+            obj_utils.create_test_node(self.context, id=id,
+                                       chassis_id=cdict['id'],
+                                       uuid=utils.generate_uuid())
 
         data = self.get_json('/chassis/%s/nodes' % cdict['uuid'])
         self.assertEqual(2, len(data['nodes']))
@@ -247,7 +258,15 @@ class TestPatch(base.FunctionalTest):
         self.assertEqual(400, response.status_code)
         self.assertTrue(response.json['error_message'])
 
-    def test_add_singular(self):
+    def test_add_root(self):
+        cdict = dbutils.get_test_chassis()
+        response = self.patch_json('/chassis/%s' % cdict['uuid'],
+                                   [{'path': '/description', 'value': 'test',
+                                     'op': 'add'}])
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(200, response.status_int)
+
+    def test_add_root_non_existent(self):
         cdict = dbutils.get_test_chassis()
         response = self.patch_json('/chassis/%s' % cdict['uuid'],
                                    [{'path': '/foo', 'value': 'bar',
@@ -303,6 +322,11 @@ class TestPost(base.FunctionalTest):
         return_created_at = timeutils.parse_isotime(
                             result['created_at']).replace(tzinfo=None)
         self.assertEqual(test_time, return_created_at)
+        # Check location header
+        self.assertIsNotNone(response.location)
+        expected_location = '/v1/chassis/%s' % cdict['uuid']
+        self.assertEqual(urlparse.urlparse(response.location).path,
+                         expected_location)
 
     def test_create_chassis_generate_uuid(self):
         cdict = apiutils.chassis_post_data()
@@ -358,8 +382,7 @@ class TestDelete(base.FunctionalTest):
     def test_delete_chassis_with_node(self):
         cdict = dbutils.get_test_chassis()
         self.dbapi.create_chassis(cdict)
-        ndict = dbutils.get_test_node(chassis_id=cdict['id'])
-        self.dbapi.create_node(ndict)
+        obj_utils.create_test_node(self.context, chassis_id=cdict['id'])
         response = self.delete('/chassis/%s' % cdict['uuid'],
                                expect_errors=True)
         self.assertEqual(400, response.status_int)

@@ -60,6 +60,9 @@ class Connection(object):
                         'maintenance': True | False
                         'chassis_uuid': uuid of chassis
                         'driver': driver's name
+                        'provision_state': provision state of node
+                        'provisioned_before': nodes with provision_updated_at
+                         field before this interval in seconds
         :param limit: Maximum number of nodes to return.
         :param marker: the last item of the previous page; we return the next
                        result set.
@@ -80,6 +83,9 @@ class Connection(object):
                         'maintenance': True | False
                         'chassis_uuid': uuid of chassis
                         'driver': driver's name
+                        'provision_state': provision state of node
+                        'provisioned_before': nodes with provision_updated_at
+                         field before this interval in seconds
         :param limit: Maximum number of nodes to return.
         :param marker: the last item of the previous page; we return the next
                        result set.
@@ -89,28 +95,29 @@ class Connection(object):
         """
 
     @abc.abstractmethod
-    def reserve_nodes(self, tag, nodes):
-        """Reserve a set of nodes atomically.
+    def reserve_node(self, tag, node_id):
+        """Reserve a node.
 
         To prevent other ManagerServices from manipulating the given
-        Nodes while a Task is performed, mark them all reserved by this host.
+        Node while a Task is performed, mark it reserved by this host.
 
         :param tag: A string uniquely identifying the reservation holder.
-        :param nodes: A list of node id or uuid.
-        :returns: A list of the reserved node refs.
-        :raises: NodeNotFound if any node is not found.
-        :raises: NodeAlreadyReserved if any node is already reserved.
+        :param node_id: A node id or uuid.
+        :returns: A Node object.
+        :raises: NodeNotFound if the node is not found.
+        :raises: NodeLocked if the node is already reserved.
         """
 
     @abc.abstractmethod
-    def release_nodes(self, tag, nodes):
-        """Release the reservation on a set of nodes atomically.
+    def release_node(self, tag, node_id):
+        """Release the reservation on a node.
 
         :param tag: A string uniquely identifying the reservation holder.
-        :param nodes: A list of node id or uuid.
-        :raises: NodeNotFound if any node is not found.
-        :raises: NodeAlreadyReserved if any node could not be released
-                 because it was not reserved by this host.
+        :param node_id: A node id or uuid.
+        :raises: NodeNotFound if the node is not found.
+        :raises: NodeLocked if the node is reserved by another host.
+        :raises: NodeNotLocked if the node was found to not have a
+                 reservation at all.
         """
 
     @abc.abstractmethod
@@ -135,10 +142,18 @@ class Connection(object):
         """
 
     @abc.abstractmethod
-    def get_node(self, node_id):
+    def get_node_by_id(self, node_id):
         """Return a node.
 
-        :param node_id: The id or uuid of a node.
+        :param node_id: The id of a node.
+        :returns: A node.
+        """
+
+    @abc.abstractmethod
+    def get_node_by_uuid(self, node_uuid):
+        """Return a node.
+
+        :param node_uuid: The uuid of a node.
         :returns: A node.
         """
 
@@ -208,11 +223,11 @@ class Connection(object):
         """
 
     @abc.abstractmethod
-    def get_ports_by_node(self, node_id, limit=None, marker=None,
-                          sort_key=None, sort_dir=None):
+    def get_ports_by_node_id(self, node_id, limit=None, marker=None,
+                             sort_key=None, sort_dir=None):
         """List all the ports for a given node.
 
-        :param node_id: The id or uuid of a node.
+        :param node_id: The integer node ID.
         :param limit: Maximum number of ports to return.
         :param marker: the last item of the previous page; we return the next
                        result set.

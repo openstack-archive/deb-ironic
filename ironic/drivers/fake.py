@@ -42,6 +42,7 @@ class FakeDriver(base.BaseDriver):
                         'second_method': self.b}
         self.vendor = utils.MixinVendorInterface(self.mapping)
         self.console = fake.FakeConsole()
+        self.management = fake.FakeManagement()
 
 
 class FakeIPMIToolDriver(base.BaseDriver):
@@ -49,6 +50,7 @@ class FakeIPMIToolDriver(base.BaseDriver):
 
     def __init__(self):
         self.power = ipmitool.IPMIPower()
+        self.console = ipmitool.IPMIShellinaboxConsole()
         self.deploy = fake.FakeDeploy()
         self.vendor = ipmitool.VendorPassthru()
 
@@ -84,7 +86,9 @@ class FakeSeaMicroDriver(base.BaseDriver):
 
     def __init__(self):
         if not importutils.try_import('seamicroclient'):
-            raise exception.DriverNotFound('FakeSeaMicroDriver')
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason="Unable to import seamicroclient library")
         self.power = seamicro.Power()
         self.deploy = fake.FakeDeploy()
         self.vendor = seamicro.VendorPassthru()

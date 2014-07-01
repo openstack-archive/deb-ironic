@@ -340,9 +340,13 @@ class ConfigNotFound(IronicException):
     message = _("Could not find config at %(path)s")
 
 
-class NodeLocked(TemporaryFailure):
+class NodeLocked(Conflict):
     message = _("Node %(node)s is locked by host %(host)s, please retry "
                 "after the current operation is completed.")
+
+
+class NodeNotLocked(Invalid):
+    message = _("Node %(node)s found not to be locked on release")
 
 
 class NoFreeConductorWorker(TemporaryFailure):
@@ -357,3 +361,19 @@ class VendorPassthruException(IronicException):
 
 class ConfigInvalid(IronicException):
     message = _("Invalid configuration file. %(error_msg)s")
+
+
+class DriverLoadError(IronicException):
+    message = _("Driver %(driver)s could not be loaded. Reason: %(reason)s.")
+
+
+class NoConsolePid(NotFound):
+    message = _("Could not find pid in pid file %(pid_path)s")
+
+
+class ConsoleSubprocessFailed(IronicException):
+    message = _("Console subprocess failed to start. %(error)s")
+
+
+class PasswordFileFailedToCreate(IronicException):
+    message = _("Failed to create the password file. %(error)s")

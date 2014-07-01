@@ -80,7 +80,7 @@ def _parse_driver_info(node):
     :raises: InvalidParameterValue if any required parameters are missing.
     """
 
-    info = node.get('driver_info', {})
+    info = node.driver_info or {}
     api_endpoint = info.get('seamicro_api_endpoint')
     username = info.get('seamicro_username')
     password = info.get('seamicro_password')
@@ -104,7 +104,7 @@ def _parse_driver_info(node):
            'api_endpoint': api_endpoint,
            'server_id': server_id,
            'api_version': api_version,
-           'uuid': node.get('uuid')}
+           'uuid': node.uuid}
 
     return res
 
@@ -316,39 +316,38 @@ class Power(base.PowerInterface):
     state of servers in a seamicro chassis.
     """
 
-    def validate(self, node):
+    def validate(self, task, node):
         """Check that node 'driver_info' is valid.
 
         Check that node 'driver_info' contains the required fields.
 
+        :param task: a TaskManager instance containing the node to act on.
         :param node: Single node object.
         :raises: InvalidParameterValue if required seamicro parameters are
             missing.
         """
-        _parse_driver_info(node)
+        _parse_driver_info(task.node)
 
-    def get_power_state(self, task, node):
-        """Get the current power state.
+    def get_power_state(self, task):
+        """Get the current power state of the task's node.
 
         Poll the host for the current power state of the node.
 
-        :param task: A instance of `ironic.manager.task_manager.TaskManager`.
-        :param node: A single node.
+        :param task: a TaskManager instance containing the node to act on.
         :raises: InvalidParameterValue if required seamicro parameters are
             missing.
         :raises: ServiceUnavailable on an error from SeaMicro Client.
         :returns: power state. One of :class:`ironic.common.states`.
         """
-        return _get_power_status(node)
+        return _get_power_status(task.node)
 
     @task_manager.require_exclusive_lock
-    def set_power_state(self, task, node, pstate):
+    def set_power_state(self, task, pstate):
         """Turn the power on or off.
 
         Set the power state of a node.
 
-        :param task: A instance of `ironic.manager.task_manager.TaskManager`.
-        :param node: A single node.
+        :param task: a TaskManager instance containing the node to act on.
         :param pstate: Either POWER_ON or POWER_OFF from :class:
             `ironic.common.states`.
         :raises: InvalidParameterValue if an invalid power state was specified.
@@ -356,9 +355,9 @@ class Power(base.PowerInterface):
         """
 
         if pstate == states.POWER_ON:
-            state = _power_on(node)
+            state = _power_on(task.node)
         elif pstate == states.POWER_OFF:
-            state = _power_off(node)
+            state = _power_off(task.node)
         else:
             raise exception.InvalidParameterValue(_(
                 "set_power_state called with invalid power state."))
@@ -367,17 +366,16 @@ class Power(base.PowerInterface):
             raise exception.PowerStateFailure(pstate=pstate)
 
     @task_manager.require_exclusive_lock
-    def reboot(self, task, node):
-        """Cycles the power to a node.
+    def reboot(self, task):
+        """Cycles the power to the task's node.
 
-        :param task: a TaskManager instance.
-        :param node: An Ironic node object.
+        :param task: a TaskManager instance containing the node to act on.
         :raises: InvalidParameterValue if required seamicro parameters are
             missing.
         :raises: PowerStateFailure if the final state of the node is not
             POWER_ON.
         """
-        state = _reboot(node)
+        state = _reboot(task.node)
 
         if state != states.POWER_ON:
             raise exception.PowerStateFailure(pstate=states.POWER_ON)
@@ -386,7 +384,7 @@ class Power(base.PowerInterface):
 class VendorPassthru(base.VendorInterface):
     """SeaMicro vendor-specific methods."""
 
-    def validate(self, task, node, **kwargs):
+    def validate(self, task, **kwargs):
         method = kwargs['method']
         if method in VENDOR_PASSTHRU_METHODS:
             return True
@@ -395,18 +393,18 @@ class VendorPassthru(base.VendorInterface):
                 "Unsupported method (%s) passed to SeaMicro driver.")
                 % method)
 
-    def vendor_passthru(self, task, node, **kwargs):
+    def vendor_passthru(self, task, **kwargs):
         """Dispatch vendor specific method calls."""
         method = kwargs['method']
         if method in VENDOR_PASSTHRU_METHODS:
-            return getattr(self, "_" + method)(task, node, **kwargs)
+            return getattr(self, "_" + method)(task, **kwargs)
 
-    def _set_node_vlan_id(self, task, node, **kwargs):
+    def _set_node_vlan_id(self, task, **kwargs):
         """Sets a untagged vlan id for NIC 0 of node.
 
         @kwargs vlan_id: id of untagged vlan for NIC 0 of node
         """
-
+        node = task.node
         vlan_id = kwargs.get('vlan_id')
         if not vlan_id:
             raise exception.InvalidParameterValue(_("No vlan id provided"))
@@ -429,7 +427,7 @@ class VendorPassthru(base.VendorInterface):
         node.properties = properties
         node.save(task.context)
 
-    def _attach_volume(self, task, node, **kwargs):
+    def _attach_volume(self, task, **kwargs):
         """Attach volume from SeaMicro storage pools for ironic to node.
             If kwargs['volume_id'] not given, Create volume in SeaMicro
             storage pool and attach to node.
@@ -439,6 +437,7 @@ class VendorPassthru(base.VendorInterface):
         @kwargs volume_size: size of new volume to be created and attached
                              as root volume of node
         """
+        node = task.node
         seamicro_info = _parse_driver_info(node)
         volume_id = kwargs.get('volume_id')
 
@@ -464,7 +463,7 @@ class VendorPassthru(base.VendorInterface):
             node.properties = properties
             node.save(task.context)
 
-    def _set_boot_device(self, task, node, **kwargs):
+    def _set_boot_device(self, task, **kwargs):
         """Set the boot device of the node.
 
         @kwargs device: Boot device. One of [pxe, disk]
@@ -477,7 +476,7 @@ class VendorPassthru(base.VendorInterface):
         if boot_device not in VALID_BOOT_DEVICES:
             raise exception.InvalidParameterValue(_("Boot device is invalid"))
 
-        seamicro_info = _parse_driver_info(node)
+        seamicro_info = _parse_driver_info(task.node)
         try:
             server = _get_server(seamicro_info)
             if boot_device == "disk":

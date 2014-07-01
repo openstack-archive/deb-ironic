@@ -15,7 +15,6 @@
 
 import datetime
 
-import jsonpatch
 import pecan
 from pecan import rest
 import six
@@ -54,7 +53,10 @@ class Port(base.APIBase):
     def _set_node_uuid(self, value):
         if value and self._node_uuid != value:
             try:
-                node = objects.Node.get_by_uuid(pecan.request.context, value)
+                # FIXME(comstud): One should only allow UUID here, but
+                # there seems to be a bug in that tests are passing an
+                # ID. See bug #1301046 for more details.
+                node = objects.Node.get(pecan.request.context, value)
                 self._node_uuid = node.uuid
                 # NOTE(lucasagomes): Create the node_id attribute on-the-fly
                 #                    to satisfy the api -> rpc object
@@ -160,8 +162,9 @@ class PortsController(rest.RestController):
     def __init__(self, from_nodes=False):
         self._from_nodes = from_nodes
 
-    def _get_ports_collection(self, node_uuid, marker, limit, sort_key,
-                              sort_dir, expand=False, resource_url=None):
+    def _get_ports_collection(self, node_uuid, address, marker, limit,
+                              sort_key, sort_dir, expand=False,
+                              resource_url=None):
         if self._from_nodes and not node_uuid:
             raise exception.InvalidParameterValue(_(
                   "Node id not specified."))
@@ -175,10 +178,17 @@ class PortsController(rest.RestController):
                                                   marker)
 
         if node_uuid:
-            ports = pecan.request.dbapi.get_ports_by_node(node_uuid, limit,
-                                                          marker_obj,
-                                                          sort_key=sort_key,
-                                                          sort_dir=sort_dir)
+            # FIXME(comstud): Since all we need is the node ID, we can
+            #                 make this more efficient by only querying
+            #                 for that column. This will get cleaned up
+            #                 as we move to the object interface.
+            node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+            ports = pecan.request.dbapi.get_ports_by_node_id(node.id, limit,
+                                                             marker_obj,
+                                                             sort_key=sort_key,
+                                                             sort_dir=sort_dir)
+        elif address:
+            ports = self._get_ports_by_address(address)
         else:
             ports = pecan.request.dbapi.get_port_list(limit, marker_obj,
                                                       sort_key=sort_key,
@@ -190,28 +200,46 @@ class PortsController(rest.RestController):
                                                  sort_key=sort_key,
                                                  sort_dir=sort_dir)
 
-    @wsme_pecan.wsexpose(PortCollection, types.uuid, types.uuid, int,
-                         wtypes.text, wtypes.text)
-    def get_all(self, node_uuid=None, marker=None, limit=None,
+    def _get_ports_by_address(self, address):
+        """Retrieve a port by its address.
+
+        :param address: MAC address of a port, to get the port which has
+                        this MAC address.
+        :returns: a list with the port, or an empty list if no port is found.
+
+        """
+        try:
+            port = pecan.request.dbapi.get_port(address)
+            return [port]
+        except exception.PortNotFound:
+            return []
+
+    @wsme_pecan.wsexpose(PortCollection, types.uuid, types.macaddress,
+                         types.uuid, int, wtypes.text, wtypes.text)
+    def get_all(self, node_uuid=None, address=None, marker=None, limit=None,
                 sort_key='id', sort_dir='asc'):
         """Retrieve a list of ports.
 
         :param node_uuid: UUID of a node, to get only ports for that node.
+        :param address: MAC address of a port, to get the port which has
+                        this MAC address.
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         """
-        return self._get_ports_collection(node_uuid, marker, limit,
+        return self._get_ports_collection(node_uuid, address, marker, limit,
                                           sort_key, sort_dir)
 
-    @wsme_pecan.wsexpose(PortCollection, types.uuid, types.uuid, int,
-                         wtypes.text, wtypes.text)
-    def detail(self, node_uuid=None, marker=None, limit=None,
+    @wsme_pecan.wsexpose(PortCollection, types.uuid, types.macaddress,
+                         types.uuid, int, wtypes.text, wtypes.text)
+    def detail(self, node_uuid=None, address=None, marker=None, limit=None,
                 sort_key='id', sort_dir='asc'):
         """Retrieve a list of ports with detail.
 
         :param node_uuid: UUID of a node, to get only ports for that node.
+        :param address: MAC address of a port, to get the port which has
+                        this MAC address.
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
         :param sort_key: column to sort results by. Default: id.
@@ -224,8 +252,9 @@ class PortsController(rest.RestController):
 
         expand = True
         resource_url = '/'.join(['ports', 'detail'])
-        return self._get_ports_collection(node_uuid, marker, limit, sort_key,
-                                          sort_dir, expand, resource_url)
+        return self._get_ports_collection(node_uuid, address, marker, limit,
+                                          sort_key, sort_dir, expand,
+                                          resource_url)
 
     @wsme_pecan.wsexpose(Port, types.uuid)
     def get_one(self, port_uuid):
@@ -249,7 +278,8 @@ class PortsController(rest.RestController):
             raise exception.OperationNotPermitted
 
         new_port = pecan.request.dbapi.create_port(port.as_dict())
-
+        # Set the HTTP Location Header
+        pecan.response.location = link.build_url('ports', new_port.uuid)
         return Port.convert_with_links(new_port)
 
     @wsme.validate(types.uuid, [PortPatchType])
@@ -265,8 +295,7 @@ class PortsController(rest.RestController):
 
         rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
         try:
-            port = Port(**jsonpatch.apply_patch(rpc_port.as_dict(),
-                                                jsonpatch.JsonPatch(patch)))
+            port = Port(**api_utils.apply_jsonpatch(rpc_port.as_dict(), patch))
         except api_utils.JSONPATCH_EXCEPTIONS as e:
             raise exception.PatchError(patch=patch, reason=e)
 
@@ -275,8 +304,8 @@ class PortsController(rest.RestController):
             if rpc_port[field] != getattr(port, field):
                 rpc_port[field] = getattr(port, field)
 
-        rpc_node = objects.Node.get_by_uuid(pecan.request.context,
-                                            rpc_port.node_id)
+        rpc_node = objects.Node.get_by_id(pecan.request.context,
+                                          rpc_port.node_id)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
 
         new_port = pecan.request.rpcapi.update_port(
