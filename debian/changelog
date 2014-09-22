@@ -1,3 +1,9 @@
+ironic (2014.2~b3-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 01 Jul 2014 14:17:05 +0800
+
 ironic (2014.1-9) unstable; urgency=medium
 
   * Added Russian debconf template thanks to Yuri Kozlov <yuray@komyakino.ru>
