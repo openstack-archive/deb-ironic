@@ -18,6 +18,8 @@ import wsme
 
 from oslo.config import cfg
 
+from ironic.common.i18n import _
+
 CONF = cfg.CONF
 
 
@@ -27,7 +29,7 @@ JSONPATCH_EXCEPTIONS = (jsonpatch.JsonPatchException,
 
 
 def validate_limit(limit):
-    if limit and limit < 0:
+    if limit is not None and limit <= 0:
         raise wsme.exc.ClientSideError(_("Limit must be positive"))
 
     return min(CONF.api.max_limit, limit) or CONF.api.max_limit

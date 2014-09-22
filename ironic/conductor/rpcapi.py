@@ -24,6 +24,7 @@ from oslo import messaging
 
 from ironic.common import exception
 from ironic.common import hash_ring as hash
+from ironic.common.i18n import _
 from ironic.common import rpc
 from ironic.conductor import manager
 from ironic.objects import base as objects_base
@@ -53,11 +54,14 @@ class ConductorAPI(object):
         1.13 - Added update_port.
         1.14 - Added driver_vendor_passthru.
         1.15 - Added rebuild parameter to do_node_deploy.
+        1.16 - Added get_driver_properties.
+        1.17 - Added set_boot_device, get_boot_device and
+               get_supported_boot_devices.
 
     """
 
     # NOTE(rloo): This must be in sync with manager.ConductorManager's.
-    RPC_API_VERSION = '1.15'
+    RPC_API_VERSION = '1.17'
 
     def __init__(self, topic=None):
         super(ConductorAPI, self).__init__()
@@ -153,6 +157,7 @@ class ConductorAPI(object):
         :param info: info for node driver.
         :param topic: RPC topic. Defaults to self.topic.
         :raises: InvalidParameterValue if supplied info is not valid.
+        :raises: MissingParameterValue if a required parameter is missing
         :raises: UnsupportedDriverExtension if current driver does not have
                  vendor interface.
         :raises: NoFreeConductorWorker when there is no free worker to start
@@ -173,6 +178,7 @@ class ConductorAPI(object):
         :param info: data to pass through to the driver.
         :param topic: RPC topic. Defaults to self.topic.
         :raises: InvalidParameterValue for parameter errors.
+        :raises: MissingParameterValue if a required parameter is missing
         :raises: UnsupportedDriverExtension if the driver doesn't have a vendor
                  interface, or if the vendor interface does not support the
                  specified driver_method.
@@ -193,6 +199,7 @@ class ConductorAPI(object):
         :param topic: RPC topic. Defaults to self.topic.
         :raises: InstanceDeployFailure
         :raises: InvalidParameterValue if validation fails
+        :raises: MissingParameterValue if a required parameter is missing
         :raises: NoFreeConductorWorker when there is no free worker to start
                  async task.
 
@@ -212,6 +219,7 @@ class ConductorAPI(object):
         :param topic: RPC topic. Defaults to self.topic.
         :raises: InstanceDeployFailure
         :raises: InvalidParameterValue if validation fails
+        :raises: MissingParameterValue if a required parameter is missing
         :raises: NoFreeConductorWorker when there is no free worker to start
                  async task.
 
@@ -274,6 +282,7 @@ class ConductorAPI(object):
         :raises: UnsupportedDriverExtension if the node's driver doesn't
                  support console.
         :raises: InvalidParameterValue when the wrong driver info is specified.
+        :raises: MissingParameterValue if a required parameter is missing
         """
         cctxt = self.client.prepare(topic=topic or self.topic, version='1.11')
         return cctxt.call(context, 'get_console_information', node_id=node_id)
@@ -289,6 +298,7 @@ class ConductorAPI(object):
         :raises: UnsupportedDriverExtension if the node's driver doesn't
                  support console.
         :raises: InvalidParameterValue when the wrong driver info is specified.
+        :raises: MissingParameterValue if a required parameter is missing
         :raises: NoFreeConductorWorker when there is no free worker to start
                  async task.
         """
@@ -311,3 +321,87 @@ class ConductorAPI(object):
         """
         cctxt = self.client.prepare(topic=topic or self.topic, version='1.13')
         return cctxt.call(context, 'update_port', port_obj=port_obj)
+
+    def get_driver_properties(self, context, driver_name, topic=None):
+        """Get the properties of the driver.
+
+        :param context: request context.
+        :param driver_name: name of the driver.
+        :param topic: RPC topic. Defaults to self.topic.
+        :returns: a dictionary with <property name>:<property description>
+                  entries.
+        :raises: DriverNotFound.
+
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.16')
+        return cctxt.call(context, 'get_driver_properties',
+                          driver_name=driver_name)
+
+    def set_boot_device(self, context, node_id, device, persistent=False,
+                        topic=None):
+        """Set the boot device for a node.
+
+        Set the boot device to use on next reboot of the node. Be aware
+        that not all drivers support this.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param device: the boot device, one of
+                       :mod:`ironic.common.boot_devices`.
+        :param persistent: Whether to set next-boot, or make the change
+                           permanent. Default: False.
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: UnsupportedDriverExtension if the node's driver doesn't
+                 support management.
+        :raises: InvalidParameterValue when the wrong driver info is
+                 specified or an invalid boot device is specified.
+        :raises: MissingParameterValue if missing supplied info.
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.17')
+        return cctxt.call(context, 'set_boot_device', node_id=node_id,
+                          device=device, persistent=persistent)
+
+    def get_boot_device(self, context, node_id, topic=None):
+        """Get the current boot device.
+
+        Returns the current boot device of a node.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: UnsupportedDriverExtension if the node's driver doesn't
+                 support management.
+        :raises: InvalidParameterValue when the wrong driver info is
+                 specified.
+        :raises: MissingParameterValue if missing supplied info.
+        :returns: a dictionary containing:
+
+            :boot_device: the boot device, one of
+                :mod:`ironic.common.boot_devices` or None if it is unknown.
+            :persistent: Whether the boot device will persist to all
+                future boots or not, None if it is unknown.
+
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.17')
+        return cctxt.call(context, 'get_boot_device', node_id=node_id)
+
+    def get_supported_boot_devices(self, context, node_id, topic=None):
+        """Get the list of supported devices.
+
+        Returns the list of supported boot devices of a node.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: UnsupportedDriverExtension if the node's driver doesn't
+                 support management.
+        :raises: InvalidParameterValue when the wrong driver info is
+                 specified.
+        :raises: MissingParameterValue if missing supplied info.
+        :returns: A list with the supported boot devices defined
+                  in :mod:`ironic.common.boot_devices`.
+
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.17')
+        return cctxt.call(context, 'get_supported_boot_devices',
+                          node_id=node_id)

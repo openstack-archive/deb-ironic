@@ -13,5 +13,6 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from ironic.openstack.common import gettextutils
-gettextutils.install('ironic')
+from oslo import i18n
+
+i18n.install('ironic')

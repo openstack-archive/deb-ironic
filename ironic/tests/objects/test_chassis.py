@@ -14,7 +14,9 @@
 #    under the License.
 
 import mock
+from testtools.matchers import HasLength
 
+from ironic.common import exception
 from ironic.common import utils as ironic_utils
 from ironic.db import api as db_api
 from ironic.db.sqlalchemy import models
@@ -31,19 +33,33 @@ class TestChassisObject(base.DbTestCase):
         self.fake_chassis = utils.get_test_chassis()
         self.dbapi = db_api.get_instance()
 
-    def test_load(self):
-        uuid = self.fake_chassis['uuid']
-        with mock.patch.object(self.dbapi, 'get_chassis',
+    def test_get_by_id(self):
+        chassis_id = self.fake_chassis['id']
+        with mock.patch.object(self.dbapi, 'get_chassis_by_id',
                                autospec=True) as mock_get_chassis:
             mock_get_chassis.return_value = self.fake_chassis
 
-            objects.Chassis.get_by_uuid(self.context, uuid)
+            objects.Chassis.get(self.context, chassis_id)
+
+            mock_get_chassis.assert_called_once_with(chassis_id)
+
+    def test_get_by_uuid(self):
+        uuid = self.fake_chassis['uuid']
+        with mock.patch.object(self.dbapi, 'get_chassis_by_uuid',
+                               autospec=True) as mock_get_chassis:
+            mock_get_chassis.return_value = self.fake_chassis
+
+            objects.Chassis.get(self.context, uuid)
 
             mock_get_chassis.assert_called_once_with(uuid)
 
+    def test_get_bad_id_and_uuid(self):
+        self.assertRaises(exception.InvalidIdentity,
+                          objects.Chassis.get, self.context, 'not-a-uuid')
+
     def test_save(self):
         uuid = self.fake_chassis['uuid']
-        with mock.patch.object(self.dbapi, 'get_chassis',
+        with mock.patch.object(self.dbapi, 'get_chassis_by_uuid',
                                autospec=True) as mock_get_chassis:
             mock_get_chassis.return_value = self.fake_chassis
             with mock.patch.object(self.dbapi, 'update_chassis',
@@ -63,8 +79,9 @@ class TestChassisObject(base.DbTestCase):
         returns = [dict(self.fake_chassis, uuid=uuid),
                    dict(self.fake_chassis, uuid=new_uuid)]
         expected = [mock.call(uuid), mock.call(uuid)]
-        with mock.patch.object(self.dbapi, 'get_chassis', side_effect=returns,
-                               autospec=True) as mock_get_chassis:
+        with mock.patch.object(self.dbapi, 'get_chassis_by_uuid',
+                               side_effect=returns, autospec=True) \
+                as mock_get_chassis:
             c = objects.Chassis.get_by_uuid(self.context, uuid)
             self.assertEqual(uuid, c.uuid)
             c.refresh()
@@ -101,3 +118,11 @@ class TestChassisObject(base.DbTestCase):
             self.assertIsInstance(c, models.Chassis)
         for c in _convert_many_db_chassis():
             self.assertIsInstance(c, objects.Chassis)
+
+    def test_list(self):
+        with mock.patch.object(self.dbapi, 'get_chassis_list',
+                               autospec=True) as mock_get_list:
+            mock_get_list.return_value = [self.fake_chassis]
+            chassis = objects.Chassis.list(self.context)
+            self.assertThat(chassis, HasLength(1))
+            self.assertIsInstance(chassis[0], objects.Chassis)

@@ -60,9 +60,13 @@ class Chassis(base.APIBase):
     "Links to the collection of nodes contained in this chassis"
 
     def __init__(self, **kwargs):
-        self.fields = objects.Chassis.fields.keys()
-        for k in self.fields:
-            setattr(self, k, kwargs.get(k))
+        self.fields = []
+        for field in objects.Chassis.fields:
+            # Skip fields we do not expose.
+            if not hasattr(self, field):
+                continue
+            self.fields.append(field)
+            setattr(self, field, kwargs.get(field))
 
     @classmethod
     def _convert_with_links(cls, chassis, url, expand=True):
@@ -133,8 +137,12 @@ class ChassisCollection(collection.Collection):
 class ChassisController(rest.RestController):
     """REST controller for Chassis."""
 
-    nodes = node.NodesController(from_chassis=True)
+    nodes = node.NodesController()
     "Expose nodes as a sub-element of chassis"
+
+    # Set the flag to indicate that the requests to this resource are
+    # coming from a top-level resource
+    nodes.from_chassis = True
 
     _custom_actions = {
         'detail': ['GET'],
@@ -148,9 +156,9 @@ class ChassisController(rest.RestController):
         if marker:
             marker_obj = objects.Chassis.get_by_uuid(pecan.request.context,
                                                      marker)
-        chassis = pecan.request.dbapi.get_chassis_list(limit, marker_obj,
-                                                       sort_key=sort_key,
-                                                       sort_dir=sort_dir)
+        chassis = objects.Chassis.list(pecan.request.context, limit,
+                                       marker_obj, sort_key=sort_key,
+                                       sort_dir=sort_dir)
         return ChassisCollection.convert_with_links(chassis, limit,
                                                     url=resource_url,
                                                     expand=expand,
@@ -205,7 +213,9 @@ class ChassisController(rest.RestController):
 
         :param chassis: a chassis within the request body.
         """
-        new_chassis = pecan.request.dbapi.create_chassis(chassis.as_dict())
+        new_chassis = objects.Chassis(context=pecan.request.context,
+                                      **chassis.as_dict())
+        new_chassis.create()
         # Set the HTTP Location Header
         pecan.response.location = link.build_url('chassis', new_chassis.uuid)
         return Chassis.convert_with_links(new_chassis)
@@ -228,8 +238,13 @@ class ChassisController(rest.RestController):
 
         # Update only the fields that have changed
         for field in objects.Chassis.fields:
-            if rpc_chassis[field] != getattr(chassis, field):
-                rpc_chassis[field] = getattr(chassis, field)
+            try:
+                patch_val = getattr(chassis, field)
+            except AttributeError:
+                # Ignore fields that aren't exposed in the API
+                continue
+            if rpc_chassis[field] != patch_val:
+                rpc_chassis[field] = patch_val
 
         rpc_chassis.save()
         return Chassis.convert_with_links(rpc_chassis)
@@ -240,4 +255,6 @@ class ChassisController(rest.RestController):
 
         :param chassis_uuid: UUID of a chassis.
         """
-        pecan.request.dbapi.destroy_chassis(chassis_uuid)
+        rpc_chassis = objects.Chassis.get_by_uuid(pecan.request.context,
+                                                  chassis_uuid)
+        rpc_chassis.destroy()

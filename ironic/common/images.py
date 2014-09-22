@@ -20,152 +20,211 @@ Handling of VM disk images.
 """
 
 import os
-import re
+import shutil
 
+import jinja2
 from oslo.config import cfg
 
 from ironic.common import exception
+from ironic.common import i18n
+from ironic.common.i18n import _
 from ironic.common import image_service as service
+from ironic.common import paths
 from ironic.common import utils
 from ironic.openstack.common import fileutils
+from ironic.openstack.common import imageutils
 from ironic.openstack.common import log as logging
-from ironic.openstack.common import strutils
+from ironic.openstack.common import processutils
 
 LOG = logging.getLogger(__name__)
+
+_LE = i18n._LE
 
 image_opts = [
     cfg.BoolOpt('force_raw_images',
                 default=True,
                 help='Force backing images to raw format.'),
+    cfg.StrOpt('isolinux_bin',
+                default='/usr/lib/syslinux/isolinux.bin',
+                help='Path to isolinux binary file.'),
+    cfg.StrOpt('isolinux_config_template',
+                default=paths.basedir_def('common/isolinux_config.template'),
+                help='Template file for isolinux configuration file.'),
 ]
 
 CONF = cfg.CONF
 CONF.register_opts(image_opts)
 
 
-class QemuImgInfo(object):
-    BACKING_FILE_RE = re.compile((r"^(.*?)\s*\(actual\s+path\s*:"
-                                  r"\s+(.*?)\)\s*$"), re.I)
-    TOP_LEVEL_RE = re.compile(r"^([\w\d\s\_\-]+):(.*)$")
-    SIZE_RE = re.compile(r"\(\s*(\d+)\s+bytes\s*\)", re.I)
+def _create_root_fs(root_directory, files_info):
+    """Creates a filesystem root in given directory.
 
-    def __init__(self, cmd_output=None):
-        details = self._parse(cmd_output or '')
-        self.image = details.get('image')
-        self.backing_file = details.get('backing_file')
-        self.file_format = details.get('file_format')
-        self.virtual_size = details.get('virtual_size')
-        self.cluster_size = details.get('cluster_size')
-        self.disk_size = details.get('disk_size')
-        self.snapshots = details.get('snapshot_list', [])
-        self.encryption = details.get('encryption')
+    Given a mapping of absolute path of files to their relative paths
+    within the filesystem, this method copies the files to their
+    destination.
 
-    def __str__(self):
-        lines = [
-            'image: %s' % self.image,
-            'file_format: %s' % self.file_format,
-            'virtual_size: %s' % self.virtual_size,
-            'disk_size: %s' % self.disk_size,
-            'cluster_size: %s' % self.cluster_size,
-            'backing_file: %s' % self.backing_file,
-        ]
-        if self.snapshots:
-            lines.append("snapshots: %s" % self.snapshots)
-        return "\n".join(lines)
+    :param root_directory: the filesystem root directory.
+    :param files_info: A dict containing absolute path of file to be copied
+        -> relative path within the vfat image. For example,
+        {
+         '/absolute/path/to/file' -> 'relative/path/within/root'
+         ...
+        }
+    :raises: OSError, if creation of any directory failed.
+    :raises: IOError, if copying any of the files failed.
+    """
+    for src_file, path in files_info.items():
+        target_file = os.path.join(root_directory, path)
+        dirname = os.path.dirname(target_file)
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
 
-    def _canonicalize(self, field):
-        # Standardize on underscores/lc/no dash and no spaces
-        # since qemu seems to have mixed outputs here... and
-        # this format allows for better integration with python
-        # - ie for usage in kwargs and such...
-        field = field.lower().strip()
-        return re.sub('[ -]', '_', field)
+        shutil.copyfile(src_file, target_file)
 
-    def _extract_bytes(self, details):
-        # Replace it with the byte amount
-        real_size = self.SIZE_RE.search(details)
-        if real_size:
-            details = real_size.group(1)
+
+def create_vfat_image(output_file, files_info=None, parameters=None,
+                      parameters_file='parameters.txt', fs_size_kib=100):
+    """Creates the fat fs image on the desired file.
+
+    This method copies the given files to a root directory (optional),
+    writes the parameters specified to the parameters file within the
+    root directory (optional), and then creates a vfat image of the root
+    directory.
+
+    :param output_file: The path to the file where the fat fs image needs
+        to be created.
+    :param files_info: A dict containing absolute path of file to be copied
+        -> relative path within the vfat image. For example,
+        {
+         '/absolute/path/to/file' -> 'relative/path/within/root'
+         ...
+        }
+    :param parameters: A dict containing key-value pairs of parameters.
+    :param parameters_file: The filename for the parameters file.
+    :param fs_size_kib: size of the vfat filesystem in KiB.
+    :raises: ImageCreationFailed, if image creation failed while doing any
+        of filesystem manipulation activities like creating dirs, mounting,
+        creating filesystem, copying files, etc.
+    """
+    try:
+        utils.dd('/dev/zero', output_file, 'count=1', "bs=%dKiB" % fs_size_kib)
+    except processutils.ProcessExecutionError as e:
+        raise exception.ImageCreationFailed(image_type='vfat', error=e)
+
+    with utils.tempdir() as tmpdir:
+
         try:
-            details = strutils.to_bytes(details)
-        except (TypeError):
-            pass
-        return details
+            utils.mkfs('vfat', output_file)
+            utils.mount(output_file, tmpdir, '-o', 'umask=0')
+        except processutils.ProcessExecutionError as e:
+            raise exception.ImageCreationFailed(image_type='vfat', error=e)
 
-    def _extract_details(self, root_cmd, root_details, lines_after):
-        real_details = root_details
-        if root_cmd == 'backing_file':
-            # Replace it with the real backing file
-            backing_match = self.BACKING_FILE_RE.match(root_details)
-            if backing_match:
-                real_details = backing_match.group(2).strip()
-        elif root_cmd in ['virtual_size', 'cluster_size', 'disk_size']:
-            # Replace it with the byte amount (if we can convert it)
-            real_details = self._extract_bytes(root_details)
-        elif root_cmd == 'file_format':
-            real_details = real_details.strip().lower()
-        elif root_cmd == 'snapshot_list':
-            # Next line should be a header, starting with 'ID'
-            if not lines_after or not lines_after[0].startswith("ID"):
-                msg = _("Snapshot list encountered but no header found!")
-                raise ValueError(msg)
-            del lines_after[0]
-            real_details = []
-            # This is the sprintf pattern we will try to match
-            # "%-10s%-20s%7s%20s%15s"
-            # ID TAG VM SIZE DATE VM CLOCK (current header)
-            while lines_after:
-                line = lines_after[0]
-                line_pieces = line.split()
-                if len(line_pieces) != 6:
-                    break
-                # Check against this pattern in the final position
-                # "%02d:%02d:%02d.%03d"
-                date_pieces = line_pieces[5].split(":")
-                if len(date_pieces) != 3:
-                    break
-                real_details.append({
-                    'id': line_pieces[0],
-                    'tag': line_pieces[1],
-                    'vm_size': line_pieces[2],
-                    'date': line_pieces[3],
-                    'vm_clock': line_pieces[4] + " " + line_pieces[5],
-                })
-                del lines_after[0]
-        return real_details
+        try:
+            if files_info:
+                _create_root_fs(tmpdir, files_info)
 
-    def _parse(self, cmd_output):
-        # Analysis done of qemu-img.c to figure out what is going on here
-        # Find all points start with some chars and then a ':' then a newline
-        # and then handle the results of those 'top level' items in a separate
-        # function.
-        #
-        # TODO(harlowja): newer versions might have a json output format
-        #                 we should switch to that whenever possible.
-        #                 see: http://bit.ly/XLJXDX
-        contents = {}
-        lines = [x for x in cmd_output.splitlines() if x.strip()]
-        while lines:
-            line = lines.pop(0)
-            top_level = self.TOP_LEVEL_RE.match(line)
-            if top_level:
-                root = self._canonicalize(top_level.group(1))
-                if not root:
-                    continue
-                root_details = top_level.group(2).strip()
-                details = self._extract_details(root, root_details, lines)
-                contents[root] = details
-        return contents
+            if parameters:
+                parameters_file = os.path.join(tmpdir, parameters_file)
+                params_list = ['%(key)s=%(val)s' % {'key': k, 'val': v}
+                           for k, v in parameters.items()]
+                file_contents = '\n'.join(params_list)
+                utils.write_to_file(parameters_file, file_contents)
+
+        except Exception as e:
+            LOG.exception(_LE("vfat image creation failed. Error: %s"), e)
+            raise exception.ImageCreationFailed(image_type='vfat', error=e)
+
+        finally:
+            try:
+                utils.umount(tmpdir)
+            except processutils.ProcessExecutionError as e:
+                raise exception.ImageCreationFailed(image_type='vfat', error=e)
+
+
+def _generate_isolinux_cfg(kernel_params):
+    """Generates a isolinux configuration file.
+
+    Given a given a list of strings containing kernel parameters, this method
+    returns the kernel cmdline string.
+    :param kernel_params: a list of strings(each element being a string like
+        'K=V' or 'K' or combination of them like 'K1=V1 K2 K3=V3') to be added
+        as the kernel cmdline.
+    :returns: a string containing the contents of the isolinux configuration
+        file.
+    """
+    if not kernel_params:
+        kernel_params = []
+    kernel_params_str = ' '.join(kernel_params)
+
+    template = CONF.isolinux_config_template
+    tmpl_path, tmpl_file = os.path.split(template)
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(tmpl_path))
+    template = env.get_template(tmpl_file)
+
+    options = {'kernel': '/vmlinuz', 'ramdisk': '/initrd',
+               'kernel_params': kernel_params_str}
+
+    cfg = template.render(options)
+    return cfg
+
+
+def create_isolinux_image(output_file, kernel, ramdisk, kernel_params=None):
+    """Creates an isolinux image on the specified file.
+
+    Copies the provided kernel, ramdisk to a directory, generates the isolinux
+    configuration file using the kernel parameters provided, and then generates
+    a bootable ISO image.
+
+    :param output_file: the path to the file where the iso image needs to be
+        created.
+    :param kernel: the kernel to use.
+    :param ramdisk: the ramdisk to use.
+    :param kernel_params: a list of strings(each element being a string like
+        'K=V' or 'K' or combination of them like 'K1=V1,K2,...') to be added
+        as the kernel cmdline.
+    :raises: ImageCreationFailed, if image creation failed while copying files
+        or while running command to generate iso.
+    """
+    ISOLINUX_BIN = 'isolinux/isolinux.bin'
+    ISOLINUX_CFG = 'isolinux/isolinux.cfg'
+
+    with utils.tempdir() as tmpdir:
+
+        files_info = {
+                      kernel: 'vmlinuz',
+                      ramdisk: 'initrd',
+                      CONF.isolinux_bin: ISOLINUX_BIN,
+                     }
+
+        try:
+            _create_root_fs(tmpdir, files_info)
+        except (OSError, IOError) as e:
+            LOG.exception(_LE("Creating the filesystem root failed."))
+            raise exception.ImageCreationFailed(image_type='iso', error=e)
+
+        cfg = _generate_isolinux_cfg(kernel_params)
+
+        isolinux_cfg = os.path.join(tmpdir, ISOLINUX_CFG)
+        utils.write_to_file(isolinux_cfg, cfg)
+
+        try:
+            utils.execute('mkisofs', '-r', '-V', "BOOT IMAGE",
+                          '-cache-inodes', '-J', '-l', '-no-emul-boot',
+                          '-boot-load-size', '4', '-boot-info-table',
+                          '-b', ISOLINUX_BIN, '-o', output_file, tmpdir)
+        except processutils.ProcessExecutionError as e:
+            LOG.exception(_LE("Creating ISO image failed."))
+            raise exception.ImageCreationFailed(image_type='iso', error=e)
 
 
 def qemu_img_info(path):
     """Return an object containing the parsed output from qemu-img info."""
     if not os.path.exists(path):
-        return QemuImgInfo()
+        return imageutils.QemuImgInfo()
 
     out, err = utils.execute('env', 'LC_ALL=C', 'LANG=C',
                              'qemu-img', 'info', path)
-    return QemuImgInfo(out)
+    return imageutils.QemuImgInfo(out)
 
 
 def convert_image(source, dest, out_format, run_as_root=False):
@@ -233,3 +292,81 @@ def download_size(context, image_href, image_service=None):
     if not image_service:
         image_service = service.Service(version=1, context=context)
     return image_service.show(image_href)['size']
+
+
+def converted_size(path):
+    """Get size of converted raw image.
+
+    The size of image converted to raw format can be growing up to the virtual
+    size of the image.
+
+    :param path: path to the image file.
+    :returns: virtual size of the image or 0 if conversion not needed.
+
+    """
+    data = qemu_img_info(path)
+    if data.file_format == "raw" or not CONF.force_raw_images:
+        return 0
+    return data.virtual_size
+
+
+def get_glance_image_property(context, image_uuid, property):
+    """Returns the value of a glance image property.
+
+    :param context: context
+    :param image_uuid: the UUID of the image in glance
+    :param property: the property whose value is required.
+    :returns: the value of the property if it exists, otherwise None.
+    """
+    glance_service = service.Service(version=1, context=context)
+    iproperties = glance_service.show(image_uuid)['properties']
+    return iproperties.get(property)
+
+
+def get_temp_url_for_glance_image(context, image_uuid):
+    """Returns the tmp url for a glance image.
+
+    :param context: context
+    :param image_uuid: the UUID of the image in glance
+    :returns: the tmp url for the glance image.
+    """
+    # Glance API version 2 is required for getting direct_url of the image.
+    glance_service = service.Service(version=2, context=context)
+    image_properties = glance_service.show(image_uuid)
+    LOG.debug('Got image info: %(info)s for image %(image_uuid)s.',
+              {'info': image_properties, 'image_uuid': image_uuid})
+    return glance_service.swift_temp_url(image_properties)
+
+
+def create_boot_iso(context, output_filename, kernel_uuid,
+        ramdisk_uuid, root_uuid=None, kernel_params=None):
+    """Creates a bootable ISO image for a node.
+
+    Given the glance UUID of kernel, ramdisk, root partition's UUID and
+    kernel cmdline arguments, this method fetches the kernel, ramdisk from
+    glance, and builds a bootable ISO image that can be used to boot up the
+    baremetal node.
+
+    :param context: context
+    :param output_filename: the absolute path of the output ISO file
+    :param kernel_uuid: glance uuid of the kernel to use
+    :param ramdisk_uuid: glance uuid of the ramdisk to use
+    :param root_uuid: uuid of the root filesystem (optional)
+    :param kernel_params: a string containing whitespace separated values
+        kernel cmdline arguments of the form K=V or K (optional).
+    :raises: ImageCreationFailed, if creating boot ISO failed.
+    """
+    with utils.tempdir() as tmpdir:
+        kernel_path = os.path.join(tmpdir, kernel_uuid)
+        ramdisk_path = os.path.join(tmpdir, ramdisk_uuid)
+        fetch_to_raw(context, kernel_uuid, kernel_path)
+        fetch_to_raw(context, ramdisk_uuid, ramdisk_path)
+
+        params = []
+        if root_uuid:
+            params.append('root=UUID=%s' % root_uuid)
+        if kernel_params:
+            params.append(kernel_params)
+
+        create_isolinux_image(output_filename, kernel_path,
+                              ramdisk_path, params)

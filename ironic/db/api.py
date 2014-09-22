@@ -20,17 +20,13 @@ Base classes for storage engines
 import abc
 
 from oslo.config import cfg
+from oslo.db import api as db_api
 import six
 
-from ironic.openstack.common.db import api as db_api
-
-CONF = cfg.CONF
-CONF.import_opt('backend', 'ironic.openstack.common.db.options',
-                group='database')
 
 _BACKEND_MAPPING = {'sqlalchemy': 'ironic.db.sqlalchemy.api'}
-IMPL = db_api.DBAPI(CONF.database.backend, backend_mapping=_BACKEND_MAPPING,
-                    lazy=True)
+IMPL = db_api.DBAPI.from_config(cfg.CONF, backend_mapping=_BACKEND_MAPPING,
+                                lazy=True)
 
 
 def get_instance():
@@ -194,18 +190,26 @@ class Connection(object):
         """
 
     @abc.abstractmethod
-    def get_port(self, port_id):
+    def get_port_by_id(self, port_id):
         """Return a network port representation.
 
-        :param port_id: The id or MAC of a port.
+        :param port_id: The id of a port.
         :returns: A port.
         """
 
     @abc.abstractmethod
-    def get_port_by_vif(self, vif):
-        """Return the port corresponding to this VIF.
+    def get_port_by_uuid(self, port_uuid):
+        """Return a network port representation.
 
-        :param vif: The uuid of the VIF.
+        :param port_uuid: The uuid of a port.
+        :returns: A port.
+        """
+
+    @abc.abstractmethod
+    def get_port_by_address(self, address):
+        """Return a network port representation.
+
+        :param address: The MAC address of a port.
         :returns: A port.
         """
 
@@ -268,10 +272,18 @@ class Connection(object):
         """
 
     @abc.abstractmethod
-    def get_chassis(self, chassis_id):
+    def get_chassis_by_id(self, chassis_id):
         """Return a chassis representation.
 
-        :param chassis_id: The id or the UUID of a chassis.
+        :param chassis_id: The id of a chassis.
+        :returns: A chassis.
+        """
+
+    @abc.abstractmethod
+    def get_chassis_by_uuid(self, chassis_uuid):
+        """Return a chassis representation.
+
+        :param chassis_uuid: The uuid of a chassis.
         :returns: A chassis.
         """
 

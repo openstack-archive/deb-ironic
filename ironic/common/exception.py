@@ -25,7 +25,7 @@ SHOULD include dedicated exception logging.
 from oslo.config import cfg
 import six
 
-from ironic.openstack.common.gettextutils import _
+from ironic.common.i18n import _
 from ironic.openstack.common import log as logging
 
 
@@ -43,7 +43,7 @@ CONF.register_opts(exc_log_opts)
 
 def _cleanse_dict(original):
     """Strip all admin_password, new_pass, rescue_pass keys from a dict."""
-    return dict((k, v) for k, v in original.iteritems() if not "_pass" in k)
+    return dict((k, v) for k, v in original.iteritems() if "_pass" not in k)
 
 
 class IronicException(Exception):
@@ -122,8 +122,25 @@ class InvalidState(Conflict):
     message = _("Invalid resource state.")
 
 
+class NodeAlreadyExists(Conflict):
+    message = _("A node with UUID %(uuid)s already exists.")
+
+
 class MACAlreadyExists(Conflict):
-    message = _("A Port with MAC address %(mac)s already exists.")
+    message = _("A port with MAC address %(mac)s already exists.")
+
+
+class ChassisAlreadyExists(Conflict):
+    message = _("A chassis with UUID %(uuid)s already exists.")
+
+
+class PortAlreadyExists(Conflict):
+    message = _("A port with UUID %(uuid)s already exists.")
+
+
+class InstanceAssociated(Conflict):
+    message = _("Instance %(instance_uuid)s is already associated with a node,"
+                " it cannot be associated with this other node %(node)s")
 
 
 class InvalidUUID(Invalid):
@@ -164,9 +181,17 @@ class InvalidParameterValue(Invalid):
     message = _("%(err)s")
 
 
+class MissingParameterValue(InvalidParameterValue):
+    message = _("%(err)s")
+
+
 class NotFound(IronicException):
     message = _("Resource could not be found.")
     code = 404
+
+
+class DHCPNotFound(NotFound):
+    message = _("Failed to load DHCP provider %(dhcp_provider_name)s.")
 
 
 class DriverNotFound(NotFound):
@@ -199,6 +224,14 @@ class PortNotFound(NotFound):
 
 class FailedToUpdateDHCPOptOnPort(IronicException):
     message = _("Update DHCP options on port: %(port_id)s failed.")
+
+
+class FailedToGetIPAddressOnPort(IronicException):
+    message = _("Retrieve IP address on port: %(port_id)s failed.")
+
+
+class InvalidIPv4Address(IronicException):
+    message = _("Invalid IPv4 address %(ip_address)s.")
 
 
 class FailedToUpdateMacOnPort(IronicException):
@@ -367,13 +400,74 @@ class DriverLoadError(IronicException):
     message = _("Driver %(driver)s could not be loaded. Reason: %(reason)s.")
 
 
-class NoConsolePid(NotFound):
+class ConsoleError(IronicException):
+    pass
+
+
+class NoConsolePid(ConsoleError):
     message = _("Could not find pid in pid file %(pid_path)s")
 
 
-class ConsoleSubprocessFailed(IronicException):
+class ConsoleSubprocessFailed(ConsoleError):
     message = _("Console subprocess failed to start. %(error)s")
 
 
 class PasswordFileFailedToCreate(IronicException):
     message = _("Failed to create the password file. %(error)s")
+
+
+class IBootOperationError(IronicException):
+    pass
+
+
+class IloOperationError(IronicException):
+    message = _("%(operation)s failed, error: %(error)s")
+
+
+class DracClientError(IronicException):
+    message = _('DRAC client failed. '
+                'Last error (cURL error code): %(last_error)s, '
+                'fault string: "%(fault_string)s" '
+                'response_code: %(response_code)s')
+
+
+class DracOperationError(IronicException):
+    message = _('DRAC %(operation)s failed. Reason: %(error)s')
+
+
+class DracConfigJobCreationError(DracOperationError):
+    message = _('DRAC failed to create a configuration job. '
+                'Reason: %(error)s')
+
+
+class DracInvalidFilterDialect(DracOperationError):
+    message = _('Invalid filter dialect \'%(invalid_filter)s\'. '
+                'Supported options are %(supported)s')
+
+
+class FailedToGetSensorData(IronicException):
+    message = _("Failed to get sensor data for node %(node)s. "
+                "Error: %(error)s")
+
+
+class FailedToParseSensorData(IronicException):
+    message = _("Failed to parse sensor data for node %(node)s. "
+                "Error: %(error)s")
+
+
+class InsufficientDiskSpace(IronicException):
+    message = _("Disk volume where '%(path)s' is located doesn't have "
+                "enough disk space. Required %(required)d MiB, "
+                "only %(actual)d MiB available space present.")
+
+
+class ImageCreationFailed(IronicException):
+    message = _('Creating %(image_type)s image failed: %(error)s')
+
+
+class SwiftOperationError(IronicException):
+    message = _("Swift operation '%(operation)s' failed: %(error)s")
+
+
+class SNMPFailure(IronicException):
+    message = _("SNMP operation '%(operation)s' failed: %(error)s")

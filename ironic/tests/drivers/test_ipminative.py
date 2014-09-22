@@ -18,11 +18,17 @@
 """
 Test class for Native IPMI power driver module.
 """
+
 import mock
 
+from oslo.config import cfg
+from pyghmi import exceptions as pyghmi_exception
+
+from ironic.common import boot_devices
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import states
+from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.db import api as db_api
 from ironic.drivers.modules import ipminative
@@ -32,7 +38,6 @@ from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
 from ironic.tests.objects import utils as obj_utils
-from oslo.config import cfg
 
 CONF = cfg.CONF
 
@@ -63,7 +68,7 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
         del info['ipmi_username']
 
         node = obj_utils.get_test_node(self.context, driver_info=info)
-        self.assertRaises(exception.InvalidParameterValue,
+        self.assertRaises(exception.MissingParameterValue,
                           ipminative._parse_driver_info,
                           node)
 
@@ -124,6 +129,86 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
         ipmicmd.set_power.assert_called_once_with('boot', 600)
         self.assertEqual(states.POWER_ON, state)
 
+    def _create_sensor_object(self, value, type_, name, states=None,
+                   units='fake_units', health=0):
+        if states is None:
+            states = []
+        return type('Reading', (object, ), {'value': value, 'type': type_,
+                                     'name': name, 'states': states,
+                                     'units': units, 'health': health})()
+
+    @mock.patch('pyghmi.ipmi.command.Command')
+    def test__get_sensors_data(self, ipmi_mock):
+        reading_1 = self._create_sensor_object('fake_value1',
+                                               'fake_type_A',
+                                               'fake_name1')
+        reading_2 = self._create_sensor_object('fake_value2',
+                                               'fake_type_A',
+                                               'fake_name2')
+        reading_3 = self._create_sensor_object('fake_value3',
+                                               'fake_type_B',
+                                               'fake_name3')
+        readings = [reading_1, reading_2, reading_3]
+        ipmicmd = ipmi_mock.return_value
+        ipmicmd.get_sensor_data.return_value = readings
+        expected = {
+              'fake_type_A': {
+                'fake_name1': {
+                  'Health': 0,
+                  'Sensor ID': 'fake_name1',
+                  'Sensor Reading': 'fake_value1',
+                  'States': [],
+                  'Units': 'fake_units'
+                },
+                'fake_name2': {
+                  'Health': 0,
+                  'Sensor ID': 'fake_name2',
+                  'Sensor Reading': 'fake_value2',
+                  'States': [],
+                  'Units': 'fake_units'
+                }
+              },
+              'fake_type_B': {
+                'fake_name3': {
+                  'Health': 0,
+                  'Sensor ID': 'fake_name3',
+                  'Sensor Reading': 'fake_value3',
+                  'States': [], 'Units': 'fake_units'
+                }
+              }
+            }
+        ret = ipminative._get_sensors_data(self.info)
+        self.assertEqual(expected, ret)
+
+    @mock.patch('pyghmi.ipmi.command.Command')
+    def test__get_sensors_data_missing_values(self, ipmi_mock):
+        reading_1 = self._create_sensor_object('fake_value1',
+                                               'fake_type_A',
+                                               'fake_name1')
+        reading_2 = self._create_sensor_object(None,
+                                               'fake_type_A',
+                                               'fake_name2')
+        reading_3 = self._create_sensor_object(None,
+                                               'fake_type_B',
+                                               'fake_name3')
+        readings = [reading_1, reading_2, reading_3]
+        ipmicmd = ipmi_mock.return_value
+        ipmicmd.get_sensor_data.return_value = readings
+
+        expected = {
+              'fake_type_A': {
+                'fake_name1': {
+                  'Health': 0,
+                  'Sensor ID': 'fake_name1',
+                  'Sensor Reading': 'fake_value1',
+                  'States': [],
+                  'Units': 'fake_units'
+                }
+              }
+            }
+        ret = ipminative._get_sensors_data(self.info)
+        self.assertEqual(expected, ret)
+
 
 class IPMINativeDriverTestCase(db_base.DbTestCase):
     """Test cases for ipminative.NativeIPMIPower class functions.
@@ -140,6 +225,11 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                                                driver_info=INFO_DICT)
         self.dbapi = db_api.get_instance()
         self.info = ipminative._parse_driver_info(self.node)
+
+    def test_get_properties(self):
+        expected = ipminative.COMMON_PROPERTIES
+        self.assertEqual(expected, self.driver.get_properties())
+        self.assertEqual(expected, self.driver.management.get_properties())
 
     @mock.patch('pyghmi.ipmi.command.Command')
     def test_get_power_state(self, ipmi_mock):
@@ -208,13 +298,14 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
 
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:
-            self.driver.vendor._set_boot_device(task, 'pxe')
-        ipmicmd.set_bootdev.assert_called_once_with('pxe')
+            self.driver.management.set_boot_device(task, boot_devices.PXE)
+        # PXE is converted to 'net' internally by ipminative
+        ipmicmd.set_bootdev.assert_called_once_with('net', persist=False)
 
     def test_set_boot_device_bad_device(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.assertRaises(exception.InvalidParameterValue,
-                    self.driver.vendor._set_boot_device,
+                    self.driver.management.set_boot_device,
                     task,
                     'fake-device')
 
@@ -240,40 +331,76 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                               task)
         ipmicmd.set_power.assert_called_once_with('boot', 500)
 
-    def test_vendor_passthru_validate__set_boot_device_good(self):
-        with task_manager.acquire(self.context,
-                                  self.node['uuid']) as task:
-            self.driver.vendor.validate(task,
-                                        method='set_boot_device',
-                                        device='pxe')
+    def test_management_interface_get_supported_boot_devices(self):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            expected = [boot_devices.PXE, boot_devices.DISK,
+                        boot_devices.CDROM, boot_devices.BIOS]
+            self.assertEqual(sorted(expected), sorted(task.driver.management.
+                             get_supported_boot_devices()))
 
-    def test_vendor_passthru_val__set_boot_device_fail_unknown_device(self):
-        with task_manager.acquire(self.context,
-                                  self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.driver.vendor.validate,
-                              task, method='set_boot_device',
-                              device='non-existent')
+    @mock.patch('pyghmi.ipmi.command.Command')
+    def test_management_interface_get_boot_device_good(self, ipmi_mock):
+        ipmicmd = ipmi_mock.return_value
+        ipmicmd.get_bootdev.return_value = {'bootdev': 'hd'}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            bootdev = self.driver.management.get_boot_device(task)
+            self.assertEqual(boot_devices.DISK, bootdev['boot_device'])
+            self.assertIsNone(bootdev['persistent'])
 
-    def test_vendor_passthru_val__set_boot_device_fail_missed_device_arg(self):
-        with task_manager.acquire(self.context,
-                                  self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.driver.vendor.validate,
-                              task, method='set_boot_device')
+    @mock.patch('pyghmi.ipmi.command.Command')
+    def test_management_interface_get_boot_device_persistent(self, ipmi_mock):
+        ipmicmd = ipmi_mock.return_value
+        ipmicmd.get_bootdev.return_value = {'bootdev': 'hd',
+                                            'persistent': True}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            bootdev = self.driver.management.get_boot_device(task)
+            self.assertEqual(boot_devices.DISK, bootdev['boot_device'])
+            self.assertTrue(bootdev['persistent'])
 
-    def test_vendor_passthru_validate_method_notmatch(self):
-        with task_manager.acquire(self.context,
-                                  self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.driver.vendor.validate,
-                              task, method='non-existent-method')
+    @mock.patch('pyghmi.ipmi.command.Command')
+    def test_management_interface_get_boot_device_fail(self, ipmi_mock):
+        ipmicmd = ipmi_mock.return_value
+        ipmicmd.get_bootdev.side_effect = pyghmi_exception.IpmiException
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(exception.IPMIFailure,
+                              self.driver.management.get_boot_device, task)
 
-    @mock.patch.object(ipminative.VendorPassthru, '_set_boot_device')
-    def test_vendor_passthru_call__set_boot_device(self, boot_mock):
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=False) as task:
-            self.driver.vendor.vendor_passthru(task,
-                                               method='set_boot_device',
-                                               device='pxe')
-            boot_mock.assert_called_once_with(task, 'pxe', False)
+    @mock.patch('pyghmi.ipmi.command.Command')
+    def test_management_interface_get_boot_device_fail_dict(self, ipmi_mock):
+        ipmicmd = ipmi_mock.return_value
+        ipmicmd.get_bootdev.return_value = {'error': 'boooom'}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(exception.IPMIFailure,
+                              self.driver.management.get_boot_device, task)
+
+    @mock.patch('pyghmi.ipmi.command.Command')
+    def test_management_interface_get_boot_device_unknown(self, ipmi_mock):
+        ipmicmd = ipmi_mock.return_value
+        ipmicmd.get_bootdev.return_value = {'bootdev': 'unknown'}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            expected = {'boot_device': None, 'persistent': None}
+            self.assertEqual(expected,
+                             self.driver.management.get_boot_device(task))
+
+    def test_management_interface_validate_good(self):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.driver.management.validate(task)
+
+    def test_management_interface_validate_fail(self):
+        # Missing IPMI driver_info information
+        node = obj_utils.create_test_node(self.context, id=2,
+                                          uuid=utils.generate_uuid(),
+                                          driver='fake_ipminative')
+        with task_manager.acquire(self.context, node.uuid) as task:
+            self.assertRaises(exception.MissingParameterValue,
+                              task.driver.management.validate, task)
+
+    @mock.patch('pyghmi.ipmi.command.Command')
+    def test_get_sensors_data(self, ipmi_mock):
+        ipmicmd = ipmi_mock.return_value
+        ipmicmd.get_sensor_data.return_value = None
+
+        with task_manager.acquire(self.context,
+                                  self.node.uuid) as task:
+            self.driver.management.get_sensors_data(task)
+        ipmicmd.get_sensor_data.assert_called_once_with()

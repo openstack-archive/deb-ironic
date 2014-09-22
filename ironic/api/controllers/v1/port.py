@@ -28,6 +28,7 @@ from ironic.api.controllers.v1 import collection
 from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils as api_utils
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic import objects
 
 
@@ -87,13 +88,23 @@ class Port(base.APIBase):
     "A list containing a self link and associated port links"
 
     def __init__(self, **kwargs):
-        self.fields = objects.Port.fields.keys()
-        for k in self.fields:
-            setattr(self, k, kwargs.get(k))
-
+        self.fields = []
+        fields = list(objects.Port.fields.keys())
         # NOTE(lucasagomes): node_uuid is not part of objects.Port.fields
         #                    because it's an API-only attribute
-        self.fields.append('node_uuid')
+        fields.append('node_uuid')
+        for field in fields:
+            # Skip fields we do not expose.
+            if not hasattr(self, field):
+                continue
+            self.fields.append(field)
+            setattr(self, field, kwargs.get(field))
+
+        # NOTE(lucasagomes): node_id is an attribute created on-the-fly
+        # by _set_node_uuid(), it needs to be present in the fields so
+        # that as_dict() will contain node_id field when converting it
+        # before saving it in the database.
+        self.fields.append('node_id')
         setattr(self, 'node_uuid', kwargs.get('node_id'))
 
     @classmethod
@@ -155,18 +166,19 @@ class PortCollection(collection.Collection):
 class PortsController(rest.RestController):
     """REST controller for Ports."""
 
+    from_nodes = False
+    """A flag to indicate if the requests to this controller are coming
+    from the top-level resource Nodes."""
+
     _custom_actions = {
         'detail': ['GET'],
     }
 
-    def __init__(self, from_nodes=False):
-        self._from_nodes = from_nodes
-
     def _get_ports_collection(self, node_uuid, address, marker, limit,
                               sort_key, sort_dir, expand=False,
                               resource_url=None):
-        if self._from_nodes and not node_uuid:
-            raise exception.InvalidParameterValue(_(
+        if self.from_nodes and not node_uuid:
+            raise exception.MissingParameterValue(_(
                   "Node id not specified."))
 
         limit = api_utils.validate_limit(limit)
@@ -190,9 +202,9 @@ class PortsController(rest.RestController):
         elif address:
             ports = self._get_ports_by_address(address)
         else:
-            ports = pecan.request.dbapi.get_port_list(limit, marker_obj,
-                                                      sort_key=sort_key,
-                                                      sort_dir=sort_dir)
+            ports = objects.Port.list(pecan.request.context, limit,
+                                      marker_obj, sort_key=sort_key,
+                                      sort_dir=sort_dir)
 
         return PortCollection.convert_with_links(ports, limit,
                                                  url=resource_url,
@@ -209,7 +221,7 @@ class PortsController(rest.RestController):
 
         """
         try:
-            port = pecan.request.dbapi.get_port(address)
+            port = objects.Port.get_by_address(pecan.request.context, address)
             return [port]
         except exception.PortNotFound:
             return []
@@ -262,7 +274,7 @@ class PortsController(rest.RestController):
 
         :param port_uuid: UUID of a port.
         """
-        if self._from_nodes:
+        if self.from_nodes:
             raise exception.OperationNotPermitted
 
         rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
@@ -274,10 +286,12 @@ class PortsController(rest.RestController):
 
         :param port: a port within the request body.
         """
-        if self._from_nodes:
+        if self.from_nodes:
             raise exception.OperationNotPermitted
 
-        new_port = pecan.request.dbapi.create_port(port.as_dict())
+        new_port = objects.Port(context=pecan.request.context,
+                                **port.as_dict())
+        new_port.create()
         # Set the HTTP Location Header
         pecan.response.location = link.build_url('ports', new_port.uuid)
         return Port.convert_with_links(new_port)
@@ -290,19 +304,30 @@ class PortsController(rest.RestController):
         :param port_uuid: UUID of a port.
         :param patch: a json PATCH document to apply to this port.
         """
-        if self._from_nodes:
+        if self.from_nodes:
             raise exception.OperationNotPermitted
 
         rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
         try:
-            port = Port(**api_utils.apply_jsonpatch(rpc_port.as_dict(), patch))
+            port_dict = rpc_port.as_dict()
+            # NOTE(lucasagomes):
+            # 1) Remove node_id because it's an internal value and
+            #    not present in the API object
+            # 2) Add node_uuid
+            port_dict['node_uuid'] = port_dict.pop('node_id', None)
+            port = Port(**api_utils.apply_jsonpatch(port_dict, patch))
         except api_utils.JSONPATCH_EXCEPTIONS as e:
             raise exception.PatchError(patch=patch, reason=e)
 
         # Update only the fields that have changed
         for field in objects.Port.fields:
-            if rpc_port[field] != getattr(port, field):
-                rpc_port[field] = getattr(port, field)
+            try:
+                patch_val = getattr(port, field)
+            except AttributeError:
+                # Ignore fields that aren't exposed in the API
+                continue
+            if rpc_port[field] != patch_val:
+                rpc_port[field] = patch_val
 
         rpc_node = objects.Node.get_by_id(pecan.request.context,
                                           rpc_port.node_id)
@@ -319,7 +344,9 @@ class PortsController(rest.RestController):
 
         :param port_uuid: UUID of a port.
         """
-        if self._from_nodes:
+        if self.from_nodes:
             raise exception.OperationNotPermitted
 
-        pecan.request.dbapi.destroy_port(port_uuid)
+        rpc_port = objects.Port.get_by_uuid(pecan.request.context,
+                                            port_uuid)
+        rpc_port.destroy()

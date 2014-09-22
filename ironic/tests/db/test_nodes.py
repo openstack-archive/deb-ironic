@@ -18,13 +18,13 @@
 import datetime
 
 import mock
+from oslo.utils import timeutils
 import six
 
 from ironic.common import exception
 from ironic.common import states
 from ironic.common import utils as ironic_utils
 from ironic.db import api as dbapi
-from ironic.openstack.common import timeutils
 from ironic.tests.db import base
 from ironic.tests.db import utils
 
@@ -47,6 +47,23 @@ class DbNodeTestCase(base.DbTestCase):
         n = utils.get_test_node()
         del n['chassis_id']
         self.dbapi.create_node(n)
+
+    def test_create_node_already_exists(self):
+        n = utils.get_test_node()
+        del n['id']
+        self.dbapi.create_node(n)
+        self.assertRaises(exception.NodeAlreadyExists,
+                          self.dbapi.create_node, n)
+
+    def test_create_node_instance_already_associated(self):
+        instance = ironic_utils.generate_uuid()
+        n1 = utils.get_test_node(id=1, uuid=ironic_utils.generate_uuid(),
+                                 instance_uuid=instance)
+        self.dbapi.create_node(n1)
+        n2 = utils.get_test_node(id=2, uuid=ironic_utils.generate_uuid(),
+                                 instance_uuid=instance)
+        self.assertRaises(exception.InstanceAssociated,
+                          self.dbapi.create_node, n2)
 
     def test_get_node_by_id(self):
         n = self._create_test_node()
@@ -262,7 +279,8 @@ class DbNodeTestCase(base.DbTestCase):
 
         self.dbapi.destroy_node(node_id)
 
-        self.assertRaises(exception.PortNotFound, self.dbapi.get_port, p.id)
+        self.assertRaises(exception.PortNotFound,
+                          self.dbapi.get_port_by_id, p.id)
 
     def test_ports_get_destroyed_after_destroying_a_node_by_uuid(self):
         n = self._create_test_node()
@@ -273,7 +291,8 @@ class DbNodeTestCase(base.DbTestCase):
 
         self.dbapi.destroy_node(n['uuid'])
 
-        self.assertRaises(exception.PortNotFound, self.dbapi.get_port, p.id)
+        self.assertRaises(exception.PortNotFound,
+                          self.dbapi.get_port_by_id, p.id)
 
     def test_update_node(self):
         n = self._create_test_node()
@@ -291,6 +310,12 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertRaises(exception.NodeNotFound, self.dbapi.update_node,
                           node_uuid, {'extra': new_extra})
 
+    def test_update_node_uuid(self):
+        n = self._create_test_node()
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.dbapi.update_node, n['id'],
+                          {'uuid': ''})
+
     def test_update_node_associate_and_disassociate(self):
         n = self._create_test_node()
         new_i_uuid = ironic_utils.generate_uuid()
@@ -299,7 +324,7 @@ class DbNodeTestCase(base.DbTestCase):
         res = self.dbapi.update_node(n['id'], {'instance_uuid': None})
         self.assertIsNone(res.instance_uuid)
 
-    def test_update_node_already_assosicated(self):
+    def test_update_node_already_associated(self):
         n = self._create_test_node()
         new_i_uuid_one = ironic_utils.generate_uuid()
         self.dbapi.update_node(n['id'], {'instance_uuid': new_i_uuid_one})
@@ -308,6 +333,16 @@ class DbNodeTestCase(base.DbTestCase):
                           self.dbapi.update_node,
                           n['id'],
                           {'instance_uuid': new_i_uuid_two})
+
+    def test_update_node_instance_already_associated(self):
+        n = self._create_test_node(id=1, uuid=ironic_utils.generate_uuid())
+        new_i_uuid = ironic_utils.generate_uuid()
+        self.dbapi.update_node(n['id'], {'instance_uuid': new_i_uuid})
+        n = self._create_test_node(id=2, uuid=ironic_utils.generate_uuid())
+        self.assertRaises(exception.InstanceAssociated,
+                          self.dbapi.update_node,
+                          n['id'],
+                          {'instance_uuid': new_i_uuid})
 
     @mock.patch.object(timeutils, 'utcnow')
     def test_update_node_provision(self, mock_utcnow):

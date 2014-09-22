@@ -19,16 +19,17 @@ import datetime
 
 import mock
 from oslo.config import cfg
+from oslo.utils import timeutils
 from six.moves.urllib import parse as urlparse
 from testtools.matchers import HasLength
 
+from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import rpcapi
 from ironic import objects
 from ironic.openstack.common import context
-from ironic.openstack.common import timeutils
 from ironic.tests.api import base
 from ironic.tests.api import utils as apiutils
 from ironic.tests.db import utils as dbutils
@@ -49,8 +50,7 @@ class TestListNodes(base.FunctionalTest):
 
     def setUp(self):
         super(TestListNodes, self).setUp()
-        cdict = dbutils.get_test_chassis()
-        self.chassis = self.dbapi.create_chassis(cdict)
+        self.chassis = obj_utils.create_test_chassis(self.context)
         p = mock.patch.object(rpcapi.ConductorAPI, 'get_topic_for')
         self.mock_gtf = p.start()
         self.mock_gtf.return_value = 'test-topic'
@@ -194,11 +194,10 @@ class TestListNodes(base.FunctionalTest):
     def test_ports_subresource(self):
         node = obj_utils.create_test_node(self.context)
 
-        for id in range(2):
-            pdict = dbutils.get_test_port(id=id, node_id=node.id,
-                                          uuid=utils.generate_uuid(),
-                                          address='52:54:00:cf:2d:3%s' % id)
-            self.dbapi.create_port(pdict)
+        for id_ in range(2):
+            obj_utils.create_test_port(self.context, id=id_, node_id=node.id,
+                                       uuid=utils.generate_uuid(),
+                                       address='52:54:00:cf:2d:3%s' % id_)
 
         data = self.get_json('/nodes/%s/ports' % node.uuid)
         self.assertEqual(2, len(data['ports']))
@@ -211,8 +210,7 @@ class TestListNodes(base.FunctionalTest):
 
     def test_ports_subresource_noid(self):
         node = obj_utils.create_test_node(self.context)
-        pdict = dbutils.get_test_port(node_id=node.id)
-        self.dbapi.create_port(pdict)
+        obj_utils.create_test_port(self.context, node_id=node.id)
         # No node id specified
         response = self.get_json('/nodes/ports', expect_errors=True)
         self.assertEqual(400, response.status_int)
@@ -429,13 +427,53 @@ class TestListNodes(base.FunctionalTest):
             self.assertEqual(400, ret.status_code)
             mock_gci.assert_called_once_with(mock.ANY, node.uuid, 'test-topic')
 
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_boot_device')
+    def test_get_boot_device(self, mock_gbd):
+        node = obj_utils.create_test_node(self.context)
+        expected_data = {'boot_device': boot_devices.PXE, 'persistent': True}
+        mock_gbd.return_value = expected_data
+        data = self.get_json('/nodes/%s/management/boot_device' % node.uuid)
+        self.assertEqual(expected_data, data)
+        mock_gbd.assert_called_once_with(mock.ANY, node.uuid, 'test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_boot_device')
+    def test_get_boot_device_iface_not_supported(self, mock_gbd):
+        node = obj_utils.create_test_node(self.context)
+        mock_gbd.side_effect = exception.UnsupportedDriverExtension(
+                                  extension='management', driver='test-driver')
+        ret = self.get_json('/nodes/%s/management/boot_device' % node.uuid,
+                            expect_errors=True)
+        self.assertEqual(400, ret.status_code)
+        self.assertTrue(ret.json['error_message'])
+        mock_gbd.assert_called_once_with(mock.ANY, node.uuid, 'test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_supported_boot_devices')
+    def test_get_supported_boot_devices(self, mock_gsbd):
+        mock_gsbd.return_value = [boot_devices.PXE]
+        node = obj_utils.create_test_node(self.context)
+        data = self.get_json('/nodes/%s/management/boot_device/supported'
+                             % node.uuid)
+        expected_data = {'supported_boot_devices': [boot_devices.PXE]}
+        self.assertEqual(expected_data, data)
+        mock_gsbd.assert_called_once_with(mock.ANY, node.uuid, 'test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_supported_boot_devices')
+    def test_get_supported_boot_devices_iface_not_supported(self, mock_gsbd):
+        node = obj_utils.create_test_node(self.context)
+        mock_gsbd.side_effect = exception.UnsupportedDriverExtension(
+                                  extension='management', driver='test-driver')
+        ret = self.get_json('/nodes/%s/management/boot_device/supported' %
+                            node.uuid, expect_errors=True)
+        self.assertEqual(400, ret.status_code)
+        self.assertTrue(ret.json['error_message'])
+        mock_gsbd.assert_called_once_with(mock.ANY, node.uuid, 'test-topic')
+
 
 class TestPatch(base.FunctionalTest):
 
     def setUp(self):
         super(TestPatch, self).setUp()
-        cdict = dbutils.get_test_chassis()
-        self.chassis = self.dbapi.create_chassis(cdict)
+        self.chassis = obj_utils.create_test_chassis(self.context)
         self.node = obj_utils.create_test_node(self.context)
         p = mock.patch.object(rpcapi.ConductorAPI, 'get_topic_for')
         self.mock_gtf = p.start()
@@ -603,6 +641,53 @@ class TestPatch(base.FunctionalTest):
         self.assertEqual(400, response.status_code)
         self.assertTrue(response.json['error_message'])
 
+    def test_replace_chassis_uuid(self):
+        self.mock_update_node.return_value = self.node
+        response = self.patch_json('/nodes/%s' % self.node.uuid,
+                             [{'path': '/chassis_uuid',
+                               'value': self.chassis.uuid,
+                               'op': 'replace'}])
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(200, response.status_code)
+
+    def test_add_chassis_uuid(self):
+        self.mock_update_node.return_value = self.node
+        response = self.patch_json('/nodes/%s' % self.node.uuid,
+                             [{'path': '/chassis_uuid',
+                               'value': self.chassis.uuid,
+                               'op': 'add'}])
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(200, response.status_code)
+
+    def test_add_chassis_id(self):
+        response = self.patch_json('/nodes/%s' % self.node.uuid,
+                             [{'path': '/chassis_id',
+                               'value': '1',
+                               'op': 'add'}],
+                               expect_errors=True)
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(400, response.status_code)
+        self.assertTrue(response.json['error_message'])
+
+    def test_replace_chassis_id(self):
+        response = self.patch_json('/nodes/%s' % self.node.uuid,
+                             [{'path': '/chassis_id',
+                               'value': '1',
+                               'op': 'replace'}],
+                               expect_errors=True)
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(400, response.status_code)
+        self.assertTrue(response.json['error_message'])
+
+    def test_remove_chassis_id(self):
+        response = self.patch_json('/nodes/%s' % self.node.uuid,
+                             [{'path': '/chassis_id',
+                               'op': 'remove'}],
+                               expect_errors=True)
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(400, response.status_code)
+        self.assertTrue(response.json['error_message'])
+
     def test_replace_non_existent_chassis_uuid(self):
         response = self.patch_json('/nodes/%s' % self.node['uuid'],
                              [{'path': '/chassis_uuid',
@@ -665,8 +750,7 @@ class TestPost(base.FunctionalTest):
 
     def setUp(self):
         super(TestPost, self).setUp()
-        cdict = dbutils.get_test_chassis()
-        self.chassis = self.dbapi.create_chassis(cdict)
+        self.chassis = obj_utils.create_test_chassis(self.context)
         p = mock.patch.object(rpcapi.ConductorAPI, 'get_topic_for')
         self.mock_gtf = p.start()
         self.mock_gtf.return_value = 'test-topic'
@@ -830,8 +914,7 @@ class TestDelete(base.FunctionalTest):
 
     def setUp(self):
         super(TestDelete, self).setUp()
-        cdict = dbutils.get_test_chassis()
-        self.chassis = self.dbapi.create_chassis(cdict)
+        self.chassis = obj_utils.create_test_chassis(self.context)
         p = mock.patch.object(rpcapi.ConductorAPI, 'get_topic_for')
         self.mock_gtf = p.start()
         self.mock_gtf.return_value = 'test-topic'
@@ -877,8 +960,7 @@ class TestPut(base.FunctionalTest):
 
     def setUp(self):
         super(TestPut, self).setUp()
-        cdict = dbutils.get_test_chassis()
-        self.chassis = self.dbapi.create_chassis(cdict)
+        self.chassis = obj_utils.create_test_chassis(self.context)
         self.node = obj_utils.create_test_node(self.context)
         p = mock.patch.object(rpcapi.ConductorAPI, 'get_topic_for')
         self.mock_gtf = p.start()
@@ -1054,3 +1136,48 @@ class TestPut(base.FunctionalTest):
                                 expect_errors=True)
             self.assertEqual(400, ret.status_code)
             self.assertTrue(ret.json['error_message'])
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'set_boot_device')
+    def test_set_boot_device(self, mock_sbd):
+        device = boot_devices.PXE
+        ret = self.put_json('/nodes/%s/management/boot_device'
+                            % self.node.uuid, {'boot_device': device})
+        self.assertEqual(204, ret.status_code)
+        self.assertEqual('', ret.body)
+        mock_sbd.assert_called_once_with(mock.ANY, self.node.uuid,
+                                         device, persistent=False,
+                                         topic='test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'set_boot_device')
+    def test_set_boot_device_not_supported(self, mock_sbd):
+        mock_sbd.side_effect = exception.UnsupportedDriverExtension(
+                                  extension='management', driver='test-driver')
+        device = boot_devices.PXE
+        ret = self.put_json('/nodes/%s/management/boot_device'
+                            % self.node.uuid, {'boot_device': device},
+                            expect_errors=True)
+        self.assertEqual(400, ret.status_code)
+        self.assertTrue(ret.json['error_message'])
+        mock_sbd.assert_called_once_with(mock.ANY, self.node.uuid,
+                                         device, persistent=False,
+                                         topic='test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'set_boot_device')
+    def test_set_boot_device_persistent(self, mock_sbd):
+        device = boot_devices.PXE
+        ret = self.put_json('/nodes/%s/management/boot_device?persistent=True'
+                            % self.node.uuid, {'boot_device': device})
+        self.assertEqual(204, ret.status_code)
+        self.assertEqual('', ret.body)
+        mock_sbd.assert_called_once_with(mock.ANY, self.node.uuid,
+                                         device, persistent=True,
+                                         topic='test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'set_boot_device')
+    def test_set_boot_device_persistent_invalid_value(self, mock_sbd):
+        device = boot_devices.PXE
+        ret = self.put_json('/nodes/%s/management/boot_device?persistent=blah'
+                            % self.node.uuid, {'boot_device': device},
+                            expect_errors=True)
+        self.assertEqual('application/json', ret.content_type)
+        self.assertEqual(400, ret.status_code)

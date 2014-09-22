@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from ironic.common.i18n import _
 from ironic.db import api as db_api
 from ironic.objects import base
 from ironic.objects import utils
@@ -46,7 +47,11 @@ class Conductor(base.IronicObject):
         :returns: a :class:`Conductor` object.
         """
         db_obj = cls.dbapi.get_conductor(hostname)
-        return Conductor._from_db_object(cls(), db_obj)
+        conductor = Conductor._from_db_object(cls(), db_obj)
+        # FIXME(comstud): Setting of the context should be moved to
+        # _from_db_object().
+        conductor._context = context
+        return conductor
 
     def save(self, context):
         """Save is not supported by Conductor objects."""

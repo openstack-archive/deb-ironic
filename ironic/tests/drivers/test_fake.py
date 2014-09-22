@@ -45,7 +45,7 @@ class FakeDriverTestCase(base.TestCase):
         self.task.driver = self.driver
 
     def test_driver_interfaces(self):
-        # fake driver implements only 3 out of 5 interfaces
+        # fake driver implements only 5 out of 6 interfaces
         self.assertIsInstance(self.driver.power, driver_base.PowerInterface)
         self.assertIsInstance(self.driver.deploy, driver_base.DeployInterface)
         self.assertIsInstance(self.driver.vendor, driver_base.VendorInterface)
@@ -53,8 +53,14 @@ class FakeDriverTestCase(base.TestCase):
                                                   driver_base.ConsoleInterface)
         self.assertIsNone(self.driver.rescue)
 
+    def test_get_properties(self):
+        expected = ['A1', 'A2', 'B1', 'B2']
+        properties = self.driver.get_properties()
+        self.assertEqual(sorted(expected), sorted(properties.keys()))
+
     def test_power_interface(self):
-        self.driver.power.validate(self.task, self.node)
+        self.assertEqual({}, self.driver.power.get_properties())
+        self.driver.power.validate(self.task)
         self.driver.power.get_power_state(self.task)
         self.assertRaises(exception.InvalidParameterValue,
                           self.driver.power.set_power_state,
@@ -63,7 +69,8 @@ class FakeDriverTestCase(base.TestCase):
         self.driver.power.reboot(self.task)
 
     def test_deploy_interface(self):
-        self.driver.deploy.validate(None, self.node)
+        self.assertEqual({}, self.driver.deploy.get_properties())
+        self.driver.deploy.validate(None)
 
         self.driver.deploy.prepare(None)
         self.driver.deploy.deploy(None)
@@ -73,8 +80,18 @@ class FakeDriverTestCase(base.TestCase):
         self.driver.deploy.clean_up(None)
         self.driver.deploy.tear_down(None)
 
+    def test_console_interface(self):
+        self.assertEqual({}, self.driver.console.get_properties())
+        self.driver.console.validate(self.task)
+        self.driver.console.start_console(self.task)
+        self.driver.console.stop_console(self.task)
+        self.driver.console.get_console(self.task)
+
+    def test_management_interface_get_properties(self):
+        self.assertEqual({}, self.driver.management.get_properties())
+
     def test_management_interface_validate(self):
-        self.driver.management.validate(self.task, self.node)
+        self.driver.management.validate(self.task)
 
     def test_management_interface_set_boot_device_good(self):
             self.driver.management.set_boot_device(self.task, boot_devices.PXE)
@@ -90,5 +107,6 @@ class FakeDriverTestCase(base.TestCase):
                          self.driver.management.get_supported_boot_devices())
 
     def test_management_interface_get_boot_device(self):
-        self.assertEqual(boot_devices.PXE,
+        expected = {'boot_device': boot_devices.PXE, 'persistent': False}
+        self.assertEqual(expected,
                          self.driver.management.get_boot_device(self.task))

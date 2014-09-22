@@ -21,15 +21,18 @@ SQLAlchemy models for baremetal data.
 import json
 
 from oslo.config import cfg
+from oslo.db import options as db_options
+from oslo.db.sqlalchemy import models
+from oslo.utils import timeutils
 import six.moves.urllib.parse as urlparse
-
 from sqlalchemy import Boolean, Column, DateTime
-from sqlalchemy import ForeignKey, Integer, Index
+from sqlalchemy import ForeignKey, Integer
 from sqlalchemy import schema, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import TypeDecorator, TEXT
 
-from ironic.openstack.common.db.sqlalchemy import models
+from ironic.common import paths
+
 
 sql_opts = [
     cfg.StrOpt('mysql_engine',
@@ -37,13 +40,17 @@ sql_opts = [
                help='MySQL engine to use.')
 ]
 
+_DEFAULT_SQL_CONNECTION = 'sqlite:///' + paths.state_path_def('ironic.sqlite')
+
+
 cfg.CONF.register_opts(sql_opts, 'database')
+db_options.set_defaults(cfg.CONF, _DEFAULT_SQL_CONNECTION, 'ironic.sqlite')
 
 
 def table_args():
-    engine_name = urlparse.urlparse(cfg.CONF.database_connection).scheme
+    engine_name = urlparse.urlparse(cfg.CONF.database.connection).scheme
     if engine_name == 'mysql':
-        return {'mysql_engine': cfg.CONF.mysql_engine,
+        return {'mysql_engine': cfg.CONF.database.mysql_engine,
                 'mysql_charset': "utf8"}
     return None
 
@@ -82,8 +89,14 @@ class JSONEncodedList(JsonEncodedType):
     type = list
 
 
-class IronicBase(models.TimestampMixin,
-                 models.ModelBase):
+class IronicBase(models.ModelBase):
+    # FIXME(akruilin): remove `created_at` and `updated_at` attributes and use
+    # TimestampMixin from oslo.db.sqlalchemy.models instead, when
+    # ironic and oslo.db will use timeutils from one place (oslo.utils).
+    # Related patch in oslo.db : https://review.openstack.org/#/c/111701/
+    # Related bug: https://bugs.launchpad.net/ironic/+bug/1354443
+    created_at = Column(DateTime, default=lambda: timeutils.utcnow())
+    updated_at = Column(DateTime, onupdate=lambda: timeutils.utcnow())
 
     metadata = None
 
@@ -110,6 +123,7 @@ class Chassis(Base):
     __tablename__ = 'chassis'
     __table_args__ = (
         schema.UniqueConstraint('uuid', name='uniq_chassis0uuid'),
+        table_args()
         )
     id = Column(Integer, primary_key=True)
     uuid = Column(String(36))
@@ -123,6 +137,7 @@ class Conductor(Base):
     __tablename__ = 'conductors'
     __table_args__ = (
         schema.UniqueConstraint('hostname', name='uniq_conductors0hostname'),
+        table_args()
         )
     id = Column(Integer, primary_key=True)
     hostname = Column(String(255), nullable=False)
@@ -135,7 +150,9 @@ class Node(Base):
     __tablename__ = 'nodes'
     __table_args__ = (
         schema.UniqueConstraint('uuid', name='uniq_nodes0uuid'),
-        Index('node_instance_uuid', 'instance_uuid'))
+        schema.UniqueConstraint('instance_uuid',
+                                name='uniq_nodes0instance_uuid'),
+        table_args())
     id = Column(Integer, primary_key=True)
     uuid = Column(String(36))
     # NOTE(deva): we store instance_uuid directly on the node so that we can
@@ -165,7 +182,8 @@ class Port(Base):
     __tablename__ = 'ports'
     __table_args__ = (
         schema.UniqueConstraint('address', name='uniq_ports0address'),
-        schema.UniqueConstraint('uuid', name='uniq_ports0uuid'))
+        schema.UniqueConstraint('uuid', name='uniq_ports0uuid'),
+        table_args())
     id = Column(Integer, primary_key=True)
     uuid = Column(String(36))
     address = Column(String(18))

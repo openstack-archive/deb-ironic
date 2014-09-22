@@ -15,12 +15,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.utils import strutils
 import wsme
 from wsme import types as wtypes
 
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic.common import utils
-from ironic.openstack.common import strutils
 
 
 class MacAddressType(wtypes.UserType):

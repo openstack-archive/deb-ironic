@@ -17,13 +17,14 @@
 
 import time
 
-from ironicclient import client as ironic_client
-from ironicclient import exc as ironic_exception
-
 from nova import exception
 from nova.openstack.common.gettextutils import _
+from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from oslo.config import cfg
+
+
+ironic = None
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
@@ -31,6 +32,23 @@ CONF = cfg.CONF
 
 class IronicClientWrapper(object):
     """Ironic client wrapper class that encapsulates retry logic."""
+
+    def __init__(self):
+        """Initialise the IronicClientWrapper for use.
+
+        Initialise IronicClientWrapper by loading ironicclient
+        dynamically so that ironicclient is not a dependency for
+        Nova.
+        """
+        global ironic
+        if ironic is None:
+            ironic = importutils.import_module('ironicclient')
+            # NOTE(deva): work around a lack of symbols in the current version.
+            if not hasattr(ironic, 'exc'):
+                ironic.exc = importutils.import_module('ironicclient.exc')
+            if not hasattr(ironic, 'client'):
+                ironic.client = importutils.import_module(
+                                                    'ironicclient.client')
 
     def _get_client(self):
         # TODO(deva): save and reuse existing client & auth token
@@ -42,15 +60,16 @@ class IronicClientWrapper(object):
                       'os_auth_url': CONF.ironic.admin_url,
                       'os_tenant_name': CONF.ironic.admin_tenant_name,
                       'os_service_type': 'baremetal',
-                      'os_endpoint_type': 'public'}
+                      'os_endpoint_type': 'public',
+                      'ironic_url': CONF.ironic.api_endpoint}
         else:
             kwargs = {'os_auth_token': auth_token,
                       'ironic_url': CONF.ironic.api_endpoint}
 
         try:
-            cli = ironic_client.get_client(CONF.ironic.api_version, **kwargs)
-        except ironic_exception.Unauthorized:
-            msg = (_("Unable to authenticate Ironic client."))
+            cli = ironic.client.get_client(CONF.ironic.api_version, **kwargs)
+        except ironic.exc.Unauthorized:
+            msg = _("Unable to authenticate Ironic client.")
             LOG.error(msg)
             raise exception.NovaException(msg)
 
@@ -78,9 +97,9 @@ class IronicClientWrapper(object):
 
         :raises: NovaException if all retries failed.
         """
-        retry_excs = (ironic_exception.ServiceUnavailable,
-                      ironic_exception.ConnectionRefused,
-                      ironic_exception.Conflict)
+        retry_excs = (ironic.exc.ServiceUnavailable,
+                      ironic.exc.ConnectionRefused,
+                      ironic.exc.Conflict)
         num_attempts = CONF.ironic.api_max_retries
 
         for attempt in range(1, num_attempts + 1):

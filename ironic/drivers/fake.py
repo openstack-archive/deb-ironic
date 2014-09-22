@@ -17,16 +17,24 @@
 Fake drivers used in testing.
 """
 
+from oslo.utils import importutils
+
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic.drivers import base
+from ironic.drivers.modules import agent
+from ironic.drivers.modules.drac import management as drac_mgmt
+from ironic.drivers.modules.drac import power as drac_power
 from ironic.drivers.modules import fake
+from ironic.drivers.modules import iboot
+from ironic.drivers.modules.ilo import power as ilo_power
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules import pxe
 from ironic.drivers.modules import seamicro
+from ironic.drivers.modules import snmp
 from ironic.drivers.modules import ssh
 from ironic.drivers import utils
-from ironic.openstack.common import importutils
 
 
 class FakeDriver(base.BaseDriver):
@@ -53,6 +61,7 @@ class FakeIPMIToolDriver(base.BaseDriver):
         self.console = ipmitool.IPMIShellinaboxConsole()
         self.deploy = fake.FakeDeploy()
         self.vendor = ipmitool.VendorPassthru()
+        self.management = ipmitool.IPMIManagement()
 
 
 class FakePXEDriver(base.BaseDriver):
@@ -70,6 +79,7 @@ class FakeSSHDriver(base.BaseDriver):
     def __init__(self):
         self.power = ssh.SSHPower()
         self.deploy = fake.FakeDeploy()
+        self.management = ssh.SSHManagement()
 
 
 class FakeIPMINativeDriver(base.BaseDriver):
@@ -78,7 +88,7 @@ class FakeIPMINativeDriver(base.BaseDriver):
     def __init__(self):
         self.power = ipminative.NativeIPMIPower()
         self.deploy = fake.FakeDeploy()
-        self.vendor = ipminative.VendorPassthru()
+        self.management = ipminative.NativeIPMIManagement()
 
 
 class FakeSeaMicroDriver(base.BaseDriver):
@@ -91,4 +101,60 @@ class FakeSeaMicroDriver(base.BaseDriver):
                     reason="Unable to import seamicroclient library")
         self.power = seamicro.Power()
         self.deploy = fake.FakeDeploy()
+        self.management = seamicro.Management()
         self.vendor = seamicro.VendorPassthru()
+
+
+class FakeAgentDriver(base.BaseDriver):
+    """Example implementation of an AgentDriver."""
+
+    def __init__(self):
+        self.power = fake.FakePower()
+        self.deploy = agent.AgentDeploy()
+        self.vendor = agent.AgentVendorInterface()
+
+
+class FakeIBootDriver(base.BaseDriver):
+    """Example implementation of a Driver."""
+
+    def __init__(self):
+        self.power = iboot.IBootPower()
+        self.deploy = fake.FakeDeploy()
+
+
+class FakeIloDriver(base.BaseDriver):
+    """Fake iLO driver, used in testing."""
+
+    def __init__(self):
+        if not importutils.try_import('proliantutils'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason=_("Unable to import proliantutils library"))
+        self.power = ilo_power.IloPower()
+        self.deploy = fake.FakeDeploy()
+
+
+class FakeDracDriver(base.BaseDriver):
+    """Fake Drac driver."""
+
+    def __init__(self):
+        if not importutils.try_import('pywsman'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason=_('Unable to import pywsman library'))
+
+        self.power = drac_power.DracPower()
+        self.deploy = fake.FakeDeploy()
+        self.management = drac_mgmt.DracManagement()
+
+
+class FakeSNMPDriver(base.BaseDriver):
+    """Fake SNMP driver."""
+
+    def __init__(self):
+        if not importutils.try_import('pysnmp'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason="Unable to import pysnmp library")
+        self.power = snmp.SNMPPower()
+        self.deploy = fake.FakeDeploy()

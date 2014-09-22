@@ -23,9 +23,11 @@ import mock
 import os
 import stat
 import tempfile
+import time
 
 from oslo.config import cfg
 
+from ironic.common import boot_devices
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import states
@@ -44,9 +46,173 @@ from ironic.tests.objects import utils as obj_utils
 
 CONF = cfg.CONF
 
+CONF.import_opt('min_command_interval',
+                'ironic.drivers.modules.ipminative',
+                group='ipmi')
+
 INFO_DICT = db_utils.get_test_ipmi_info()
 
+# BRIDGE_INFO_DICT will have all the bridging parameters appended
+BRIDGE_INFO_DICT = INFO_DICT.copy()
+BRIDGE_INFO_DICT.update(db_utils.get_test_ipmi_bridging_parameters())
 
+
+class IPMIToolCheckOptionSupportedTestCase(base.TestCase):
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_timing_pass(self, mock_exc, mock_support):
+        mock_exc.return_value = (None, None)
+        mock_support.return_value = None
+        expected = [mock.call('timing'),
+                    mock.call('timing', True)]
+
+        ipmi._check_option_support(['timing'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_timing_fail(self, mock_exc, mock_support):
+        mock_exc.side_effect = processutils.ProcessExecutionError()
+        mock_support.return_value = None
+        expected = [mock.call('timing'),
+                    mock.call('timing', False)]
+
+        ipmi._check_option_support(['timing'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_timing_no_ipmitool(self, mock_exc, mock_support):
+        mock_exc.side_effect = OSError()
+        mock_support.return_value = None
+        expected = [mock.call('timing')]
+
+        self.assertRaises(OSError, ipmi._check_option_support, ['timing'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_single_bridge_pass(self, mock_exc, mock_support):
+        mock_exc.return_value = (None, None)
+        mock_support.return_value = None
+        expected = [mock.call('single_bridge'),
+                    mock.call('single_bridge', True)]
+
+        ipmi._check_option_support(['single_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_single_bridge_fail(self, mock_exc, mock_support):
+        mock_exc.side_effect = processutils.ProcessExecutionError()
+        mock_support.return_value = None
+        expected = [mock.call('single_bridge'),
+                    mock.call('single_bridge', False)]
+
+        ipmi._check_option_support(['single_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_single_bridge_no_ipmitool(self, mock_exc,
+                                             mock_support):
+        mock_exc.side_effect = OSError()
+        mock_support.return_value = None
+        expected = [mock.call('single_bridge')]
+
+        self.assertRaises(OSError, ipmi._check_option_support,
+                          ['single_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_dual_bridge_pass(self, mock_exc, mock_support):
+        mock_exc.return_value = (None, None)
+        mock_support.return_value = None
+        expected = [mock.call('dual_bridge'),
+                    mock.call('dual_bridge', True)]
+
+        ipmi._check_option_support(['dual_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_dual_bridge_fail(self, mock_exc, mock_support):
+        mock_exc.side_effect = processutils.ProcessExecutionError()
+        mock_support.return_value = None
+        expected = [mock.call('dual_bridge'),
+                    mock.call('dual_bridge', False)]
+
+        ipmi._check_option_support(['dual_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_dual_bridge_no_ipmitool(self, mock_exc, mock_support):
+        mock_exc.side_effect = OSError()
+        mock_support.return_value = None
+        expected = [mock.call('dual_bridge')]
+
+        self.assertRaises(OSError, ipmi._check_option_support,
+                          ['dual_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_all_options_pass(self, mock_exc, mock_support):
+        mock_exc.return_value = (None, None)
+        mock_support.return_value = None
+        expected = [
+            mock.call('timing'), mock.call('timing', True),
+            mock.call('single_bridge'),
+            mock.call('single_bridge', True),
+            mock.call('dual_bridge'), mock.call('dual_bridge', True)]
+
+        ipmi._check_option_support(['timing', 'single_bridge', 'dual_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_all_options_fail(self, mock_exc, mock_support):
+        mock_exc.side_effect = processutils.ProcessExecutionError()
+        mock_support.return_value = None
+        expected = [
+            mock.call('timing'), mock.call('timing', False),
+            mock.call('single_bridge'),
+            mock.call('single_bridge', False),
+            mock.call('dual_bridge'),
+            mock.call('dual_bridge', False)]
+
+        ipmi._check_option_support(['timing', 'single_bridge', 'dual_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(utils, 'execute')
+    def test_check_all_options_no_ipmitool(self, mock_exc, mock_support):
+        mock_exc.side_effect = OSError()
+        mock_support.return_value = None
+        # exception is raised once ipmitool was not found for an command
+        expected = [mock.call('timing')]
+
+        self.assertRaises(OSError, ipmi._check_option_support,
+                          ['timing', 'single_bridge', 'dual_bridge'])
+        self.assertTrue(mock_exc.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+
+
+@mock.patch.object(time, 'sleep')
 class IPMIToolPrivateMethodTestCase(base.TestCase):
 
     def setUp(self):
@@ -58,7 +224,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
                 driver_info=INFO_DICT)
         self.info = ipmi._parse_driver_info(self.node)
 
-    def test__make_password_file(self):
+    def test__make_password_file(self, mock_sleep):
         with ipmi._make_password_file(self.info.get('password')) as pw_file:
             del_chk_pw_file = pw_file
             self.assertTrue(os.path.isfile(pw_file))
@@ -68,12 +234,11 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             self.assertEqual(self.info.get('password'), password)
         self.assertFalse(os.path.isfile(del_chk_pw_file))
 
-    def test__parse_driver_info(self):
+    def test__parse_driver_info(self, mock_sleep):
         # make sure we get back the expected things
-        self.assertIsNotNone(self.info.get('address'))
-        self.assertIsNotNone(self.info.get('username'))
-        self.assertIsNotNone(self.info.get('password'))
-        self.assertIsNotNone(self.info.get('uuid'))
+        _OPTIONS = ['address', 'username', 'password', 'uuid']
+        for option in _OPTIONS:
+            self.assertIsNotNone(self.info.get(option))
 
         info = dict(INFO_DICT)
 
@@ -91,22 +256,186 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
         ipmi._parse_driver_info(node)
 
         # make sure error is raised when ipmi_address is missing
+        info = dict(INFO_DICT)
         del info['ipmi_address']
         node = obj_utils.get_test_node(self.context, driver_info=info)
-        self.assertRaises(exception.InvalidParameterValue,
+        self.assertRaises(exception.MissingParameterValue,
                           ipmi._parse_driver_info,
                           node)
 
         # test the invalid priv_level value
-        self.info['priv_level'] = 'ABCD'
+        info = dict(INFO_DICT)
+        info['ipmi_priv_level'] = 'ABCD'
         node = obj_utils.get_test_node(self.context, driver_info=info)
         self.assertRaises(exception.InvalidParameterValue,
                           ipmi._parse_driver_info,
                           node)
 
+    @mock.patch.object(ipmi, '_is_option_supported')
+    def test__parse_driver_info_with_invalid_bridging_type(self,
+            mock_support, mock_sleep):
+        info = BRIDGE_INFO_DICT.copy()
+        # make sure error is raised when ipmi_bridging has unexpected value
+        info['ipmi_bridging'] = 'junk'
+        node = obj_utils.get_test_node(self.context, driver_info=info)
+        self.assertRaises(exception.InvalidParameterValue,
+                          ipmi._parse_driver_info,
+                          node)
+        self.assertFalse(mock_support.called)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    def test__parse_driver_info_with_no_bridging(self,
+            mock_support, mock_sleep):
+        _OPTIONS = ['address', 'username', 'password', 'uuid']
+        _BRIDGING_OPTIONS = ['local_address', 'transit_channel',
+                             'transit_address',
+                             'target_channel', 'target_address']
+        info = BRIDGE_INFO_DICT.copy()
+        info['ipmi_bridging'] = 'no'
+        node = obj_utils.get_test_node(self.context, driver='fake_ipmitool',
+                                       driver_info=info)
+        ret = ipmi._parse_driver_info(node)
+
+        # ensure that _is_option_supported was not called
+        self.assertFalse(mock_support.called)
+        # check if we got all the required options
+        for option in _OPTIONS:
+            self.assertIsNotNone(ret[option])
+        # test the default value for 'priv_level'
+        self.assertEqual('ADMINISTRATOR', ret['priv_level'])
+
+        # check if bridging parameters were set to None
+        for option in _BRIDGING_OPTIONS:
+            self.assertIsNone(ret[option])
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    def test__parse_driver_info_with_dual_bridging_pass(self,
+            mock_support, mock_sleep):
+        _OPTIONS = ['address', 'username', 'password', 'uuid',
+                    'local_address', 'transit_channel', 'transit_address',
+                    'target_channel', 'target_address']
+        node = obj_utils.get_test_node(self.context, driver='fake_ipmitool',
+                                       driver_info=BRIDGE_INFO_DICT)
+
+        expected = [mock.call('dual_bridge')]
+
+        # test double bridging and make sure we get back expected result
+        mock_support.return_value = True
+        ret = ipmi._parse_driver_info(node)
+        self.assertEqual(expected, mock_support.call_args_list)
+        for option in _OPTIONS:
+            self.assertIsNotNone(ret[option])
+        # test the default value for 'priv_level'
+        self.assertEqual('ADMINISTRATOR', ret['priv_level'])
+
+        info = BRIDGE_INFO_DICT.copy()
+        # ipmi_local_address / ipmi_username / ipmi_password are not mandatory
+        for optional_arg in ['ipmi_local_address', 'ipmi_username',
+                             'ipmi_password']:
+            del info[optional_arg]
+            node = obj_utils.get_test_node(self.context, driver_info=info)
+            ipmi._parse_driver_info(node)
+            self.assertEqual(mock.call('dual_bridge'), mock_support.call_args)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    def test__parse_driver_info_with_dual_bridging_not_supported(self,
+            mock_support, mock_sleep):
+        node = obj_utils.get_test_node(self.context, driver='fake_ipmitool',
+                                       driver_info=BRIDGE_INFO_DICT)
+        # if dual bridge is not supported then check if error is raised
+        mock_support.return_value = False
+        self.assertRaises(exception.InvalidParameterValue,
+                          ipmi._parse_driver_info, node)
+        mock_support.assert_called_once_with('dual_bridge')
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    def test__parse_driver_info_with_dual_bridging_missing_parameters(self,
+            mock_support, mock_sleep):
+        info = BRIDGE_INFO_DICT.copy()
+        mock_support.return_value = True
+        # make sure error is raised when dual bridging is selected and the
+        # required parameters for dual bridging are not provided
+        for param in ['ipmi_transit_channel', 'ipmi_target_address',
+                      'ipmi_transit_address', 'ipmi_target_channel']:
+            del info[param]
+            node = obj_utils.get_test_node(self.context, driver_info=info)
+            self.assertRaises(exception.MissingParameterValue,
+                              ipmi._parse_driver_info, node)
+            self.assertEqual(mock.call('dual_bridge'),
+                             mock_support.call_args)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    def test__parse_driver_info_with_single_bridging_pass(self,
+            mock_support, mock_sleep):
+        _OPTIONS = ['address', 'username', 'password', 'uuid',
+                    'local_address', 'target_channel', 'target_address']
+
+        info = BRIDGE_INFO_DICT.copy()
+        info['ipmi_bridging'] = 'single'
+        node = obj_utils.get_test_node(self.context, driver='fake_ipmitool',
+                                       driver_info=info)
+
+        expected = [mock.call('single_bridge')]
+
+        # test single bridging and make sure we get back expected things
+        mock_support.return_value = True
+        ret = ipmi._parse_driver_info(node)
+        self.assertEqual(expected, mock_support.call_args_list)
+        for option in _OPTIONS:
+            self.assertIsNotNone(ret[option])
+        # test the default value for 'priv_level'
+        self.assertEqual('ADMINISTRATOR', ret['priv_level'])
+
+        # check if dual bridge params are set to None
+        self.assertIsNone(ret['transit_channel'])
+        self.assertIsNone(ret['transit_address'])
+
+        # ipmi_local_address / ipmi_username / ipmi_password are not mandatory
+        for optional_arg in ['ipmi_local_address', 'ipmi_username',
+                             'ipmi_password']:
+            del info[optional_arg]
+            node = obj_utils.get_test_node(self.context, driver_info=info)
+            ipmi._parse_driver_info(node)
+            self.assertEqual(mock.call('single_bridge'),
+                             mock_support.call_args)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    def test__parse_driver_info_with_single_bridging_not_supported(self,
+            mock_support, mock_sleep):
+        info = BRIDGE_INFO_DICT.copy()
+        info['ipmi_bridging'] = 'single'
+        node = obj_utils.get_test_node(self.context, driver='fake_ipmitool',
+                                       driver_info=info)
+
+        # if single bridge is not supported then check if error is raised
+        mock_support.return_value = False
+        self.assertRaises(exception.InvalidParameterValue,
+                          ipmi._parse_driver_info, node)
+        mock_support.assert_called_once_with('single_bridge')
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    def test__parse_driver_info_with_single_bridging_missing_parameters(
+            self, mock_support, mock_sleep):
+        info = dict(BRIDGE_INFO_DICT)
+        info['ipmi_bridging'] = 'single'
+        mock_support.return_value = True
+        # make sure error is raised when single bridging is selected and the
+        # required parameters for single bridging are not provided
+        for param in ['ipmi_target_channel', 'ipmi_target_address']:
+            del info[param]
+            node = obj_utils.get_test_node(self.context, driver_info=info)
+            self.assertRaises(exception.MissingParameterValue,
+                              ipmi._parse_driver_info,
+                              node)
+            self.assertEqual(mock.call('single_bridge'),
+                             mock_support.call_args)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
     @mock.patch.object(ipmi, '_make_password_file', autospec=True)
     @mock.patch.object(utils, 'execute', autospec=True)
-    def test__exec_ipmitool(self, mock_exec, mock_pwf):
+    def test__exec_ipmitool_first_call_to_address(self, mock_exec, mock_pwf,
+            mock_support, mock_sleep):
+        ipmi.LAST_CMD_TIME = {}
         pw_file_handle = tempfile.NamedTemporaryFile()
         pw_file = pw_file_handle.name
         file_handle = open(pw_file, "w")
@@ -120,21 +449,163 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             'A', 'B', 'C',
             ]
 
+        mock_support.return_value = False
         mock_pwf.return_value = file_handle
         mock_exec.return_value = (None, None)
 
         ipmi._exec_ipmitool(self.info, 'A B C')
 
+        mock_support.assert_called_once_with('timing')
         mock_pwf.assert_called_once_with(self.info['password'])
-        mock_exec.assert_called_once_with(*args, attempts=3)
+        mock_exec.assert_called_once_with(*args)
+        self.assertFalse(mock_sleep.called)
 
+    @mock.patch.object(ipmi, '_is_option_supported')
     @mock.patch.object(ipmi, '_make_password_file', autospec=True)
     @mock.patch.object(utils, 'execute', autospec=True)
-    def test__exec_ipmitool_without_password(self, mock_exec, mock_pwf):
-        self.info['password'] = None
+    def test__exec_ipmitool_second_call_to_address_sleep(self, mock_exec,
+            mock_pwf, mock_support, mock_sleep):
+        ipmi.LAST_CMD_TIME = {}
+        pw_file_handle1 = tempfile.NamedTemporaryFile()
+        pw_file1 = pw_file_handle1.name
+        file_handle1 = open(pw_file1, "w")
+        pw_file_handle2 = tempfile.NamedTemporaryFile()
+        pw_file2 = pw_file_handle2.name
+        file_handle2 = open(pw_file2, "w")
+        args = [[
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', self.info['address'],
+            '-L', self.info['priv_level'],
+            '-U', self.info['username'],
+            '-f', file_handle1,
+            'A', 'B', 'C',
+        ],
+        [
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', self.info['address'],
+            '-L', self.info['priv_level'],
+            '-U', self.info['username'],
+            '-f', file_handle2,
+            'D', 'E', 'F',
+        ]]
+
+        expected = [mock.call('timing'),
+                    mock.call('timing')]
+        mock_support.return_value = False
+        mock_pwf.side_effect = iter([file_handle1, file_handle2])
+        mock_exec.side_effect = iter([(None, None), (None, None)])
+
+        ipmi._exec_ipmitool(self.info, 'A B C')
+        mock_exec.assert_called_with(*args[0])
+
+        ipmi._exec_ipmitool(self.info, 'D E F')
+        self.assertTrue(mock_sleep.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+        mock_exec.assert_called_with(*args[1])
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(ipmi, '_make_password_file', autospec=True)
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test__exec_ipmitool_second_call_to_address_no_sleep(self, mock_exec,
+            mock_pwf, mock_support, mock_sleep):
+        ipmi.LAST_CMD_TIME = {}
+        pw_file_handle1 = tempfile.NamedTemporaryFile()
+        pw_file1 = pw_file_handle1.name
+        file_handle1 = open(pw_file1, "w")
+        pw_file_handle2 = tempfile.NamedTemporaryFile()
+        pw_file2 = pw_file_handle2.name
+        file_handle2 = open(pw_file2, "w")
+        args = [[
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', self.info['address'],
+            '-L', self.info['priv_level'],
+            '-U', self.info['username'],
+            '-f', file_handle1,
+            'A', 'B', 'C',
+        ],
+        [
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', self.info['address'],
+            '-L', self.info['priv_level'],
+            '-U', self.info['username'],
+            '-f', file_handle2,
+            'D', 'E', 'F',
+        ]]
+
+        expected = [mock.call('timing'),
+                    mock.call('timing')]
+        mock_support.return_value = False
+        mock_pwf.side_effect = iter([file_handle1, file_handle2])
+        mock_exec.side_effect = iter([(None, None), (None, None)])
+
+        ipmi._exec_ipmitool(self.info, 'A B C')
+        mock_exec.assert_called_with(*args[0])
+        # act like enough time has passed
+        ipmi.LAST_CMD_TIME[self.info['address']] = (time.time() -
+                CONF.ipmi.min_command_interval)
+        ipmi._exec_ipmitool(self.info, 'D E F')
+        self.assertFalse(mock_sleep.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+        mock_exec.assert_called_with(*args[1])
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(ipmi, '_make_password_file', autospec=True)
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test__exec_ipmitool_two_calls_to_diff_address(self, mock_exec,
+            mock_pwf, mock_support, mock_sleep):
+        ipmi.LAST_CMD_TIME = {}
+        pw_file_handle1 = tempfile.NamedTemporaryFile()
+        pw_file1 = pw_file_handle1.name
+        file_handle1 = open(pw_file1, "w")
+        pw_file_handle2 = tempfile.NamedTemporaryFile()
+        pw_file2 = pw_file_handle2.name
+        file_handle2 = open(pw_file2, "w")
+        args = [[
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', self.info['address'],
+            '-L', self.info['priv_level'],
+            '-U', self.info['username'],
+            '-f', file_handle1,
+            'A', 'B', 'C',
+        ],
+        [
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', '127.127.127.127',
+            '-L', self.info['priv_level'],
+            '-U', self.info['username'],
+            '-f', file_handle2,
+            'D', 'E', 'F',
+        ]]
+
+        expected = [mock.call('timing'),
+                    mock.call('timing')]
+        mock_support.return_value = False
+        mock_pwf.side_effect = iter([file_handle1, file_handle2])
+        mock_exec.side_effect = iter([(None, None), (None, None)])
+
+        ipmi._exec_ipmitool(self.info, 'A B C')
+        mock_exec.assert_called_with(*args[0])
+        self.info['address'] = '127.127.127.127'
+        ipmi._exec_ipmitool(self.info, 'D E F')
+        self.assertFalse(mock_sleep.called)
+        self.assertEqual(expected, mock_support.call_args_list)
+        mock_exec.assert_called_with(*args[1])
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(ipmi, '_make_password_file', autospec=True)
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test__exec_ipmitool_without_timing(self, mock_exec, mock_pwf,
+            mock_support, mock_sleep):
         pw_file_handle = tempfile.NamedTemporaryFile()
         pw_file = pw_file_handle.name
         file_handle = open(pw_file, "w")
+
         args = [
             'ipmitool',
             '-I', 'lanplus',
@@ -145,15 +616,51 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             'A', 'B', 'C',
             ]
 
+        mock_support.return_value = False
         mock_pwf.return_value = file_handle
         mock_exec.return_value = (None, None)
-        ipmi._exec_ipmitool(self.info, 'A B C')
-        self.assertTrue(mock_pwf.called)
-        mock_exec.assert_called_once_with(*args, attempts=3)
 
+        ipmi._exec_ipmitool(self.info, 'A B C')
+
+        mock_support.assert_called_once_with('timing')
+        mock_pwf.assert_called_once_with(self.info['password'])
+        mock_exec.assert_called_once_with(*args)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
     @mock.patch.object(ipmi, '_make_password_file', autospec=True)
     @mock.patch.object(utils, 'execute', autospec=True)
-    def test__exec_ipmitool_without_username(self, mock_exec, mock_pwf):
+    def test__exec_ipmitool_with_timing(self, mock_exec, mock_pwf,
+            mock_support, mock_sleep):
+        pw_file_handle = tempfile.NamedTemporaryFile()
+        pw_file = pw_file_handle.name
+        file_handle = open(pw_file, "w")
+        args = [
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', self.info['address'],
+            '-L', self.info['priv_level'],
+            '-U', self.info['username'],
+            '-R', '12',
+            '-N', '5',
+            '-f', file_handle,
+            'A', 'B', 'C',
+            ]
+
+        mock_support.return_value = True
+        mock_pwf.return_value = file_handle
+        mock_exec.return_value = (None, None)
+
+        ipmi._exec_ipmitool(self.info, 'A B C')
+
+        mock_support.assert_called_once_with('timing')
+        mock_pwf.assert_called_once_with(self.info['password'])
+        mock_exec.assert_called_once_with(*args)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(ipmi, '_make_password_file', autospec=True)
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test__exec_ipmitool_without_username(self, mock_exec, mock_pwf,
+            mock_support, mock_sleep):
         self.info['username'] = None
         pw_file_handle = tempfile.NamedTemporaryFile()
         pw_file = pw_file_handle.name
@@ -167,15 +674,104 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             'A', 'B', 'C',
             ]
 
+        mock_support.return_value = False
         mock_pwf.return_value = file_handle
         mock_exec.return_value = (None, None)
         ipmi._exec_ipmitool(self.info, 'A B C')
+        mock_support.assert_called_once_with('timing')
         self.assertTrue(mock_pwf.called)
-        mock_exec.assert_called_once_with(*args, attempts=3)
+        mock_exec.assert_called_once_with(*args)
 
+    @mock.patch.object(ipmi, '_is_option_supported')
     @mock.patch.object(ipmi, '_make_password_file', autospec=True)
     @mock.patch.object(utils, 'execute', autospec=True)
-    def test__exec_ipmitool_exception(self, mock_exec, mock_pwf):
+    def test__exec_ipmitool_with_dual_bridging(self,
+                                               mock_exec, mock_pwf,
+                                               mock_support,
+                                               mock_sleep):
+
+        node = obj_utils.get_test_node(self.context, driver='fake_ipmitool',
+                                       driver_info=BRIDGE_INFO_DICT)
+        # when support for dual bridge command is called returns True
+        mock_support.return_value = True
+        info = ipmi._parse_driver_info(node)
+        pw_file_handle = tempfile.NamedTemporaryFile()
+        pw_file = pw_file_handle.name
+        file_handle = open(pw_file, "w")
+        args = [
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', info['address'],
+            '-L', info['priv_level'],
+            '-U', info['username'],
+            '-m', info['local_address'],
+            '-B', info['transit_channel'],
+            '-T', info['transit_address'],
+            '-b', info['target_channel'],
+            '-t', info['target_address'],
+            '-f', file_handle,
+            'A', 'B', 'C',
+            ]
+
+        expected = [mock.call('dual_bridge'),
+                    mock.call('timing')]
+        # When support for timing command is called returns False
+        mock_support.return_value = False
+        mock_pwf.return_value = file_handle
+        mock_exec.return_value = (None, None)
+        ipmi._exec_ipmitool(info, 'A B C')
+        self.assertEqual(expected, mock_support.call_args_list)
+        self.assertTrue(mock_pwf.called)
+        mock_exec.assert_called_once_with(*args)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(ipmi, '_make_password_file', autospec=True)
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test__exec_ipmitool_with_single_bridging(self,
+                                                 mock_exec, mock_pwf,
+                                                 mock_support,
+                                                 mock_sleep):
+        single_bridge_info = dict(BRIDGE_INFO_DICT)
+        single_bridge_info['ipmi_bridging'] = 'single'
+        node = obj_utils.get_test_node(self.context, driver='fake_ipmitool',
+                                       driver_info=single_bridge_info)
+        # when support for single bridge command is called returns True
+        mock_support.return_value = True
+        info = ipmi._parse_driver_info(node)
+        info['transit_channel'] = info['transit_address'] = None
+
+        pw_file_handle = tempfile.NamedTemporaryFile()
+        pw_file = pw_file_handle.name
+        file_handle = open(pw_file, "w")
+        args = [
+            'ipmitool',
+            '-I', 'lanplus',
+            '-H', info['address'],
+            '-L', info['priv_level'],
+            '-U', info['username'],
+            '-m', info['local_address'],
+            '-b', info['target_channel'],
+            '-t', info['target_address'],
+            '-f', file_handle,
+            'A', 'B', 'C',
+            ]
+
+        expected = [mock.call('single_bridge'),
+                    mock.call('timing')]
+        # When support for timing command is called returns False
+        mock_support.return_value = False
+        mock_pwf.return_value = file_handle
+        mock_exec.return_value = (None, None)
+        ipmi._exec_ipmitool(info, 'A B C')
+        self.assertEqual(expected, mock_support.call_args_list)
+        self.assertTrue(mock_pwf.called)
+        mock_exec.assert_called_once_with(*args)
+
+    @mock.patch.object(ipmi, '_is_option_supported')
+    @mock.patch.object(ipmi, '_make_password_file', autospec=True)
+    @mock.patch.object(utils, 'execute', autospec=True)
+    def test__exec_ipmitool_exception(self, mock_exec, mock_pwf,
+            mock_support, mock_sleep):
         pw_file_handle = tempfile.NamedTemporaryFile()
         pw_file = pw_file_handle.name
         file_handle = open(pw_file, "w")
@@ -189,16 +785,18 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
             'A', 'B', 'C',
             ]
 
+        mock_support.return_value = False
         mock_pwf.return_value = file_handle
         mock_exec.side_effect = processutils.ProcessExecutionError("x")
         self.assertRaises(processutils.ProcessExecutionError,
                           ipmi._exec_ipmitool,
                           self.info, 'A B C')
+        mock_support.assert_called_once_with('timing')
         mock_pwf.assert_called_once_with(self.info['password'])
-        mock_exec.assert_called_once_with(*args, attempts=3)
+        mock_exec.assert_called_once_with(*args)
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
-    def test__power_status_on(self, mock_exec):
+    def test__power_status_on(self, mock_exec, mock_sleep):
         mock_exec.return_value = ["Chassis Power is on\n", None]
 
         state = ipmi._power_status(self.info)
@@ -207,7 +805,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
         self.assertEqual(states.POWER_ON, state)
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
-    def test__power_status_off(self, mock_exec):
+    def test__power_status_off(self, mock_exec, mock_sleep):
         mock_exec.return_value = ["Chassis Power is off\n", None]
 
         state = ipmi._power_status(self.info)
@@ -216,7 +814,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
         self.assertEqual(states.POWER_OFF, state)
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
-    def test__power_status_error(self, mock_exec):
+    def test__power_status_error(self, mock_exec, mock_sleep):
         mock_exec.return_value = ["Chassis Power is badstate\n", None]
 
         state = ipmi._power_status(self.info)
@@ -225,7 +823,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
         self.assertEqual(states.ERROR, state)
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
-    def test__power_status_exception(self, mock_exec):
+    def test__power_status_exception(self, mock_exec, mock_sleep):
         mock_exec.side_effect = processutils.ProcessExecutionError("error")
         self.assertRaises(exception.IPMIFailure,
                           ipmi._power_status,
@@ -234,7 +832,7 @@ class IPMIToolPrivateMethodTestCase(base.TestCase):
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
     @mock.patch('eventlet.greenthread.sleep')
-    def test__power_on_max_retries(self, sleep_mock, mock_exec):
+    def test__power_on_max_retries(self, sleep_mock, mock_exec, mock_sleep):
         self.config(retry_timeout=2, group='ipmi')
 
         def side_effect(driver_info, command):
@@ -267,6 +865,16 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                                driver='fake_ipmitool',
                                                driver_info=INFO_DICT)
         self.info = ipmi._parse_driver_info(self.node)
+
+    def test_get_properties(self):
+        expected = ipmi.COMMON_PROPERTIES
+        self.assertEqual(expected, self.driver.power.get_properties())
+
+        expected = list(ipmi.COMMON_PROPERTIES) + list(ipmi.CONSOLE_PROPERTIES)
+        self.assertEqual(sorted(expected),
+                         sorted(self.driver.console.get_properties().keys()))
+        self.assertEqual(sorted(expected),
+                         sorted(self.driver.get_properties().keys()))
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
     def test_get_power_state(self, mock_exec):
@@ -352,21 +960,55 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                     "fake state")
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
-    def test_set_boot_device_ok(self, mock_exec):
+    def test__send_raw_bytes_ok(self, mock_exec):
         mock_exec.return_value = [None, None]
 
         with task_manager.acquire(self.context,
                                   self.node['uuid']) as task:
-            self.driver.vendor._set_boot_device(task, 'pxe')
+            self.driver.vendor._send_raw_bytes(task, '0x00 0x01')
 
-        mock_exec.assert_called_once_with(self.info, "chassis bootdev pxe")
+        mock_exec.assert_called_once_with(self.info, 'raw 0x00 0x01')
 
-    def test_set_boot_device_bad_device(self):
-        with task_manager.acquire(self.context, self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                    self.driver.vendor._set_boot_device,
-                    task,
-                    'fake-device')
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test__send_raw_bytes_fail(self, mock_exec):
+        mock_exec.side_effect = exception.PasswordFileFailedToCreate('error')
+
+        with task_manager.acquire(self.context,
+                                  self.node['uuid']) as task:
+            self.assertRaises(exception.IPMIFailure,
+                              self.driver.vendor._send_raw_bytes,
+                              task,
+                              '0x00 0x01')
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test__bmc_reset_ok(self, mock_exec):
+        mock_exec.return_value = [None, None]
+
+        with task_manager.acquire(self.context,
+                                  self.node['uuid']) as task:
+            self.driver.vendor._bmc_reset(task)
+
+        mock_exec.assert_called_once_with(self.info, 'bmc reset warm')
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test__bmc_reset_cold(self, mock_exec):
+        mock_exec.return_value = [None, None]
+
+        with task_manager.acquire(self.context,
+                                  self.node['uuid']) as task:
+            self.driver.vendor._bmc_reset(task, warm=False)
+
+        mock_exec.assert_called_once_with(self.info, 'bmc reset cold')
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test__bmc_reset_fail(self, mock_exec):
+        mock_exec.side_effect = processutils.ProcessExecutionError()
+
+        with task_manager.acquire(self.context,
+                                  self.node['uuid']) as task:
+            self.assertRaises(exception.IPMIFailure,
+                              self.driver.vendor._bmc_reset,
+                              task)
 
     @mock.patch.object(ipmi, '_power_off', autospec=False)
     @mock.patch.object(ipmi, '_power_on', autospec=False)
@@ -404,57 +1046,86 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
         self.assertEqual(manager.mock_calls, expected)
 
-    def test_vendor_passthru_validate__set_boot_device_good(self):
-        with task_manager.acquire(self.context, self.node['uuid']) as task:
-            self.driver.vendor.validate(task,
-                                        method='set_boot_device',
-                                        device='pxe')
-
-    def test_vendor_passthru_validate__set_boot_device_fail(self):
-        with task_manager.acquire(self.context, self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.driver.vendor.validate,
-                              task, method='set_boot_device',
-                              device='fake')
-
-    def test_vendor_passthru_validate__set_boot_device_fail_no_device(self):
-        with task_manager.acquire(self.context, self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.driver.vendor.validate,
-                              task, method='set_boot_device')
-
-    def test_vendor_passthru_validate_method_notmatch(self):
+    @mock.patch.object(ipmi, '_parse_driver_info')
+    def test_vendor_passthru_validate_method_notmatch(self, info_mock):
         with task_manager.acquire(self.context, self.node['uuid']) as task:
             self.assertRaises(exception.InvalidParameterValue,
                               self.driver.vendor.validate,
                               task, method='fake_method')
+            self.assertFalse(info_mock.called)
 
-    @mock.patch.object(ipmi.VendorPassthru, '_set_boot_device')
-    def test_vendor_passthru_call_set_boot_device(self, boot_mock):
+    @mock.patch.object(ipmi, '_parse_driver_info')
+    def test_vendor_passthru_validate__parse_driver_info_fail(self, info_mock):
+        info_mock.side_effect = exception.InvalidParameterValue("bad")
+        with task_manager.acquire(self.context, self.node['uuid']) as task:
+            self.assertRaises(exception.InvalidParameterValue,
+                              self.driver.vendor.validate,
+                              task, method='send_raw', raw_bytes='0x00 0x01')
+            info_mock.assert_called_once_with(task.node)
+
+    def test_vendor_passthru_validate__send_raw_bytes_good(self):
+        with task_manager.acquire(self.context, self.node['uuid']) as task:
+            self.driver.vendor.validate(task,
+                                        method='send_raw',
+                                        raw_bytes='0x00 0x01')
+
+    def test_vendor_passthru_validate__send_raw_bytes_fail(self):
+        with task_manager.acquire(self.context, self.node['uuid']) as task:
+            self.assertRaises(exception.InvalidParameterValue,
+                              self.driver.vendor.validate,
+                              task, method='send_raw')
+
+    @mock.patch.object(ipmi.VendorPassthru, '_send_raw_bytes')
+    def test_vendor_passthru_call_send_raw_bytes(self, raw_bytes_mock):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
             self.driver.vendor.vendor_passthru(task,
-                                               method='set_boot_device',
-                                               device='pxe')
-            boot_mock.assert_called_once_with(task, 'pxe', False)
+                                               method='send_raw',
+                                               raw_bytes='0x00 0x01')
+            raw_bytes_mock.assert_called_once_with(task, '0x00 0x01')
 
-    @mock.patch.object(ipmi, '_exec_ipmitool')
-    def test_validate_ok(self, exec_mock):
-        exec_mock.return_value = ('System GUID: fake', '')
-        with task_manager.acquire(self.context,
-                                  self.node['uuid']) as task:
-            task.driver.power.validate(task, task.node)
-            exec_mock.assert_called_once_with(mock.ANY, "mc guid")
+    def test_vendor_passthru_validate__bmc_reset_good(self):
+        with task_manager.acquire(self.context, self.node['uuid']) as task:
+            self.driver.vendor.validate(task,
+                                        method='bmc_reset')
 
-    @mock.patch.object(ipmi, '_exec_ipmitool')
-    def test_validate_fail(self, exec_mock):
-        exec_mock.side_effect = Exception
-        with task_manager.acquire(self.context,
-                                  self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              task.driver.power.validate, task,
-                              task.node)
-            exec_mock.assert_called_once_with(mock.ANY, "mc guid")
+    def test_vendor_passthru_validate__bmc_reset_warm_good(self):
+        with task_manager.acquire(self.context, self.node['uuid']) as task:
+            self.driver.vendor.validate(task,
+                                        method='bmc_reset',
+                                        warm=True)
+
+    def test_vendor_passthru_validate__bmc_reset_cold_good(self):
+        with task_manager.acquire(self.context, self.node['uuid']) as task:
+            self.driver.vendor.validate(task,
+                                        method='bmc_reset',
+                                        warm=False)
+
+    @mock.patch.object(ipmi.VendorPassthru, '_bmc_reset')
+    def test_vendor_passthru_call_bmc_reset(self, bmc_mock):
+        with task_manager.acquire(self.context, self.node['uuid'],
+                                  shared=False) as task:
+            self.driver.vendor.vendor_passthru(task,
+                                               method='bmc_reset')
+            bmc_mock.assert_called_once_with(task, warm=True)
+
+    @mock.patch.object(ipmi.VendorPassthru, '_bmc_reset')
+    def test_vendor_passthru_call_bmc_reset_warm(self, bmc_mock):
+        with task_manager.acquire(self.context, self.node['uuid'],
+                                  shared=False) as task:
+            self.driver.vendor.vendor_passthru(task,
+                                               method='bmc_reset',
+                                               warm=True)
+            bmc_mock.assert_called_once_with(task, warm=True)
+
+    @mock.patch.object(ipmi.VendorPassthru, '_bmc_reset')
+    def test_vendor_passthru_call_bmc_reset_cold(self, bmc_mock):
+        with task_manager.acquire(self.context, self.node['uuid'],
+                                  shared=False) as task:
+            self.driver.vendor.vendor_passthru(task,
+                                               method='bmc_reset',
+                                               warm=False)
+            bmc_mock.assert_called_once_with(task, warm=False)
 
     @mock.patch.object(console_utils, 'start_shellinabox_console',
                        autospec=True)
@@ -482,6 +1153,18 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                               self.driver.console.start_console,
                               task)
 
+    @mock.patch.object(console_utils, 'start_shellinabox_console',
+                       autospec=True)
+    def test_start_console_fail_nodir(self, mock_exec):
+        mock_exec.side_effect = exception.ConsoleError()
+
+        with task_manager.acquire(self.context,
+                                  self.node.uuid) as task:
+            self.assertRaises(exception.ConsoleError,
+                              self.driver.console.start_console,
+                              task)
+        mock_exec.assert_called_once_with(self.node.uuid, mock.ANY, mock.ANY)
+
     @mock.patch.object(console_utils, 'stop_shellinabox_console',
                        autospec=True)
     def test_stop_console(self, mock_exec):
@@ -493,6 +1176,19 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
         mock_exec.assert_called_once_with(self.info['uuid'])
         self.assertTrue(mock_exec.called)
+
+    @mock.patch.object(console_utils, 'stop_shellinabox_console',
+                       autospec=True)
+    def test_stop_console_fail(self, mock_stop):
+        mock_stop.side_effect = exception.ConsoleError()
+
+        with task_manager.acquire(self.context,
+                                  self.node.uuid) as task:
+            self.assertRaises(exception.ConsoleError,
+                              self.driver.console.stop_console,
+                              task)
+
+        mock_stop.assert_called_once_with(self.node.uuid)
 
     @mock.patch.object(console_utils, 'get_shellinabox_console_url',
                        utospec=True)
@@ -508,3 +1204,327 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
         self.assertEqual(expected, console_info)
         mock_exec.assert_called_once_with(self.info['port'])
         self.assertTrue(mock_exec.called)
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test_management_interface_set_boot_device_ok(self, mock_exec):
+        mock_exec.return_value = [None, None]
+
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.driver.management.set_boot_device(task, boot_devices.PXE)
+
+        mock_exec.assert_called_once_with(self.info, "chassis bootdev pxe")
+
+    def test_management_interface_set_boot_device_bad_device(self):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(exception.InvalidParameterValue,
+                    self.driver.management.set_boot_device,
+                    task, 'fake-device')
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test_management_interface_set_boot_device_exec_failed(self, mock_exec):
+        mock_exec.side_effect = processutils.ProcessExecutionError()
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(exception.IPMIFailure,
+                    self.driver.management.set_boot_device,
+                    task, boot_devices.PXE)
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test_management_interface_set_boot_device_unknown_exception(self,
+            mock_exec):
+
+        class FakeException(Exception):
+            pass
+
+        mock_exec.side_effect = FakeException('boom')
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(FakeException,
+                    self.driver.management.set_boot_device,
+                    task, boot_devices.PXE)
+
+    def test_management_interface_get_supported_boot_devices(self):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            expected = [boot_devices.PXE, boot_devices.DISK,
+                        boot_devices.CDROM, boot_devices.BIOS,
+                        boot_devices.SAFE]
+            self.assertEqual(sorted(expected), sorted(task.driver.management.
+                             get_supported_boot_devices()))
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test_management_interface_get_boot_device(self, mock_exec):
+        # output, expected boot device
+        bootdevs = [('Boot Device Selector : '
+                     'Force Boot from default Hard-Drive\n',
+                     boot_devices.DISK),
+                    ('Boot Device Selector : '
+                     'Force Boot from default Hard-Drive, request Safe-Mode\n',
+                     boot_devices.SAFE),
+                    ('Boot Device Selector : '
+                     'Force Boot into BIOS Setup\n',
+                     boot_devices.BIOS),
+                    ('Boot Device Selector : '
+                     'Force PXE\n',
+                     boot_devices.PXE),
+                    ('Boot Device Selector : '
+                     'Force Boot from CD/DVD\n',
+                     boot_devices.CDROM)]
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            for out, expected_device in bootdevs:
+                mock_exec.return_value = (out, '')
+                expected_response = {'boot_device': expected_device,
+                                     'persistent': False}
+                self.assertEqual(expected_response,
+                                 task.driver.management.get_boot_device(task))
+                mock_exec.assert_called_with(mock.ANY,
+                                             "chassis bootparam get 5")
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test_management_interface_get_boot_device_unknown_dev(self, mock_exec):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            mock_exec.return_value = ('Boot Device Selector : Fake\n', '')
+            response = task.driver.management.get_boot_device(task)
+            self.assertIsNone(response['boot_device'])
+            mock_exec.assert_called_with(mock.ANY, "chassis bootparam get 5")
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test_management_interface_get_boot_device_fail(self, mock_exec):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            mock_exec.side_effect = processutils.ProcessExecutionError()
+            self.assertRaises(exception.IPMIFailure,
+                              task.driver.management.get_boot_device, task)
+            mock_exec.assert_called_with(mock.ANY, "chassis bootparam get 5")
+
+    @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
+    def test_management_interface_get_boot_device_persistent(self, mock_exec):
+        outputs = [('Options apply to only next boot\n'
+                    'Boot Device Selector : Force PXE\n',
+                    False),
+                    ('Options apply to all future boots\n'
+                    'Boot Device Selector : Force PXE\n',
+                    True)]
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            for out, expected_persistent in outputs:
+                mock_exec.return_value = (out, '')
+                expected_response = {'boot_device': boot_devices.PXE,
+                                     'persistent': expected_persistent}
+                self.assertEqual(expected_response,
+                                 task.driver.management.get_boot_device(task))
+                mock_exec.assert_called_with(mock.ANY,
+                                             "chassis bootparam get 5")
+
+    def test_management_interface_validate_good(self):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.driver.management.validate(task)
+
+    def test_management_interface_validate_fail(self):
+        # Missing IPMI driver_info information
+        node = obj_utils.create_test_node(self.context, id=2,
+                                          uuid=utils.generate_uuid(),
+                                          driver='fake_ipmitool')
+        with task_manager.acquire(self.context, node.uuid) as task:
+            self.assertRaises(exception.MissingParameterValue,
+                              task.driver.management.validate, task)
+
+    def test__parse_ipmi_sensor_data_ok(self):
+        fake_sensors_data = """
+                            Sensor ID              : Temp (0x1)
+                             Entity ID             : 3.1 (Processor)
+                             Sensor Type (Analog)  : Temperature
+                             Sensor Reading        : -58 (+/- 1) degrees C
+                             Status                : ok
+                             Nominal Reading       : 50.000
+                             Normal Minimum        : 11.000
+                             Normal Maximum        : 69.000
+                             Upper critical        : 90.000
+                             Upper non-critical    : 85.000
+                             Positive Hysteresis   : 1.000
+                             Negative Hysteresis   : 1.000
+
+                            Sensor ID              : Temp (0x2)
+                             Entity ID             : 3.2 (Processor)
+                             Sensor Type (Analog)  : Temperature
+                             Sensor Reading        : 50 (+/- 1) degrees C
+                             Status                : ok
+                             Nominal Reading       : 50.000
+                             Normal Minimum        : 11.000
+                             Normal Maximum        : 69.000
+                             Upper critical        : 90.000
+                             Upper non-critical    : 85.000
+                             Positive Hysteresis   : 1.000
+                             Negative Hysteresis   : 1.000
+
+                            Sensor ID              : FAN MOD 1A RPM (0x30)
+                             Entity ID             : 7.1 (System Board)
+                             Sensor Type (Analog)  : Fan
+                             Sensor Reading        : 8400 (+/- 75) RPM
+                             Status                : ok
+                             Nominal Reading       : 5325.000
+                             Normal Minimum        : 10425.000
+                             Normal Maximum        : 14775.000
+                             Lower critical        : 4275.000
+                             Positive Hysteresis   : 375.000
+                             Negative Hysteresis   : 375.000
+
+                            Sensor ID              : FAN MOD 1B RPM (0x31)
+                             Entity ID             : 7.1 (System Board)
+                             Sensor Type (Analog)  : Fan
+                             Sensor Reading        : 8550 (+/- 75) RPM
+                             Status                : ok
+                             Nominal Reading       : 7800.000
+                             Normal Minimum        : 10425.000
+                             Normal Maximum        : 14775.000
+                             Lower critical        : 4275.000
+                             Positive Hysteresis   : 375.000
+                             Negative Hysteresis   : 375.000
+                             """
+        expected_return = {
+                             'Fan': {
+                                 'FAN MOD 1A RPM (0x30)': {
+                                     'Status': 'ok',
+                                     'Sensor Reading': '8400 (+/- 75) RPM',
+                                     'Entity ID': '7.1 (System Board)',
+                                     'Normal Minimum': '10425.000',
+                                     'Positive Hysteresis': '375.000',
+                                     'Normal Maximum': '14775.000',
+                                     'Sensor Type (Analog)': 'Fan',
+                                     'Lower critical': '4275.000',
+                                     'Negative Hysteresis': '375.000',
+                                     'Sensor ID': 'FAN MOD 1A RPM (0x30)',
+                                     'Nominal Reading': '5325.000'
+                                  },
+                                  'FAN MOD 1B RPM (0x31)': {
+                                     'Status': 'ok',
+                                     'Sensor Reading': '8550 (+/- 75) RPM',
+                                     'Entity ID': '7.1 (System Board)',
+                                     'Normal Minimum': '10425.000',
+                                     'Positive Hysteresis': '375.000',
+                                     'Normal Maximum': '14775.000',
+                                     'Sensor Type (Analog)': 'Fan',
+                                     'Lower critical': '4275.000',
+                                     'Negative Hysteresis': '375.000',
+                                     'Sensor ID': 'FAN MOD 1B RPM (0x31)',
+                                     'Nominal Reading': '7800.000'
+                                  }
+                               },
+                               'Temperature': {
+                                  'Temp (0x1)': {
+                                     'Status': 'ok',
+                                     'Sensor Reading': '-58 (+/- 1) degrees C',
+                                     'Entity ID': '3.1 (Processor)',
+                                     'Normal Minimum': '11.000',
+                                     'Positive Hysteresis': '1.000',
+                                     'Upper non-critical': '85.000',
+                                     'Normal Maximum': '69.000',
+                                     'Sensor Type (Analog)': 'Temperature',
+                                     'Negative Hysteresis': '1.000',
+                                     'Upper critical': '90.000',
+                                     'Sensor ID': 'Temp (0x1)',
+                                     'Nominal Reading': '50.000'
+                                  },
+                                  'Temp (0x2)': {
+                                     'Status': 'ok',
+                                     'Sensor Reading': '50 (+/- 1) degrees C',
+                                     'Entity ID': '3.2 (Processor)',
+                                     'Normal Minimum': '11.000',
+                                     'Positive Hysteresis': '1.000',
+                                     'Upper non-critical': '85.000',
+                                     'Normal Maximum': '69.000',
+                                     'Sensor Type (Analog)': 'Temperature',
+                                     'Negative Hysteresis': '1.000',
+                                     'Upper critical': '90.000',
+                                     'Sensor ID': 'Temp (0x2)',
+                                     'Nominal Reading': '50.000'
+                                  }
+                               }
+                            }
+        ret = ipmi._parse_ipmi_sensors_data(self.node, fake_sensors_data)
+
+        self.assertEqual(expected_return, ret)
+
+    def test__parse_ipmi_sensor_data_missing_sensor_reading(self):
+        fake_sensors_data = """
+                            Sensor ID              : Temp (0x1)
+                             Entity ID             : 3.1 (Processor)
+                             Sensor Type (Analog)  : Temperature
+                             Status                : ok
+                             Nominal Reading       : 50.000
+                             Normal Minimum        : 11.000
+                             Normal Maximum        : 69.000
+                             Upper critical        : 90.000
+                             Upper non-critical    : 85.000
+                             Positive Hysteresis   : 1.000
+                             Negative Hysteresis   : 1.000
+
+                            Sensor ID              : Temp (0x2)
+                             Entity ID             : 3.2 (Processor)
+                             Sensor Type (Analog)  : Temperature
+                             Sensor Reading        : 50 (+/- 1) degrees C
+                             Status                : ok
+                             Nominal Reading       : 50.000
+                             Normal Minimum        : 11.000
+                             Normal Maximum        : 69.000
+                             Upper critical        : 90.000
+                             Upper non-critical    : 85.000
+                             Positive Hysteresis   : 1.000
+                             Negative Hysteresis   : 1.000
+
+                            Sensor ID              : FAN MOD 1A RPM (0x30)
+                             Entity ID             : 7.1 (System Board)
+                             Sensor Type (Analog)  : Fan
+                             Sensor Reading        : 8400 (+/- 75) RPM
+                             Status                : ok
+                             Nominal Reading       : 5325.000
+                             Normal Minimum        : 10425.000
+                             Normal Maximum        : 14775.000
+                             Lower critical        : 4275.000
+                             Positive Hysteresis   : 375.000
+                             Negative Hysteresis   : 375.000
+                             """
+        expected_return = {
+                             'Fan': {
+                                 'FAN MOD 1A RPM (0x30)': {
+                                     'Status': 'ok',
+                                     'Sensor Reading': '8400 (+/- 75) RPM',
+                                     'Entity ID': '7.1 (System Board)',
+                                     'Normal Minimum': '10425.000',
+                                     'Positive Hysteresis': '375.000',
+                                     'Normal Maximum': '14775.000',
+                                     'Sensor Type (Analog)': 'Fan',
+                                     'Lower critical': '4275.000',
+                                     'Negative Hysteresis': '375.000',
+                                     'Sensor ID': 'FAN MOD 1A RPM (0x30)',
+                                     'Nominal Reading': '5325.000'
+                                  }
+                               },
+                               'Temperature': {
+                                  'Temp (0x2)': {
+                                     'Status': 'ok',
+                                     'Sensor Reading': '50 (+/- 1) degrees C',
+                                     'Entity ID': '3.2 (Processor)',
+                                     'Normal Minimum': '11.000',
+                                     'Positive Hysteresis': '1.000',
+                                     'Upper non-critical': '85.000',
+                                     'Normal Maximum': '69.000',
+                                     'Sensor Type (Analog)': 'Temperature',
+                                     'Negative Hysteresis': '1.000',
+                                     'Upper critical': '90.000',
+                                     'Sensor ID': 'Temp (0x2)',
+                                     'Nominal Reading': '50.000'
+                                  }
+                               }
+                            }
+        ret = ipmi._parse_ipmi_sensors_data(self.node, fake_sensors_data)
+
+        self.assertEqual(expected_return, ret)
+
+    def test__parse_ipmi_sensor_data_failed(self):
+        fake_sensors_data = "abcdef"
+        self.assertRaises(exception.FailedToParseSensorData,
+                          ipmi._parse_ipmi_sensors_data,
+                          self.node,
+                          fake_sensors_data)
+
+        fake_sensors_data = "abc:def:ghi"
+        self.assertRaises(exception.FailedToParseSensorData,
+                          ipmi._parse_ipmi_sensors_data,
+                          self.node,
+                          fake_sensors_data)

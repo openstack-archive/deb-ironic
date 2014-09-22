@@ -63,13 +63,14 @@ def get_test_flavor(**kw):
                                        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
                            'baremetal:deploy_ramdisk_id':
                                        'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'}
-    return {'extra_specs': kw.get('extra_specs', default_extra_specs),
+    return {'name': kw.get('name', 'fake.flavor'),
+            'extra_specs': kw.get('extra_specs', default_extra_specs),
             'swap': kw.get('swap', 0),
             'ephemeral_gb': kw.get('ephemeral_gb', 0)}
 
 
 def get_test_image_meta(**kw):
-    return {'id': kw.get('id','cccccccc-cccc-cccc-cccc-cccccccccccc')}
+    return {'id': kw.get('id', 'cccccccc-cccc-cccc-cccc-cccccccccccc')}
 
 
 class FakePortClient(object):
@@ -83,7 +84,7 @@ class FakePortClient(object):
 
 class FakeNodeClient(object):
 
-    def list(self):
+    def list(self, detail=False):
         return []
 
     def get(self, node_uuid):

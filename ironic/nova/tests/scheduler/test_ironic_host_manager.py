@@ -17,13 +17,16 @@
 Tests For IronicHostManager
 """
 
-from ironic.nova.scheduler import ironic_host_manager
-from ironic.nova.tests.scheduler import ironic_fakes
+import mock
 
 from nova import db
 from nova import exception
+from nova.openstack.common import jsonutils
 from nova.scheduler import filters
+from nova.scheduler import host_manager
+from ironic.nova.scheduler import ironic_host_manager
 from nova import test
+from ironic.nova.tests.scheduler import ironic_fakes
 
 
 class FakeFilterClass1(filters.BaseHostFilter):
@@ -42,10 +45,6 @@ class IronicHostManagerTestCase(test.NoDBTestCase):
     def setUp(self):
         super(IronicHostManagerTestCase, self).setUp()
         self.host_manager = ironic_host_manager.IronicHostManager()
-        self.fake_hosts = [ironic_host_manager.IronicNodeState(
-                'fake_host%s' % x, 'fake-node') for x in range(1, 5)]
-        self.fake_hosts += [ironic_host_manager.IronicNodeState(
-                'fake_multihost', 'fake-node%s' % x) for x in range(1, 5)]
 
     def test_get_all_host_states(self):
         # Ensure .service is set and we have the values we expect to.
@@ -55,12 +54,10 @@ class IronicHostManagerTestCase(test.NoDBTestCase):
         db.compute_node_get_all(context).AndReturn(ironic_fakes.COMPUTE_NODES)
         self.mox.ReplayAll()
 
-        self.host_manager.service_states = ironic_fakes.IRONIC_SERVICE_STATE
         self.host_manager.get_all_host_states(context)
         host_states_map = self.host_manager.host_state_map
 
         self.assertEqual(len(host_states_map), 4)
-        # Check that .service is set properly
         for i in range(4):
             compute_node = ironic_fakes.COMPUTE_NODES[i]
             host = compute_node['service']['host']
@@ -68,23 +65,12 @@ class IronicHostManagerTestCase(test.NoDBTestCase):
             state_key = (host, node)
             self.assertEqual(compute_node['service'],
                              host_states_map[state_key].service)
-        # check we have the values we think we should.
-        self.assertEqual(1024,
-                         host_states_map[('host1', 'node1uuid')].free_ram_mb)
-        self.assertEqual(10240,
-                         host_states_map[('host1', 'node1uuid')].free_disk_mb)
-        self.assertEqual(2048,
-                         host_states_map[('host2', 'node2uuid')].free_ram_mb)
-        self.assertEqual(20480,
-                         host_states_map[('host2', 'node2uuid')].free_disk_mb)
-        self.assertEqual(3072,
-                         host_states_map[('host3', 'node3uuid')].free_ram_mb)
-        self.assertEqual(30720,
-                         host_states_map[('host3', 'node3uuid')].free_disk_mb)
-        self.assertEqual(4096,
-                         host_states_map[('host4', 'node4uuid')].free_ram_mb)
-        self.assertEqual(40960,
-                         host_states_map[('host4', 'node4uuid')].free_disk_mb)
+            self.assertEqual(jsonutils.loads(compute_node['stats']),
+                             host_states_map[state_key].stats)
+            self.assertEqual(compute_node['free_ram_mb'],
+                             host_states_map[state_key].free_ram_mb)
+            self.assertEqual(compute_node['free_disk_gb'] * 1024,
+                             host_states_map[state_key].free_disk_mb)
 
 
 class IronicHostManagerChangedNodesTestCase(test.NoDBTestCase):
@@ -93,33 +79,32 @@ class IronicHostManagerChangedNodesTestCase(test.NoDBTestCase):
     def setUp(self):
         super(IronicHostManagerChangedNodesTestCase, self).setUp()
         self.host_manager = ironic_host_manager.IronicHostManager()
-        self.fake_hosts = [
-              ironic_host_manager.IronicNodeState('host1', 'node1uuid'),
-              ironic_host_manager.IronicNodeState('host2', 'node2uuid'),
-              ironic_host_manager.IronicNodeState('host3', 'node3uuid'),
-              ironic_host_manager.IronicNodeState('host4', 'node4uuid')
-            ]
+        ironic_driver = "nova.virt.ironic.driver.IronicDriver"
+        supported_instances = '[["i386", "baremetal", "baremetal"]]'
         self.compute_node = dict(id=1, local_gb=10, memory_mb=1024, vcpus=1,
                             vcpus_used=0, local_gb_used=0, memory_mb_used=0,
                             updated_at=None, cpu_info='baremetal cpu',
-                            stats=dict(ironic_driver=
-                                       "nova.virt.ironic.driver.IronicDriver",
-                                       cpu_arch='i386'),
-                            supported_instances=
-                                        '[["i386", "baremetal", "baremetal"]]',
+                            stats=jsonutils.dumps(dict(
+                                        ironic_driver=ironic_driver,
+                                        cpu_arch='i386')),
+                            supported_instances=supported_instances,
                             free_disk_gb=10, free_ram_mb=1024)
 
-    def test_get_all_host_states(self):
-        context = 'fake_context'
+    @mock.patch.object(ironic_host_manager.IronicNodeState, '__init__')
+    def test_create_ironic_node_state(self, init_mock):
+        init_mock.return_value = None
+        compute = {'cpu_info': 'baremetal cpu'}
+        host_state = self.host_manager.host_state_cls('fake-host', 'fake-node',
+                                                      compute=compute)
+        self.assertIs(ironic_host_manager.IronicNodeState, type(host_state))
 
-        self.mox.StubOutWithMock(db, 'compute_node_get_all')
-        db.compute_node_get_all(context).AndReturn(ironic_fakes.COMPUTE_NODES)
-        self.mox.ReplayAll()
-
-        self.host_manager.service_states = ironic_fakes.IRONIC_SERVICE_STATE
-        self.host_manager.get_all_host_states(context)
-        host_states_map = self.host_manager.host_state_map
-        self.assertEqual(4, len(host_states_map))
+    @mock.patch.object(host_manager.HostState, '__init__')
+    def test_create_non_ironic_host_state(self, init_mock):
+        init_mock.return_value = None
+        compute = {'cpu_info': 'other cpu'}
+        host_state = self.host_manager.host_state_cls('fake-host', 'fake-node',
+                                                      compute=compute)
+        self.assertIs(host_manager.HostState, type(host_state))
 
     def test_get_all_host_states_after_delete_one(self):
         context = 'fake_context'
@@ -133,7 +118,6 @@ class IronicHostManagerChangedNodesTestCase(test.NoDBTestCase):
         db.compute_node_get_all(context).AndReturn(running_nodes)
         self.mox.ReplayAll()
 
-        self.host_manager.service_states = ironic_fakes.IRONIC_SERVICE_STATE
         self.host_manager.get_all_host_states(context)
         self.host_manager.get_all_host_states(context)
         host_states_map = self.host_manager.host_state_map
@@ -149,7 +133,6 @@ class IronicHostManagerChangedNodesTestCase(test.NoDBTestCase):
         db.compute_node_get_all(context).AndReturn([])
         self.mox.ReplayAll()
 
-        self.host_manager.service_states = ironic_fakes.IRONIC_SERVICE_STATE
         self.host_manager.get_all_host_states(context)
         self.host_manager.get_all_host_states(context)
         host_states_map = self.host_manager.host_state_map
@@ -164,6 +147,8 @@ class IronicHostManagerChangedNodesTestCase(test.NoDBTestCase):
         self.assertEqual(10240, host.free_disk_mb)
         self.assertEqual(1, host.vcpus_total)
         self.assertEqual(0, host.vcpus_used)
+        self.assertEqual(jsonutils.loads(self.compute_node['stats']),
+                         host.stats)
 
     def test_consume_identical_instance_from_compute(self):
         host = ironic_host_manager.IronicNodeState("fakehost", "fakenode")

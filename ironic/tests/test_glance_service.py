@@ -18,13 +18,17 @@ import datetime
 import filecmp
 import os
 import tempfile
+
+import mock
 import testtools
+
 
 from ironic.common import exception
 from ironic.common.glance_service import base_image_service
 from ironic.common.glance_service import service_utils
 from ironic.common import image_service as service
 from ironic.openstack.common import context
+from ironic.openstack.common import jsonutils
 from ironic.tests import base
 from ironic.tests import matchers
 from ironic.tests import stubs
@@ -63,19 +67,26 @@ class TestGlanceSerializer(testtools.TestCase):
             'name': 'image1',
             'is_public': True,
             'foo': 'bar',
-            'properties': {
-                'prop1': 'propvalue1',
-                'mappings':
-                '[{"device": "bbb", "virtual": "aaa"}, '
-                '{"device": "yyy", "virtual": "xxx"}]',
-                'block_device_mapping':
-                '[{"virtual_device": "fake", "device_name": "/dev/fake"}, '
-                '{"virtual_device": "ephemeral0", '
-                '"device_name": "/dev/fake0"}]'}}
+            'properties': {'prop1': 'propvalue1'}
+        }
         converted = service_utils._convert(metadata, 'to')
-        self.assertEqual(converted_expected, converted)
         self.assertEqual(metadata,
                          service_utils._convert(converted, 'from'))
+        # Fields that rely on dict ordering can't be compared as text
+        mappings = jsonutils.loads(converted['properties']
+                                   .pop('mappings'))
+        self.assertEqual([{"device": "bbb", "virtual": "aaa"},
+                          {"device": "yyy", "virtual": "xxx"}],
+                         mappings)
+        bd_mapping = jsonutils.loads(converted['properties']
+                                     .pop('block_device_mapping'))
+        self.assertEqual([{"virtual_device": "fake",
+                           "device_name": "/dev/fake"},
+                          {"virtual_device": "ephemeral0",
+                           "device_name": "/dev/fake0"}],
+                         bd_mapping)
+        # Compare the remaining
+        self.assertEqual(converted_expected, converted)
 
 
 class TestGlanceImageService(base.TestCase):
@@ -116,6 +127,18 @@ class TestGlanceImageService(base.TestCase):
                    'is_public': None}
         fixture.update(kwargs)
         return fixture
+
+    @property
+    def endpoint(self):
+        # For glanceclient versions >= 0.13, the endpoint is located
+        # under http_client (blueprint common-client-library-2)
+        # I5addc38eb2e2dd0be91b566fda7c0d81787ffa75
+        # Test both options to keep backward compatibility
+        if getattr(self.service.client, 'endpoint', None):
+            endpoint = self.service.client.endpoint
+        else:
+            endpoint = self.service.client.http_client.endpoint
+        return endpoint
 
     def _make_datetime_fixture(self):
         return self._make_fixture(created_at=self.NOW_GLANCE_FORMAT,
@@ -579,7 +602,7 @@ class TestGlanceImageService(base.TestCase):
 
     def test_check_image_service__no_client_set_http(self):
         def func(service, *args, **kwargs):
-            return (service.client.endpoint, args, kwargs)
+            return (self.endpoint, args, kwargs)
 
         self.service.client = None
         params = {'image_href': 'http://123.123.123.123:9292/image_uuid'}
@@ -590,7 +613,7 @@ class TestGlanceImageService(base.TestCase):
 
     def test_get_image_service__no_client_set_https(self):
         def func(service, *args, **kwargs):
-            return (service.client.endpoint, args, kwargs)
+            return (self.endpoint, args, kwargs)
 
         self.service.client = None
         params = {'image_href': 'https://123.123.123.123:9292/image_uuid'}
@@ -611,6 +634,82 @@ def _create_failing_glance_client(info):
             return {}
 
     return MyGlanceStubClient()
+
+
+class TestGlanceSwiftTempURL(base.TestCase):
+    def setUp(self):
+        super(TestGlanceSwiftTempURL, self).setUp()
+        client = stubs.StubGlanceClient()
+        self.context = context.RequestContext()
+        self.service = service.Service(client, 2, self.context)
+        self.config(swift_temp_url_key='correcthorsebatterystaple',
+                    group='glance')
+        self.config(swift_endpoint_url='https://swift.example.com',
+                    group='glance')
+        self.config(swift_account='AUTH_a422b2-91f3-2f46-74b7-d7c9e8958f5d30',
+                    group='glance')
+        self.config(swift_api_version='v1',
+                    group='glance')
+        self.config(swift_container='glance',
+                    group='glance')
+        self.config(swift_temp_url_duration=1200,
+                    group='glance')
+        self.config()
+        self.fake_image = {
+            'id': '757274c4-2856-4bd2-bb20-9a4a231e187b'
+        }
+
+    @mock.patch('swiftclient.utils.generate_temp_url')
+    def test_swift_temp_url(self, tempurl_mock):
+
+        path = ('/v1/AUTH_a422b2-91f3-2f46-74b7-d7c9e8958f5d30'
+                '/glance'
+                '/757274c4-2856-4bd2-bb20-9a4a231e187b')
+        tempurl_mock.return_value = (path +
+            '?temp_url_sig=hmacsig'
+            '&temp_url_expires=1400001200')
+
+        self.service._validate_temp_url_config = mock.Mock()
+
+        temp_url = self.service.swift_temp_url(image_info=self.fake_image)
+
+        self.assertEqual(CONF.glance.swift_endpoint_url
+                         + tempurl_mock.return_value,
+                         temp_url)
+        tempurl_mock.assert_called_with(
+            path=path,
+            seconds=CONF.glance.swift_temp_url_duration,
+            key=CONF.glance.swift_temp_url_key,
+            method='GET')
+
+    def test_swift_temp_url_url_bad_no_info(self):
+        self.assertRaises(exception.ImageUnacceptable,
+                          self.service.swift_temp_url,
+                          image_info={})
+
+    def test__validate_temp_url_config(self):
+        self.service._validate_temp_url_config()
+
+    def test__validate_temp_url_key_exception(self):
+        self.config(swift_temp_url_key=None, group='glance')
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.service._validate_temp_url_config)
+
+    def test__validate_temp_url_endpoint_config_exception(self):
+        self.config(swift_endpoint_url=None, group='glance')
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.service._validate_temp_url_config)
+
+    def test__validate_temp_url_account_exception(self):
+        self.config(swift_account=None, group='glance')
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.service._validate_temp_url_config)
+
+    def test__validate_temp_url_endpoint_negative_duration(self):
+        self.config(swift_temp_url_duration=-1,
+                    group='glance')
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.service._validate_temp_url_config)
 
 
 class TestGlanceUrl(base.TestCase):

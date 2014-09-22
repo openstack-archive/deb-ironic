@@ -12,10 +12,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.utils import excutils
+
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic.common import states
 from ironic.conductor import task_manager
-from ironic.openstack.common import excutils
+from ironic.openstack.common.gettextutils import _LI
 from ironic.openstack.common import log
 
 LOG = log.getLogger(__name__)
@@ -29,17 +32,15 @@ def node_set_boot_device(task, device, persistent=False):
     :param device: Boot device. Values are vendor-specific.
     :param persistent: Whether to set next-boot, or make the change
         permanent. Default: False.
+    :raises: InvalidParameterValue if the validation of the
+        ManagementInterface fails.
 
     """
-    try:
-        task.driver.vendor.vendor_passthru(task,
-                                           device=device,
-                                           persistent=persistent,
-                                           method='set_boot_device')
-    except exception.UnsupportedDriverExtension:
-        # NOTE(deva): Some drivers, like SSH, do not support set_boot_device.
-        #             This is not a fatal exception.
-        pass
+    if getattr(task.driver, 'management', None):
+        task.driver.management.validate(task)
+        task.driver.management.set_boot_device(task,
+                                               device=device,
+                                               persistent=persistent)
 
 
 @task_manager.require_exclusive_lock
@@ -112,6 +113,9 @@ def node_power_action(task, state):
     else:
         # success!
         node['power_state'] = new_state
+        LOG.info(_LI('Succesfully set node %(node)s power state to '
+                     '%(state)s.'),
+                 {'node': node.uuid, 'state': new_state})
     finally:
         node['target_power_state'] = states.NOSTATE
         node.save(context)

@@ -20,34 +20,27 @@ import collections
 import datetime
 
 from oslo.config import cfg
+from oslo.db import exception as db_exc
+from oslo.db.sqlalchemy import session as db_session
+from oslo.db.sqlalchemy import utils as db_utils
+from oslo.utils import timeutils
 from sqlalchemy.orm.exc import NoResultFound
 
 from ironic.common import exception
-from ironic.common import paths
+from ironic.common.i18n import _
 from ironic.common import states
 from ironic.common import utils
 from ironic.db import api
 from ironic.db.sqlalchemy import models
 from ironic import objects
-from ironic.openstack.common.db import exception as db_exc
-from ironic.openstack.common.db import options as db_options
-from ironic.openstack.common.db.sqlalchemy import session as db_session
-from ironic.openstack.common.db.sqlalchemy import utils as db_utils
 from ironic.openstack.common import log
-from ironic.openstack.common import timeutils
 
 CONF = cfg.CONF
-CONF.import_opt('connection',
-                'ironic.openstack.common.db.options',
-                group='database')
 CONF.import_opt('heartbeat_timeout',
                 'ironic.conductor.manager',
                 group='conductor')
 
 LOG = log.getLogger(__name__)
-
-_DEFAULT_SQL_CONNECTION = 'sqlite:///' + paths.state_path_def('ironic.sqlite')
-db_options.set_defaults(_DEFAULT_SQL_CONNECTION, 'ironic.sqlite')
 
 
 _FACADE = None
@@ -56,10 +49,7 @@ _FACADE = None
 def _create_facade_lazily():
     global _FACADE
     if _FACADE is None:
-        _FACADE = db_session.EngineFacade(
-            CONF.database.connection,
-            **dict(CONF.database.iteritems())
-        )
+        _FACADE = db_session.EngineFacade.from_config(CONF)
     return _FACADE
 
 
@@ -175,8 +165,9 @@ class Connection(api.Connection):
             filters = []
 
         if 'chassis_uuid' in filters:
-            # get_chassis() to raise an exception if the chassis is not found
-            chassis_obj = self.get_chassis(filters['chassis_uuid'])
+            # get_chassis_by_uuid() to raise an exception if the chassis
+            # is not found
+            chassis_obj = self.get_chassis_by_uuid(filters['chassis_uuid'])
             query = query.filter_by(chassis_id=chassis_obj.id)
         if 'associated' in filters:
             if filters['associated']:
@@ -215,7 +206,6 @@ class Connection(api.Connection):
         return _paginate_query(models.Node, limit, marker,
                                sort_key, sort_dir, query)
 
-    @objects.objectify(objects.Node)
     def get_node_list(self, filters=None, limit=None, marker=None,
                       sort_key=None, sort_dir=None):
         query = model_query(models.Node)
@@ -273,7 +263,14 @@ class Connection(api.Connection):
 
         node = models.Node()
         node.update(values)
-        node.save()
+        try:
+            node.save()
+        except db_exc.DBDuplicateEntry as exc:
+            if 'instance_uuid' in exc.columns:
+                raise exception.InstanceAssociated(
+                    instance_uuid=values['instance_uuid'],
+                    node=values['uuid'])
+            raise exception.NodeAlreadyExists(uuid=values['uuid'])
         return node
 
     def get_node_by_id(self, node_id):
@@ -290,7 +287,6 @@ class Connection(api.Connection):
         except NoResultFound:
             raise exception.NodeNotFound(node=node_uuid)
 
-    @objects.objectify(objects.Node)
     def get_node_by_instance(self, instance):
         if not utils.is_uuid_like(instance):
             raise exception.InvalidUUID(uuid=instance)
@@ -327,8 +323,20 @@ class Connection(api.Connection):
 
             query.delete()
 
-    @objects.objectify(objects.Node)
     def update_node(self, node_id, values):
+        # NOTE(dtantsur): this can lead to very strange errors
+        if 'uuid' in values:
+            msg = _("Cannot overwrite UUID for an existing Node.")
+            raise exception.InvalidParameterValue(err=msg)
+
+        try:
+            return self._do_update_node(node_id, values)
+        except db_exc.DBDuplicateEntry:
+            raise exception.InstanceAssociated(
+                instance_uuid=values['instance_uuid'],
+                node=node_id)
+
+    def _do_update_node(self, node_id, values):
         session = get_session()
         with session.begin():
             query = model_query(models.Node, session=session)
@@ -349,23 +357,27 @@ class Connection(api.Connection):
             ref.update(values)
         return ref
 
-    @objects.objectify(objects.Port)
-    def get_port(self, port_id):
-        query = model_query(models.Port)
-        query = add_port_filter(query, port_id)
-
+    def get_port_by_id(self, port_id):
+        query = model_query(models.Port).filter_by(id=port_id)
         try:
-            result = query.one()
+            return query.one()
         except NoResultFound:
             raise exception.PortNotFound(port=port_id)
 
-        return result
+    def get_port_by_uuid(self, port_uuid):
+        query = model_query(models.Port).filter_by(uuid=port_uuid)
+        try:
+            return query.one()
+        except NoResultFound:
+            raise exception.PortNotFound(port=port_uuid)
 
-    @objects.objectify(objects.Port)
-    def get_port_by_vif(self, vif):
-        pass
+    def get_port_by_address(self, address):
+        query = model_query(models.Port).filter_by(address=address)
+        try:
+            return query.one()
+        except NoResultFound:
+            raise exception.PortNotFound(port=address)
 
-    @objects.objectify(objects.Port)
     def get_port_list(self, limit=None, marker=None,
                       sort_key=None, sort_dir=None):
         return _paginate_query(models.Port, limit, marker,
@@ -379,7 +391,6 @@ class Connection(api.Connection):
         return _paginate_query(models.Port, limit, marker,
                                sort_key, sort_dir, query)
 
-    @objects.objectify(objects.Port)
     def create_port(self, values):
         if not values.get('uuid'):
             values['uuid'] = utils.generate_uuid()
@@ -387,12 +398,18 @@ class Connection(api.Connection):
         port.update(values)
         try:
             port.save()
-        except db_exc.DBDuplicateEntry:
-            raise exception.MACAlreadyExists(mac=values['address'])
+        except db_exc.DBDuplicateEntry as exc:
+            if 'address' in exc.columns:
+                raise exception.MACAlreadyExists(mac=values['address'])
+            raise exception.PortAlreadyExists(uuid=values['uuid'])
         return port
 
-    @objects.objectify(objects.Port)
     def update_port(self, port_id, values):
+        # NOTE(dtantsur): this can lead to very strange errors
+        if 'uuid' in values:
+            msg = _("Cannot overwrite UUID for an existing Port.")
+            raise exception.InvalidParameterValue(err=msg)
+
         session = get_session()
         try:
             with session.begin():
@@ -420,33 +437,42 @@ class Connection(api.Connection):
 
             query.delete()
 
-    @objects.objectify(objects.Chassis)
-    def get_chassis(self, chassis_id):
-        query = model_query(models.Chassis)
-        query = add_identity_filter(query, chassis_id)
-
+    def get_chassis_by_id(self, chassis_id):
+        query = model_query(models.Chassis).filter_by(id=chassis_id)
         try:
             return query.one()
         except NoResultFound:
             raise exception.ChassisNotFound(chassis=chassis_id)
 
-    @objects.objectify(objects.Chassis)
+    def get_chassis_by_uuid(self, chassis_uuid):
+        query = model_query(models.Chassis).filter_by(uuid=chassis_uuid)
+        try:
+            return query.one()
+        except NoResultFound:
+            raise exception.ChassisNotFound(chassis=chassis_uuid)
+
     def get_chassis_list(self, limit=None, marker=None,
                          sort_key=None, sort_dir=None):
         return _paginate_query(models.Chassis, limit, marker,
                                sort_key, sort_dir)
 
-    @objects.objectify(objects.Chassis)
     def create_chassis(self, values):
         if not values.get('uuid'):
             values['uuid'] = utils.generate_uuid()
         chassis = models.Chassis()
         chassis.update(values)
-        chassis.save()
+        try:
+            chassis.save()
+        except db_exc.DBDuplicateEntry:
+            raise exception.ChassisAlreadyExists(uuid=values['uuid'])
         return chassis
 
-    @objects.objectify(objects.Chassis)
     def update_chassis(self, chassis_id, values):
+        # NOTE(dtantsur): this can lead to very strange errors
+        if 'uuid' in values:
+            msg = _("Cannot overwrite UUID for an existing Chassis.")
+            raise exception.InvalidParameterValue(err=msg)
+
         session = get_session()
         with session.begin():
             query = model_query(models.Chassis, session=session)
@@ -479,7 +505,6 @@ class Connection(api.Connection):
             if count != 1:
                 raise exception.ChassisNotFound(chassis=chassis_id)
 
-    @objects.objectify(objects.Conductor)
     def register_conductor(self, values):
         try:
             conductor = models.Conductor()
@@ -493,7 +518,6 @@ class Connection(api.Connection):
             raise exception.ConductorAlreadyRegistered(
                     conductor=values['hostname'])
 
-    @objects.objectify(objects.Conductor)
     def get_conductor(self, hostname):
         try:
             return model_query(models.Conductor).\

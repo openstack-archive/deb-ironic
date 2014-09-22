@@ -34,6 +34,7 @@ import paramiko
 import six
 
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import processutils
 
@@ -43,7 +44,6 @@ utils_opts = [
                help='Path to the rootwrap configuration file to use for '
                     'running commands as root.'),
     cfg.StrOpt('tempdir',
-               default=None,
                help='Explicitly specify the temporary working directory.'),
 ]
 
@@ -59,10 +59,11 @@ def _get_root_helper():
 
 def execute(*cmd, **kwargs):
     """Convenience wrapper around oslo's execute() method."""
-    if kwargs.get('run_as_root') and not 'root_helper' in kwargs:
+    if kwargs.get('run_as_root') and 'root_helper' not in kwargs:
         kwargs['root_helper'] = _get_root_helper()
     result = processutils.execute(*cmd, **kwargs)
-    LOG.debug('Execution completed, command line is "%s"', ' '.join(cmd))
+    LOG.debug('Execution completed, command line is "%s"',
+              ' '.join(map(str, cmd)))
     LOG.debug('Command stdout is: "%s"' % result[0])
     LOG.debug('Command stderr is: "%s"' % result[1])
     return result
@@ -70,7 +71,7 @@ def execute(*cmd, **kwargs):
 
 def trycmd(*args, **kwargs):
     """Convenience wrapper around oslo's trycmd() method."""
-    if kwargs.get('run_as_root') and not 'root_helper' in kwargs:
+    if kwargs.get('run_as_root') and 'root_helper' not in kwargs:
         kwargs['root_helper'] = _get_root_helper()
     return processutils.trycmd(*args, **kwargs)
 
@@ -504,3 +505,44 @@ def is_uuid_like(val):
         return str(uuid.UUID(val)) == val
     except (TypeError, ValueError, AttributeError):
         return False
+
+
+def mount(src, dest, *args):
+    """Mounts a device/image file on specified location.
+
+    :param src: the path to the source file for mounting
+    :param dest: the path where it needs to be mounted.
+    :param args: a tuple containing the arguments to be
+        passed to mount command.
+    :raises: processutils.ProcessExecutionError if it failed
+        to run the process.
+    """
+    args = ('mount', ) + args + (src, dest)
+    execute(*args, run_as_root=True, check_exit_code=[0])
+
+
+def umount(loc, *args):
+    """Umounts a mounted location.
+
+    :param loc: the path to be unmounted.
+    :param args: a tuple containing the argumnets to be
+        passed to the umount command.
+    :raises: processutils.ProcessExecutionError if it failed
+        to run the process.
+    """
+    args = ('umount', ) + args + (loc, )
+    execute(*args, run_as_root=True, check_exit_code=[0])
+
+
+def dd(src, dst, *args):
+    """Execute dd from src to dst.
+
+    :param src: the input file for dd command.
+    :param dst: the output file for dd command.
+    :param args: a tuple containing the arguments to be
+        passed to dd command.
+    :raises: processutils.ProcessExecutionError if it failed
+        to run the process.
+    """
+    execute('dd', 'if=%s' % src, 'of=%s' % dst, *args,
+            run_as_root=True, check_exit_code=[0])

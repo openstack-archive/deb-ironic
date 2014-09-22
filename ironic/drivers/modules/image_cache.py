@@ -24,7 +24,9 @@ import time
 
 from oslo.config import cfg
 
+from ironic.common import exception
 from ironic.common.glance_service import service_utils
+from ironic.common.i18n import _
 from ironic.common import images
 from ironic.common import utils
 from ironic.openstack.common import fileutils
@@ -43,6 +45,11 @@ img_cache_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(img_cache_opts)
+
+# This would contain a sorted list of instances of ImageCache to be
+# considered for cleanup. This list will be kept sorted in non-increasing
+# order of priority.
+_cache_cleanup_list = []
 
 
 class ImageCache(object):
@@ -80,11 +87,9 @@ class ImageCache(object):
             #NOTE(ghe): We don't share images between instances/hosts
             if not CONF.parallel_image_downloads:
                 with lockutils.lock(img_download_lock_name, 'ironic-'):
-                    images.fetch_to_raw(ctx, uuid, dest_path,
-                                        self._image_service)
+                    _fetch_to_raw(ctx, uuid, dest_path, self._image_service)
             else:
-                images.fetch_to_raw(ctx, uuid, dest_path,
-                                    self._image_service)
+                _fetch_to_raw(ctx, uuid, dest_path, self._image_service)
             return
 
         #TODO(ghe): have hard links and counts the same behaviour in all fs
@@ -133,23 +138,28 @@ class ImageCache(object):
         """
         #TODO(ghe): timeout and retry for downloads
         #TODO(ghe): logging when image cannot be created
-        fd, tmp_path = tempfile.mkstemp(dir=self.master_dir)
-        os.close(fd)
-        images.fetch_to_raw(ctx, uuid, tmp_path,
-                            self._image_service)
-        # NOTE(dtantsur): no need for global lock here - master_path
-        # will have link count >1 at any moment, so won't be cleaned up
-        os.link(tmp_path, master_path)
-        os.link(master_path, dest_path)
-        os.unlink(tmp_path)
+        tmp_dir = tempfile.mkdtemp(dir=self.master_dir)
+        tmp_path = os.path.join(tmp_dir, uuid)
+        try:
+            _fetch_to_raw(ctx, uuid, tmp_path, self._image_service)
+            # NOTE(dtantsur): no need for global lock here - master_path
+            # will have link count >1 at any moment, so won't be cleaned up
+            os.link(tmp_path, master_path)
+            os.link(master_path, dest_path)
+        finally:
+            utils.rmtree_without_raise(tmp_dir)
 
     @lockutils.synchronized('master_image', 'ironic-')
-    def clean_up(self):
+    def clean_up(self, amount=None):
         """Clean up directory with images, keeping cache of the latest images.
 
         Files with link count >1 are never deleted.
         Protected by global lock, so that no one messes with master images
         after we get listing and before we actually delete files.
+
+        :param amount: if present, amount of space to reclaim in bytes,
+                       cleaning will stop, if this goal was reached,
+                       even if it is possible to clean up more files
         """
         if self.master_dir is None:
             return
@@ -157,31 +167,63 @@ class ImageCache(object):
         LOG.debug("Starting clean up for master image cache %(dir)s" %
                   {'dir': self.master_dir})
 
+        amount_copy = amount
         listing = _find_candidates_for_deletion(self.master_dir)
-        survived = self._clean_up_too_old(listing)
-        self._clean_up_ensure_cache_size(survived)
+        survived, amount = self._clean_up_too_old(listing, amount)
+        if amount is not None and amount <= 0:
+            return
+        amount = self._clean_up_ensure_cache_size(survived, amount)
+        if amount is not None and amount > 0:
+            LOG.warn(_("Cache clean up was unable to reclaim %(required)d MiB "
+                       "of disk space, still %(left)d MiB required"),
+                     {'required': amount_copy / 1024 / 1024,
+                      'left': amount / 1024 / 1024})
 
-    def _clean_up_too_old(self, listing):
+    def _clean_up_too_old(self, listing, amount):
         """Clean up stage 1: drop images that are older than TTL.
 
+        This method removes files all files older than TTL seconds
+        unless 'amount' is non-None. If 'amount' is non-None,
+        it starts removing files older than TTL seconds,
+        oldest first, until the required 'amount' of space is reclaimed.
+
         :param listing: list of tuples (file name, last used time)
-        :returns: list of files left after clean up
+        :param amount: if not None, amount of space to reclaim in bytes,
+                       cleaning will stop, if this goal was reached,
+                       even if it is possible to clean up more files
+        :returns: tuple (list of files left after clean up,
+                         amount still to reclaim)
         """
         threshold = time.time() - self._cache_ttl
         survived = []
         for file_name, last_used, stat in listing:
             if last_used < threshold:
-                utils.unlink_without_raise(file_name)
+                try:
+                    os.unlink(file_name)
+                except EnvironmentError as exc:
+                    LOG.warn(_("Unable to delete file %(name)s from "
+                               "master image cache: %(exc)s") %
+                             {'name': file_name, 'exc': exc})
+                else:
+                    if amount is not None:
+                        amount -= stat.st_size
+                        if amount <= 0:
+                            amount = 0
+                            break
             else:
                 survived.append((file_name, last_used, stat))
-        return survived
+        return survived, amount
 
-    def _clean_up_ensure_cache_size(self, listing):
+    def _clean_up_ensure_cache_size(self, listing, amount):
         """Clean up stage 2: try to ensure cache size < threshold.
         Try to delete the oldest files until conditions is satisfied
         or no more files are eligable for delition.
 
         :param listing: list of tuples (file name, last used time)
+        :param amount: amount of space to reclaim, if possible.
+                       if amount is not None, it has higher priority than
+                       cache size in settings
+        :returns: amount of space still required after clean up
         """
         # NOTE(dtantsur): Sort listing to delete the oldest files first
         listing = sorted(listing,
@@ -191,7 +233,8 @@ class ImageCache(object):
                          for f in os.listdir(self.master_dir))
         total_size = sum(os.path.getsize(f)
                          for f in total_listing)
-        while total_size > self._cache_size and listing:
+        while listing and (total_size > self._cache_size or
+               (amount is not None and amount > 0)):
             file_name, last_used, stat = listing.pop()
             try:
                 os.unlink(file_name)
@@ -201,6 +244,8 @@ class ImageCache(object):
                          {'name': file_name, 'exc': exc})
             else:
                 total_size -= stat.st_size
+                if amount is not None:
+                    amount -= stat.st_size
 
         if total_size > self._cache_size:
             LOG.info(_("After cleaning up cache dir %(dir)s "
@@ -208,6 +253,7 @@ class ImageCache(object):
                        "threshold %(expected)d") %
                      {'dir': self.master_dir, 'actual': total_size,
                       'expected': self._cache_size})
+        return max(amount, 0)
 
 
 def _find_candidates_for_deletion(master_dir):
@@ -226,3 +272,80 @@ def _find_candidates_for_deletion(master_dir):
         # Also include ctime as it changes when image is linked to
         last_used_time = max(stat.st_mtime, stat.st_atime, stat.st_ctime)
         yield filename, last_used_time, stat
+
+
+def _free_disk_space_for(path):
+    """Get free disk space on a drive where path is located."""
+    stat = os.statvfs(path)
+    return stat.f_frsize * stat.f_bavail
+
+
+def _fetch_to_raw(context, image_href, path, image_service=None):
+    """Fetch image and convert to raw format if needed."""
+    path_tmp = "%s.part" % path
+    images.fetch(context, image_href, path_tmp, image_service)
+    required_space = images.converted_size(path_tmp)
+    directory = os.path.dirname(path_tmp)
+    _clean_up_caches(directory, required_space)
+    images.image_to_raw(image_href, path, path_tmp)
+
+
+def _clean_up_caches(directory, amount):
+    """Explicitly cleanup caches based on their priority (if required).
+
+    :param directory: the directory (of the cache) to be freed up.
+    :param amount: amount of space to reclaim.
+    :raises: InsufficientDiskSpace exception, if we cannot free up enough space
+    after trying all the caches.
+    """
+    free = _free_disk_space_for(directory)
+
+    if amount < free:
+        return
+
+    # NOTE(dtantsur): filter caches, whose directory is on the same device
+    st_dev = os.stat(directory).st_dev
+
+    caches_to_clean = [x[1]() for x in _cache_cleanup_list]
+    caches = (c for c in caches_to_clean
+              if os.stat(c.master_dir).st_dev == st_dev)
+    for cache_to_clean in caches:
+        cache_to_clean.clean_up(amount=(amount - free))
+        free = _free_disk_space_for(directory)
+        if amount < free:
+            break
+    else:
+        raise exception.InsufficientDiskSpace(path=directory,
+                                              required=amount / 1024 / 1024,
+                                              actual=free / 1024 / 1024,
+                                              )
+
+
+def clean_up_caches(ctx, directory, images_info):
+    """Explicitly cleanup caches based on their priority (if required).
+
+    This cleans up the caches to free up the amount of space required for the
+    images in images_info. The caches are cleaned up one after the other in
+    the order of their priority.  If we still cannot free up enough space
+    after trying all the caches, this method throws exception.
+
+    :param ctx: context
+    :param directory: the directory (of the cache) to be freed up.
+    :param images_info: a list of tuples of the form (image_uuid,path)
+        for which space is to be created in cache.
+    :raises: InsufficientDiskSpace exception, if we cannot free up enough space
+    after trying all the caches.
+    """
+    total_size = sum(images.download_size(ctx, uuid)
+            for (uuid, path) in images_info)
+    _clean_up_caches(directory, total_size)
+
+
+def cleanup(priority):
+    """Decorator method for adding cleanup priority to a class."""
+    def _add_property_to_class_func(cls):
+        _cache_cleanup_list.append((priority, cls))
+        _cache_cleanup_list.sort(reverse=True)
+        return cls
+
+    return _add_property_to_class_func

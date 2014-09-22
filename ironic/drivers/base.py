@@ -22,6 +22,7 @@ import abc
 import six
 
 from ironic.common import exception
+from ironic.common.i18n import _
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -88,25 +89,45 @@ class BaseDriver(object):
     def __init__(self):
         pass
 
+    def get_properties(self):
+        """Get the properties of the driver.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+        properties = {}
+        for iface_name in (self.core_interfaces +
+                           self.standard_interfaces +
+                           ['vendor']):
+            iface = getattr(self, iface_name, None)
+            if iface:
+                properties.update(iface.get_properties())
+        return properties
+
 
 @six.add_metaclass(abc.ABCMeta)
 class DeployInterface(object):
     """Interface for deploy-related actions."""
 
-    # TODO(lucasagomes): The 'node' parameter needs to be passed to validate()
-    # because of the ConductorManager.validate_driver_interfaces().
-    # Remove it after all cleaning all the interfaces
     @abc.abstractmethod
-    def validate(self, task, node):
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+    @abc.abstractmethod
+    def validate(self, task):
         """Validate the driver-specific Node deployment info.
 
         This method validates whether the 'driver_info' property of the
         task's node contains the required information for this driver to
-        deploy images to the node.
+        deploy images to the node. If invalid, raises an exception; otherwise
+        returns None.
 
         :param task: a TaskManager instance containing the node to act on.
-        :param node: a single Node to validate.
         :raises: InvalidParameterValue
+        :raises: MissingParameterValue
         """
 
     @abc.abstractmethod
@@ -192,20 +213,25 @@ class DeployInterface(object):
 class PowerInterface(object):
     """Interface for power-related actions."""
 
-    # TODO(lucasagomes): The 'node' parameter needs to be passed to validate()
-    # because of the ConductorManager.validate_driver_interfaces().
-    # Remove it after all cleaning all the interfaces
     @abc.abstractmethod
-    def validate(self, task, node):
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+    @abc.abstractmethod
+    def validate(self, task):
         """Validate the driver-specific Node power info.
 
         This method validates whether the 'driver_info' property of the
         supplied node contains the required information for this driver to
-        manage the power state of the node.
+        manage the power state of the node. If invalid, raises an exception;
+        otherwise, returns None.
 
         :param task: a TaskManager instance containing the node to act on.
-        :param node: a single Node to validate.
         :raises: InvalidParameterValue
+        :raises: MissingParameterValue
         """
 
     @abc.abstractmethod
@@ -213,6 +239,7 @@ class PowerInterface(object):
         """Return the power state of the task's node.
 
         :param task: a TaskManager instance containing the node to act on.
+        :raises: MissingParameterValue if a required parameter is missing.
         :returns: a power state. One of :mod:`ironic.common.states`.
         """
 
@@ -222,6 +249,7 @@ class PowerInterface(object):
 
         :param task: a TaskManager instance containing the node to act on.
         :param power_state: Any power state from :mod:`ironic.common.states`.
+        :raises: MissingParameterValue if a required parameter is missing.
         """
 
     @abc.abstractmethod
@@ -229,6 +257,7 @@ class PowerInterface(object):
         """Perform a hard reboot of the task's node.
 
         :param task: a TaskManager instance containing the node to act on.
+        :raises: MissingParameterValue if a required parameter is missing.
         """
 
 
@@ -236,20 +265,25 @@ class PowerInterface(object):
 class ConsoleInterface(object):
     """Interface for console-related actions."""
 
-    # TODO(lucasagomes): The 'node' parameter needs to be passed to validate()
-    # because of the ConductorManager.validate_driver_interfaces().
-    # Remove it after all cleaning all the interfaces
     @abc.abstractmethod
-    def validate(self, task, node):
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+    @abc.abstractmethod
+    def validate(self, task):
         """Validate the driver-specific Node console info.
 
         This method validates whether the 'driver_info' property of the
         supplied node contains the required information for this driver to
-        provide console access to the Node.
+        provide console access to the Node. If invalid, raises an exception;
+        otherwise returns None.
 
         :param task: a TaskManager instance containing the node to act on.
-        :param node: a single Node to validate.
         :raises: InvalidParameterValue
+        :raises: MissingParameterValue
         """
 
     @abc.abstractmethod
@@ -282,16 +316,22 @@ class ConsoleInterface(object):
 class RescueInterface(object):
     """Interface for rescue-related actions."""
 
-    # TODO(lucasagomes): The 'node' parameter needs to be passed to validate()
-    # because of the ConductorManager.validate_driver_interfaces().
-    # Remove it after all cleaning all the interfaces
     @abc.abstractmethod
-    def validate(self, task, node):
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+    @abc.abstractmethod
+    def validate(self, task):
         """Validate the rescue info stored in the node' properties.
 
+        If invalid, raises an exception; otherwise returns None.
+
         :param task: a TaskManager instance containing the node to act on.
-        :param node: a single Node to validate.
         :raises: InvalidParameterValue
+        :raises: MissingParameterValue
         """
 
     @abc.abstractmethod
@@ -322,14 +362,24 @@ class VendorInterface(object):
     """
 
     @abc.abstractmethod
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+    @abc.abstractmethod
     def validate(self, task, **kwargs):
         """Validate vendor-specific actions.
+
+        If invalid, raises an exception; otherwise returns None.
 
         :param task: a task from TaskManager.
         :param kwargs: info for action.
         :raises: UnsupportedDriverExtension if 'method' can not be mapped to
                  the supported interfaces.
         :raises: InvalidParameterValue if **kwargs does not contain 'method'.
+        :raises: MissingParameterValue
         """
 
     @abc.abstractmethod
@@ -342,6 +392,7 @@ class VendorInterface(object):
         :raises: UnsupportedDriverExtension if 'method' can not be mapped to
                  the supported interfaces.
         :raises: InvalidParameterValue if **kwargs does not contain 'method'.
+        :raises: MissingParameterValue when a required parameter is missing
         """
 
     def driver_vendor_passthru(self, context, method, **kwargs):
@@ -366,17 +417,22 @@ class VendorInterface(object):
 class ManagementInterface(object):
     """Interface for management related actions."""
 
-    # TODO(lucasagomes): The 'node' parameter
-    # needs to be passed to validate() because of the
-    # ConductorManager.validate_driver_interfaces(). Remove it as part of
-    # https://bugs.launchpad.net/ironic/+bug/1312632.
     @abc.abstractmethod
-    def validate(self, task, node):
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+    @abc.abstractmethod
+    def validate(self, task):
         """Validate the driver-specific management information.
 
+        If invalid, raises an exception; otherwise returns None.
+
         :param task: a task from TaskManager.
-        :param node: a single Node to validate.
         :raises: InvalidParameterValue
+        :raises: MissingParameterValue
         """
 
     @abc.abstractmethod
@@ -388,7 +444,7 @@ class ManagementInterface(object):
         """
 
     @abc.abstractmethod
-    def set_boot_device(self, task, device, **kwargs):
+    def set_boot_device(self, task, device, persistent=False):
         """Set the boot device for a node.
 
         Set the boot device to use on next reboot of the node.
@@ -396,9 +452,12 @@ class ManagementInterface(object):
         :param task: a task from TaskManager.
         :param device: the boot device, one of
                        :mod:`ironic.common.boot_devices`.
-        :param kwargs: extra driver-specific parameters.
+        :param persistent: Boolean value. True if the boot device will
+                           persist to all future boots, False if not.
+                           Default: False.
         :raises: InvalidParameterValue if an invalid boot device is
                  specified.
+        :raises: MissingParameterValue if a required parameter is missing
         """
 
     @abc.abstractmethod
@@ -409,6 +468,48 @@ class ManagementInterface(object):
         all drivers support this.
 
         :param task: a task from TaskManager.
-        :returns: the boot device, one of :mod:`ironic.common.boot_devices`
-                  or None if it is unknown.
+        :raises: MissingParameterValue if a required parameter is missing
+        :returns: a dictionary containing:
+            :boot_device: the boot device, one of
+                :mod:`ironic.common.boot_devices` or None if it is unknown.
+            :persistent: Whether the boot device will persist to all
+                future boots or not, None if it is unknown.
+
+        """
+
+    @abc.abstractmethod
+    def get_sensors_data(self, task):
+        """Get sensors data method.
+
+        :param task: a TaskManager instance.
+        :raises: FailedToGetSensorData when getting the sensor data fails.
+        :raises: FailedToParseSensorData when parsing sensor data fails.
+        :returns: returns a consistent format dict of sensor data grouped by
+                  sensor type, which can be processed by Ceilometer.
+                  eg, {
+                        'Sensor Type 1': {
+                          'Sensor ID 1': {
+                            'Sensor Reading': 'current value',
+                            'key1': 'value1',
+                            'key2': 'value2'
+                          },
+                          'Sensor ID 2': {
+                            'Sensor Reading': 'current value',
+                            'key1': 'value1',
+                            'key2': 'value2'
+                          }
+                        },
+                        'Sensor Type 2': {
+                          'Sensor ID 3': {
+                            'Sensor Reading': 'current value',
+                            'key1': 'value1',
+                            'key2': 'value2'
+                          },
+                          'Sensor ID 4': {
+                            'Sensor Reading': 'current value',
+                            'key1': 'value1',
+                            'key2': 'value2'
+                          }
+                        }
+                      }
         """

@@ -26,6 +26,7 @@ on seprate vendor_passthru methods.
 
 from ironic.common import boot_devices
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic.common import states
 from ironic.drivers import base
 
@@ -35,14 +36,17 @@ def _raise_unsupported_error(method=None):
         raise exception.InvalidParameterValue(_(
             "Unsupported method (%s) passed through to vendor extension.")
             % method)
-    raise exception.InvalidParameterValue(_(
+    raise exception.MissingParameterValue(_(
         "Method not specified when calling vendor extension."))
 
 
 class FakePower(base.PowerInterface):
     """Example implementation of a simple power interface."""
 
-    def validate(self, task, node):
+    def get_properties(self):
+        return {}
+
+    def validate(self, task):
         pass
 
     def get_power_state(self, task):
@@ -63,14 +67,17 @@ class FakeDeploy(base.DeployInterface):
        separate power interface.
     """
 
-    def validate(self, task, node):
+    def get_properties(self):
+        return {}
+
+    def validate(self, task):
         pass
 
     def deploy(self, task):
-        pass
+        return states.DEPLOYDONE
 
     def tear_down(self, task):
-        pass
+        return states.DELETED
 
     def prepare(self, task):
         pass
@@ -85,12 +92,16 @@ class FakeDeploy(base.DeployInterface):
 class FakeVendorA(base.VendorInterface):
     """Example implementation of a vendor passthru interface."""
 
+    def get_properties(self):
+        return {'A1': 'A1 description. Required.',
+                'A2': 'A2 description. Optional.'}
+
     def validate(self, task, **kwargs):
         method = kwargs.get('method')
         if method == 'first_method':
             bar = kwargs.get('bar')
             if not bar:
-                raise exception.InvalidParameterValue(_(
+                raise exception.MissingParameterValue(_(
                     "Parameter 'bar' not passed to method 'first_method'."))
             return
         _raise_unsupported_error(method)
@@ -109,12 +120,16 @@ class FakeVendorA(base.VendorInterface):
 class FakeVendorB(base.VendorInterface):
     """Example implementation of a secondary vendor passthru."""
 
+    def get_properties(self):
+        return {'B1': 'B1 description. Required.',
+                'B2': 'B2 description. Required.'}
+
     def validate(self, task, **kwargs):
         method = kwargs.get('method')
         if method == 'second_method':
             bar = kwargs.get('bar')
             if not bar:
-                raise exception.InvalidParameterValue(_(
+                raise exception.MissingParameterValue(_(
                     "Parameter 'bar' not passed to method 'second_method'."))
             return
         _raise_unsupported_error(method)
@@ -133,8 +148,11 @@ class FakeVendorB(base.VendorInterface):
 class FakeConsole(base.ConsoleInterface):
     """Example implementation of a simple console interface."""
 
-    def validate(self, task, node):
-        return True
+    def get_properties(self):
+        return {}
+
+    def validate(self, task):
+        pass
 
     def start_console(self, task):
         pass
@@ -149,16 +167,22 @@ class FakeConsole(base.ConsoleInterface):
 class FakeManagement(base.ManagementInterface):
     """Example implementation of a simple management interface."""
 
-    def validate(self, task, node):
-        return True
+    def get_properties(self):
+        return {}
+
+    def validate(self, task):
+        pass
 
     def get_supported_boot_devices(self):
         return [boot_devices.PXE]
 
-    def set_boot_device(self, task, device, **kwargs):
+    def set_boot_device(self, task, device, persistent=False):
         if device not in self.get_supported_boot_devices():
             raise exception.InvalidParameterValue(_(
                 "Invalid boot device %s specified.") % device)
 
     def get_boot_device(self, task):
-        return boot_devices.PXE
+        return {'boot_device': boot_devices.PXE, 'persistent': False}
+
+    def get_sensors_data(self, task):
+        return {}

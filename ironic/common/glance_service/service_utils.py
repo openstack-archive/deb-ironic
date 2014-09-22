@@ -18,12 +18,12 @@ import copy
 import logging
 
 from oslo.config import cfg
+from oslo.utils import timeutils
 import six
 import six.moves.urllib.parse as urlparse
 
 from ironic.common import exception
 from ironic.openstack.common import jsonutils
-from ironic.openstack.common import timeutils
 
 
 CONF = cfg.CONF
@@ -113,7 +113,7 @@ def _get_api_server():
     api_server = CONF.glance.glance_api_servers or \
         CONF.glance.glance_host + ':' + str(CONF.glance.glance_port)
     if '//' not in api_server:
-        api_server = 'http://' + api_server
+        api_server = CONF.glance.glance_protocol + '://' + api_server
     url = urlparse.urlparse(api_server)
     port = url.port or 80
     host = url.netloc.split(':', 1)[0]

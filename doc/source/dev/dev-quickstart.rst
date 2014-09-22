@@ -129,8 +129,14 @@ created in the previous section to run everything else within::
     # disable auth since we are not running keystone here
     sed -i "s/#auth_strategy=keystone/auth_strategy=noauth/" etc/ironic/ironic.conf.local
 
+    # Use the 'fake_ipmitool' test driver
+    sed -i "s/#enabled_drivers=pxe_ipmitool/enabled_drivers=fake_ipmitool/" etc/ironic/ironic.conf.local
+
     # set a fake host name [useful if you want to test multiple services on the same host]
     sed -i "s/#host=.*/host=test-host/" etc/ironic/ironic.conf.local
+
+    # turn off the periodic sync_power_state task, to avoid getting NodeLocked exceptions
+    sed -i "s/#sync_power_state_interval=60/sync_power_state_interval=-1/" etc/ironic/ironic.conf.local
 
     # initialize the ironic database
     # this defaults to storing data in ./ironic/ironic.sqlite
@@ -218,22 +224,41 @@ station.
 
     https://devstack.org
 
-Prepare the system (Ubuntu 12.04)::
+Install the basic dependencies::
 
     sudo apt-get update
     sudo apt-get install python-software-properties git
-    sudo add-apt-repository cloud-archive:havana
+
+If you are using Ubuntu 12.04, use the latest Cloud Archive repository::
+
+    sudo add-apt-repository cloud-archive:icehouse
     sudo apt-get update
 
-Clone DevStack::
+Devstack will no longer create the user 'stack' with the desired
+permissions, but does provide a script to perform the task::
 
+    git clone https://github.com/openstack-dev/devstack.git devstack
+    sudo ./devstack/tools/create-stack-user.sh
+
+Switch to the stack user and clone DevStack::
+
+    sudo su stack
     cd ~
     git clone https://github.com/openstack-dev/devstack.git devstack
 
-Create devstack/localrc with minimal settings required to enable Ironic::
+Create devstack/localrc with minimal settings required to enable Ironic.
+Note that Ironic under devstack can only support running *either* the PXE
+or the agent driver, not both.::
 
     cd devstack
     cat >localrc <<END
+    # Credentials
+    ADMIN_PASSWORD=password
+    DATABASE_PASSWORD=password
+    RABBIT_PASSWORD=password
+    SERVICE_PASSWORD=password
+    SERVICE_TOKEN=password
+
     # Enable Ironic API and Ironic Conductor
     enable_service ironic
     enable_service ir-api
@@ -248,13 +273,15 @@ Create devstack/localrc with minimal settings required to enable Ironic::
     enable_service q-meta
     enable_service neutron
 
-    # Create 3 virtual machines with 512M memory and 10G disk to
-    # pose as Ironic's baremetal nodes.
-    IRONIC_BAREMETAL_BASIC_OPS=True
+    # Create 3 virtual machines to pose as Ironic's baremetal nodes.
     IRONIC_VM_COUNT=3
-    IRONIC_VM_SPECS_RAM=512
-    IRONIC_VM_SPECS_DISK=10
     IRONIC_VM_SSH_PORT=22
+    IRONIC_BAREMETAL_BASIC_OPS=True
+
+    # The parameters below represent the minimum possible values to create
+    # functional nodes.
+    IRONIC_VM_SPECS_RAM=1024
+    IRONIC_VM_SPECS_DISK=10
 
     # Size of the ephemeral partition in GB. Use 0 for no ephemeral partition.
     IRONIC_VM_EPHEMERAL_DISK=0
@@ -268,8 +295,17 @@ Create devstack/localrc with minimal settings required to enable Ironic::
     FIXED_RANGE=10.1.0.0/24
     FIXED_NETWORK_SIZE=256
 
-    # Log all devstack output to a log file
+    # Log all output to files
     LOGFILE=$HOME/devstack.log
+    SCREEN_LOGDIR=$HOME/logs
+    IRONIC_VM_LOG_DIR=$HOME/ironic-bm-logs
+
+    # If running with the agent driver:
+    enable_service s-proxy s-object s-container s-account
+    SWIFT_ENABLE_TEMPURLS=True
+    IRONIC_ENABLED_DRIVERS=fake,agent_ssh,agent_ipmitool
+    IRONIC_BUILD_DEPLOY_RAMDISK=False
+    IRONIC_DEPLOY_DRIVER=agent_ssh
 
     END
 
@@ -277,13 +313,12 @@ Run stack.sh::
 
     ./stack.sh
 
-Source credentials, create a key, spawn an instance::
+Source credentials, create a key, and spawn an instance::
 
     source ~/devstack/openrc
 
-    # query the image id of the default cirros-0.3.1-x86_64-uec image
-    nova image-list
-    image=21eef080-e562-4586-ba80-3fc57de25fd2
+    # query the image id of the default cirros image
+    image=$(nova image-list | egrep "$DEFAULT_IMAGE_NAME[^-]" | awk '{ print $2 }')
 
     # create keypair
     ssh-keygen

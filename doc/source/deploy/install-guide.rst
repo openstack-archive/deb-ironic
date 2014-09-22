@@ -323,20 +323,163 @@ Compute Service's controller nodes and compute nodes.*
     service nova-compute restart
 
 
+Setup the drivers for Bare Metal Service
+========================================
+
 PXE Setup
 ---------
 
-On the Bare Metal Service node(s) where ``ironic-conductor`` is running,
-PXE needs to be set up.
+If you will be using PXE, it needs to be set up on the Bare Metal Service
+node(s) where ``ironic-conductor`` is running.
 
-#. Make sure these directories exist::
+#. Make sure the tftp root directory exist and can be written to by the
+   user the ``ironic-conductor`` is running as. For example::
 
-    sudo mkdir -p /tftproot
-    sudo chown -R ironic:LIBVIRT_GROUP -p /tftproot
-    mkdir -p /tftproot/pxelinux.cfg
+    sudo mkdir -p /tftpboot
+    sudo chown -R ironic -p /tftpboot
 
-#. Copy the PXE binary to ``/tftproot``. The PXE binary might be found at::
+#. Install the syslinux package with the PXE boot images::
 
-     ubuntu: /usr/lib/syslinux/pxelinux.0
-     fedora/RHEL: /usr/share/syslinux/pxelinux.0
+    Ubuntu:
+        sudo apt-get install syslinux syslinux-common
 
+    Fedora/RHEL:
+        sudo yum install syslinux-tftpboot
+
+#. Copy the PXE image to ``/tftpboot``. The PXE image might be found at [1]_::
+
+    Ubuntu:
+        sudo cp /usr/lib/syslinux/pxelinux.0 /tftpboot
+
+#. If the version of syslinux is **greater than** 4 we also need to make sure
+   that we copy the library modules into the ``/tftpboot`` directory [2]_
+   [1]_::
+
+    Ubuntu:
+        sudo cp /usr/lib/syslinux/modules/*/ldlinux.* /tftpboot
+
+
+.. [1] On **Fedora/RHEL** the ``syslinux-tftpboot`` package already install
+       the library modules and PXE image at ``/tftpboot``. If the TFTP server
+       is configured to listen to a different directory you should copy the
+       contents of ``/tftpboot`` to the configured directory
+.. [2] http://www.syslinux.org/wiki/index.php/Library_modules
+
+iPXE Setup
+----------
+
+An alternative to PXE boot, iPXE was introduced in the Juno release
+(2014.2.0) of Ironic.
+
+If you will be using iPXE to boot instead of PXE, iPXE needs to be set up
+on the Bare Metal Service node(s) where ``ironic-conductor`` is running.
+
+1. Make sure these directories exist and can be written to by the user
+   the ``ironic-conductor`` is running as. For example::
+
+    sudo mkdir -p /tftpboot
+    sudo mkdir -p /httpboot
+    sudo chown -R ironic -p /tftpboot
+    sudo chown -R ironic -p /httpboot
+
+
+2. Set up TFTP and HTTP servers.
+
+  These servers should be running and configured to use the local
+  /tftpboot and /httpboot directories respectively, as their root
+  directories. (Setting up these servers is outside the scope of this
+  install guide.)
+
+  These root directories need to be mounted locally to the
+  ``ironic-conductor`` services, so that the services can access them.
+
+  The Bare Metal Service's configuration file (/etc/ironic/ironic.conf)
+  should be edited accordingly to specify the TFTP and HTTP root
+  directories and server addresses. For example::
+
+    [pxe]
+
+    # Ironic compute node's http root path. (string value)
+    http_root=/httpboot
+
+    # Ironic compute node's tftp root path. (string value)
+    tftp_root=/tftpboot
+
+    # IP address of Ironic compute node's tftp server. (string
+    # value)
+    tftp_server=192.168.0.2
+
+    # Ironic compute node's HTTP server URL. Example:
+    # http://192.1.2.3:8080 (string value)
+    http_url=http://192.168.0.2:8080
+
+
+3. Install the iPXE package with the boot images::
+
+    Ubuntu:
+        apt-get install ipxe
+
+    Fedora/RHEL:
+        yum install ipxe-bootimgs
+
+4. Copy the iPXE boot image (undionly.kpxe) to ``/tftpboot``. The binary
+   might be found at::
+
+    Ubuntu:
+        cp /usr/lib/ipxe/undionly.kpxe /tftpboot
+
+    Fedora/RHEL:
+        cp /usr/share/ipxe/undionly.kpxe /tftpboot
+
+*Note: If the packaged version of the iPXE boot image doesn't
+work for you or you want to build one from source take a look at
+http://ipxe.org/download for more information on preparing iPXE image.*
+
+5. Enable/Configure iPXE in the Bare Metal Service's configuration file
+   (/etc/ironic/ironic.conf)::
+
+    [pxe]
+
+    # Enable iPXE boot. (boolean value)
+    ipxe_enabled=True
+
+    # Neutron bootfile DHCP parameter. (string value)
+    pxe_bootfile_name=undionly.kpxe
+
+    # Template file for PXE configuration. (string value)
+    pxe_config_template=$pybasedir/drivers/modules/ipxe_config.template
+
+6. Restart the ``ironic-conductor`` process::
+
+    service ironic-conductor restart
+
+IPMI support
+------------
+
+If using the IPMITool driver, the ``ipmitool`` command must be present on the
+service node(s) where ``ironic-conductor`` is running. On most distros, this
+is provided as part of the ``ipmitool`` package. Source code is available at
+http://ipmitool.sourceforge.net/
+
+Note that certain distros, notably Mac OS X and SLES, install ``openipmi``
+instead of ``ipmitool`` by default. THIS DRIVER IS NOT COMPATIBLE WITH
+``openipmi`` AS IT RELIES ON ERROR HANDLING OPTIONS NOT PROVIDED BY THIS TOOL.
+
+Ironic supports sending IPMI sensor data to Ceilometer with pxe_ipmitool
+driver. By default, support for sending IPMI sensor data to Ceilometer is
+disabled. If you want to enable it set the following options in the
+``conductor`` section of ``ironic.conf``:
+
+* notification_driver=messaging
+* send_sensor_data=true
+
+If you want to customize the sensor types which will be sent to Ceilometer,
+change the ``send_sensor_data_types`` option. For example, the below settings
+will send Temperature,Fan,Voltage these three sensor types data to Ceilometer:
+
+* send_sensor_data_types=Temperature,Fan,Voltage
+
+Else we use default value 'All' for all the sensor types which supported by
+Ceilometer, they are:
+
+* Temperature,Fan,Voltage,Current

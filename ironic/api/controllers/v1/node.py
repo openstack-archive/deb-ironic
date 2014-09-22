@@ -30,6 +30,7 @@ from ironic.api.controllers.v1 import port
 from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils as api_utils
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic.common import states as ir_states
 from ironic.common import utils
 from ironic import objects
@@ -53,6 +54,88 @@ class NodePatchType(types.JsonPatchType):
     @staticmethod
     def mandatory_attrs():
         return ['/chassis_uuid', '/driver']
+
+
+class BootDeviceController(rest.RestController):
+
+    _custom_actions = {
+        'supported': ['GET'],
+    }
+
+    def _get_boot_device(self, node_uuid, supported=False):
+        """Get the current boot device or a list of supported devices.
+
+        :param node_uuid: UUID of a node.
+        :param supported: Boolean value. If true return a list of
+                          supported boot devices, if false return the
+                          current boot device. Default: False.
+        :returns: The current boot device or a list of the supported
+                  boot devices.
+
+        """
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        topic = pecan.request.rpcapi.get_topic_for(rpc_node)
+        if supported:
+            return pecan.request.rpcapi.get_supported_boot_devices(
+                                       pecan.request.context, node_uuid, topic)
+        else:
+            return pecan.request.rpcapi.get_boot_device(pecan.request.context,
+                                                        node_uuid, topic)
+
+    @wsme_pecan.wsexpose(None, types.uuid, wtypes.text, types.boolean,
+                         status_code=204)
+    def put(self, node_uuid, boot_device, persistent=False):
+        """Set the boot device for a node.
+
+        Set the boot device to use on next reboot of the node.
+
+        :param node_uuid: UUID of a node.
+        :param boot_device: the boot device, one of
+                            :mod:`ironic.common.boot_devices`.
+        :param persistent: Boolean value. True if the boot device will
+                           persist to all future boots, False if not.
+                           Default: False.
+
+        """
+        rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+        topic = pecan.request.rpcapi.get_topic_for(rpc_node)
+        pecan.request.rpcapi.set_boot_device(pecan.request.context, node_uuid,
+                                             boot_device,
+                                             persistent=persistent,
+                                             topic=topic)
+
+    @wsme_pecan.wsexpose(wtypes.text, types.uuid)
+    def get(self, node_uuid):
+        """Get the current boot device for a node.
+
+        :param node_uuid: UUID of a node.
+        :returns: a json object containing:
+
+            :boot_device: the boot device, one of
+                :mod:`ironic.common.boot_devices` or None if it is unknown.
+            :persistent: Whether the boot device will persist to all
+                future boots or not, None if it is unknown.
+
+        """
+        return self._get_boot_device(node_uuid)
+
+    @wsme_pecan.wsexpose(wtypes.text, types.uuid)
+    def supported(self, node_uuid):
+        """Get a list of the supported boot devices.
+
+        :param node_uuid: UUID of a node.
+        :returns: A json object with the list of supported boot
+                  devices.
+
+        """
+        boot_devices = self._get_boot_device(node_uuid, supported=True)
+        return {'supported_boot_devices': boot_devices}
+
+
+class NodeManagementController(rest.RestController):
+
+    boot_device = BootDeviceController()
+    "Expose boot_device as a sub-element of management"
 
 
 class ConsoleInfo(base.APIBase):
@@ -271,8 +354,7 @@ class Node(base.APIBase):
     def _set_chassis_uuid(self, value):
         if value and self._chassis_uuid != value:
             try:
-                chassis = objects.Chassis.get_by_uuid(pecan.request.context,
-                                                      value)
+                chassis = objects.Chassis.get(pecan.request.context, value)
                 self._chassis_uuid = chassis.uuid
                 # NOTE(lucasagomes): Create the chassis_id attribute on-the-fly
                 #                    to satisfy the api -> rpc object
@@ -353,6 +435,9 @@ class Node(base.APIBase):
     def __init__(self, **kwargs):
         self.fields = []
         fields = objects.Node.fields.keys()
+        # NOTE(lucasagomes): chassis_uuid is not part of objects.Node.fields
+        # because it's an API-only attribute.
+        fields.append('chassis_uuid')
         for k in fields:
             # Skip fields we do not expose.
             if not hasattr(self, k):
@@ -365,10 +450,6 @@ class Node(base.APIBase):
         # that as_dict() will contain chassis_id field when converting it
         # before saving it in the database.
         self.fields.append('chassis_id')
-
-        # NOTE(lucasagomes): chassis_uuid is not part of objects.Node.fields
-        # because it's an API-only attribute.
-        self.fields.append('chassis_uuid')
         setattr(self, 'chassis_uuid', kwargs.get('chassis_id'))
 
     @classmethod
@@ -486,22 +567,30 @@ class NodesController(rest.RestController):
     vendor_passthru = NodeVendorPassthruController()
     "A resource used for vendors to expose a custom functionality in the API"
 
-    ports = port.PortsController(from_nodes=True)
+    ports = port.PortsController()
     "Expose ports as a sub-element of nodes"
+
+    management = NodeManagementController()
+    "Expose management as a sub-element of nodes"
+
+    # Set the flag to indicate that the requests to this resource are
+    # coming from a top-level resource
+    ports.from_nodes = True
+
+    from_chassis = False
+    """A flag to indicate if the requests to this controller are coming
+    from the top-level resource Chassis"""
 
     _custom_actions = {
         'detail': ['GET'],
         'validate': ['GET'],
     }
 
-    def __init__(self, from_chassis=False):
-        self._from_chassis = from_chassis
-
     def _get_nodes_collection(self, chassis_uuid, instance_uuid, associated,
                               maintenance, marker, limit, sort_key, sort_dir,
                               expand=False, resource_url=None):
-        if self._from_chassis and not chassis_uuid:
-            raise exception.InvalidParameterValue(_(
+        if self.from_chassis and not chassis_uuid:
+            raise exception.MissingParameterValue(_(
                   "Chassis id not specified."))
 
         limit = api_utils.validate_limit(limit)
@@ -522,10 +611,9 @@ class NodesController(rest.RestController):
             if maintenance is not None:
                 filters['maintenance'] = maintenance
 
-            nodes = pecan.request.dbapi.get_node_list(filters, limit,
-                                                      marker_obj,
-                                                      sort_key=sort_key,
-                                                      sort_dir=sort_dir)
+            nodes = objects.Node.list(pecan.request.context, limit, marker_obj,
+                                      sort_key=sort_key, sort_dir=sort_dir,
+                                      filters=filters)
 
         parameters = {'sort_key': sort_key, 'sort_dir': sort_dir}
         if associated:
@@ -543,7 +631,8 @@ class NodesController(rest.RestController):
         It returns a list with the node, or an empty list if no node is found.
         """
         try:
-            node = pecan.request.dbapi.get_node_by_instance(instance_uuid)
+            node = objects.Node.get_by_instance_uuid(pecan.request.context,
+                                                     instance_uuid)
             return [node]
         except exception.InstanceNotFound:
             return []
@@ -612,7 +701,10 @@ class NodesController(rest.RestController):
 
     @wsme_pecan.wsexpose(wtypes.text, types.uuid)
     def validate(self, node_uuid):
-        """Validate the driver interfaces."""
+        """Validate the driver interfaces.
+
+        :param node_uuid: UUID of a node.
+        """
         # check if node exists
         rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
@@ -625,7 +717,7 @@ class NodesController(rest.RestController):
 
         :param node_uuid: UUID of a node.
         """
-        if self._from_chassis:
+        if self.from_chassis:
             raise exception.OperationNotPermitted
 
         rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
@@ -637,7 +729,7 @@ class NodesController(rest.RestController):
 
         :param node: a node within the request body.
         """
-        if self._from_chassis:
+        if self.from_chassis:
             raise exception.OperationNotPermitted
 
         # NOTE(deva): get_topic_for checks if node.driver is in the hash ring
@@ -671,7 +763,7 @@ class NodesController(rest.RestController):
         :param node_uuid: UUID of a node.
         :param patch: a json PATCH document to apply to this node.
         """
-        if self._from_chassis:
+        if self.from_chassis:
             raise exception.OperationNotPermitted
 
         rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
@@ -684,7 +776,13 @@ class NodesController(rest.RestController):
             raise wsme.exc.ClientSideError(msg % node_uuid, status_code=409)
 
         try:
-            node = Node(**api_utils.apply_jsonpatch(rpc_node.as_dict(), patch))
+            node_dict = rpc_node.as_dict()
+            # NOTE(lucasagomes):
+            # 1) Remove chassis_id because it's an internal value and
+            #    not present in the API object
+            # 2) Add chassis_uuid
+            node_dict['chassis_uuid'] = node_dict.pop('chassis_id', None)
+            node = Node(**api_utils.apply_jsonpatch(node_dict, patch))
         except api_utils.JSONPATCH_EXCEPTIONS as e:
             raise exception.PatchError(patch=patch, reason=e)
 
@@ -722,7 +820,7 @@ class NodesController(rest.RestController):
 
         :param node_uuid: UUID of a node.
         """
-        if self._from_chassis:
+        if self.from_chassis:
             raise exception.OperationNotPermitted
 
         rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)

@@ -21,6 +21,7 @@ import threading
 from oslo.config import cfg
 
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic.db import api as dbapi
 
 hash_opts = [
@@ -142,4 +143,5 @@ class HashRingManager(object):
         try:
             return self.hash_rings[driver_name]
         except KeyError:
-            raise exception.DriverNotFound(driver_name=driver_name)
+            raise exception.DriverNotFound(_("The driver '%s' is unknown.") %
+                                           driver_name)

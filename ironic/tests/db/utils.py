@@ -21,7 +21,18 @@ def get_test_ipmi_info():
     return {
         "ipmi_address": "1.2.3.4",
         "ipmi_username": "admin",
-        "ipmi_password": "fake",
+        "ipmi_password": "fake"
+    }
+
+
+def get_test_ipmi_bridging_parameters():
+    return {
+        "ipmi_bridging": "dual",
+        "ipmi_local_address": "0x20",
+        "ipmi_transit_channel": "0",
+        "ipmi_transit_address": "0x82",
+        "ipmi_target_channel": "7",
+        "ipmi_target_address": "0x72"
     }
 
 
@@ -47,12 +58,17 @@ def get_test_ssh_info(auth_type='password'):
     return result
 
 
-def get_test_pxe_info():
+def get_test_pxe_driver_info():
     return {
-        "pxe_image_source": "glance://image_uuid",
         "pxe_deploy_kernel": "glance://deploy_kernel_uuid",
         "pxe_deploy_ramdisk": "glance://deploy_ramdisk_uuid",
-        "pxe_root_gb": 100,
+    }
+
+
+def get_test_pxe_instance_info():
+    return {
+        "image_source": "glance://image_uuid",
+        "root_gb": 100,
     }
 
 
@@ -65,12 +81,70 @@ def get_test_seamicro_info():
     }
 
 
+def get_test_ilo_info():
+    return {
+            "ilo_address": "1.2.3.4",
+            "ilo_username": "admin",
+            "ilo_password": "fake",
+    }
+
+
+def get_test_drac_info():
+    return {
+        "drac_host": "1.2.3.4",
+        "drac_port": "443",
+        "drac_path": "/wsman",
+        "drac_protocol": "https",
+        "drac_username": "admin",
+        "drac_password": "fake",
+    }
+
+
+def get_test_agent_instance_info():
+    return {
+        'image_source': 'fake-image',
+        'image_url': 'http://image',
+        'image_checksum': 'checksum'
+    }
+
+
+def get_test_agent_driver_info():
+    return {
+        'agent_url': 'http://127.0.0.1/foo',
+        'deploy_kernel': 'glance://deploy_kernel_uuid',
+        'deploy_ramdisk': 'glance://deploy_ramdisk_uuid',
+    }
+
+
+def get_test_iboot_info():
+    return {
+        "iboot_address": "1.2.3.4",
+        "iboot_username": "admin",
+        "iboot_password": "fake",
+    }
+
+
+def get_test_snmp_info(**kw):
+    result = {
+        "snmp_driver": kw.get("snmp_driver", "teltronix"),
+        "snmp_address": kw.get("snmp_address", "1.2.3.4"),
+        "snmp_port": kw.get("snmp_port", "161"),
+        "snmp_outlet": kw.get("snmp_outlet", "1"),
+        "snmp_version": kw.get("snmp_version", "1")
+    }
+    if result["snmp_version"] in ("1", "2c"):
+        result["snmp_community"] = kw.get("snmp_community", "public")
+    elif result["snmp_version"] == "3":
+        result["snmp_security"] = kw.get("snmp_security", "public")
+    return result
+
+
 def get_test_node(**kw):
     properties = {
         "cpu_arch": "x86_64",
-        "cpu_num": "8",
-        "storage": "1024",
-        "memory": "4096",
+        "cpus": "8",
+        "local_gb": "10",
+        "memory_mb": "4096",
     }
     fake_info = {"foo": "bar"}
     return {

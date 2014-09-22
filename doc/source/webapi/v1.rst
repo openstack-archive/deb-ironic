@@ -21,6 +21,9 @@ Drivers
 .. rest-controller:: ironic.api.controllers.v1.driver:DriversController
    :webprefix: /v1/drivers
 
+.. rest-controller:: ironic.api.controllers.v1.driver:DriverPassthruController
+   :webprefix: /v1/drivers/(driver_name)/vendor_passthru
+
 .. autotype:: ironic.api.controllers.v1.driver.DriverList
    :members:
 
@@ -31,7 +34,7 @@ Drivers
 Links
 =====
 
-.. autotype:: ironic.api.controllers.v1.link:Link
+.. autotype:: ironic.api.controllers.link.Link
    :members:
 
 
@@ -40,6 +43,9 @@ Nodes
 
 .. rest-controller:: ironic.api.controllers.v1.node:NodesController
    :webprefix: /v1/nodes
+
+.. rest-controller:: ironic.api.controllers.v1.node:NodeVendorPassthruController
+   :webprefix: /v1/nodes/(node_uuid)/vendor_passthru
 
 .. autotype:: ironic.api.controllers.v1.node.NodeCollection
    :members:
@@ -52,7 +58,10 @@ NodeStates
 ==========
 
 .. rest-controller:: ironic.api.controllers.v1.node:NodeStatesController
-   :webprefix: /v1/nodes/<uuid>/states
+   :webprefix: /v1/nodes/(node_uuid)/states
+
+.. rest-controller:: ironic.api.controllers.v1.node:NodeConsoleController
+   :webprefix: /v1/nodes/(node_uuid)/states/console
 
 .. autotype:: ironic.api.controllers.v1.node.NodeStates
    :members:
@@ -69,5 +78,12 @@ Ports
 
 .. autotype:: ironic.api.controllers.v1.port.Port
    :members:
+
+
+BootDevice
+==========
+
+.. rest-controller:: ironic.api.controllers.v1.node:BootDeviceController
+   :webprefix: /v1/nodes/(node_uuid)/management/boot_device
 
 
