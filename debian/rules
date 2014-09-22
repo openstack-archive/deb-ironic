@@ -23,6 +23,7 @@ override_dh_auto_build:
 override_dh_auto_install:
 	dh_auto_install -O--buildsystem=python_distutils
 	install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
+	sed -i 's|#connection=<None>|connection=sqlite:////var/lib/ironic/ironicdb|' $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
 	set -e && for pyvers in $(PYTHONS); do \
 		cp -rf ironic/db/sqlalchemy/alembic $(CURDIR)/debian/tmp/usr/lib/python$$pyvers/dist-packages/ironic/db/sqlalchemy ; \
 	done
