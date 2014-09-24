@@ -1,3 +1,9 @@
+ironic (2014.2~b3-2) experimental; urgency=medium
+
+  * Bumped oslo.messaging depends version to 1.4.1.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 24 Sep 2014 10:14:12 +0800
+
 ironic (2014.2~b3-1) experimental; urgency=medium
 
   * New upstream release.
