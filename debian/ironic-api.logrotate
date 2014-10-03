@@ -1,4 +1,4 @@
-/var/log/ironic/api.log {
+/var/log/ironic/ironic-api.log {
     daily
     missingok
     compress

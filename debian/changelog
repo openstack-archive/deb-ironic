@@ -1,3 +1,10 @@
+ironic (2014.2~b3-3) UNRELEASED; urgency=medium
+
+  * Now using templated init script for sysv-rc, generated systemd unit and
+    upstart jobs, using openstack-pkg-tools >= 13.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 03 Oct 2014 13:59:36 +0800
+
 ironic (2014.2~b3-2) experimental; urgency=medium
 
   * Bumped oslo.messaging depends version to 1.4.1.

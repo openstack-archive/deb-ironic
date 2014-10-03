@@ -6,12 +6,13 @@ include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
-	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc
+	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc,systemd
 
 override_dh_auto_clean:
 	dh_auto_clean -O--buildsystem=python_distutils
 	rm -f debian/ironic-common.config debian/ironic-common.postinst
 	rm -rf doc/build
+	rm -f debian/*.init debian/*.service debian/*.upstart
 
 override_dh_auto_build:
 	dh_auto_build

@@ -1,4 +1,4 @@
-/var/log/ironic/conductor.log {
+/var/log/ironic/ironic-conductor.log {
     daily
     missingok
     compress
