@@ -5,6 +5,7 @@ ironic (2014.2~rc1-1) experimental; urgency=medium
     upstart jobs, using openstack-pkg-tools >= 13.
   * Updated (build-)depends for this release.
   * Removed patch to remove intersphinx.
+  * Removed nature.css and its BSD license from debian/copyright.
 
  -- Thomas Goirand <zigo@debian.org>  Sat, 04 Oct 2014 14:00:34 +0800
 
