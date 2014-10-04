@@ -19,16 +19,23 @@
 Ironic Native IPMI power manager.
 """
 
+import os
+import tempfile
+
 from oslo.config import cfg
+from oslo.utils import excutils
 from oslo.utils import importutils
 
 from ironic.common import boot_devices
 from ironic.common import exception
-from ironic.common import i18n
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LW
 from ironic.common import states
+from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.drivers import base
+from ironic.drivers.modules import console_utils
 from ironic.openstack.common import log as logging
 
 pyghmi = importutils.try_import('pyghmi')
@@ -48,8 +55,6 @@ opts = [
                     'Recommended setting is 5 seconds.'),
     ]
 
-_LE = i18n._LE
-
 CONF = cfg.CONF
 CONF.register_opts(opts, group='ipmi')
 
@@ -59,6 +64,10 @@ REQUIRED_PROPERTIES = {'ipmi_address': _("IP of the node's BMC. Required."),
                        'ipmi_password': _("IPMI password. Required."),
                        'ipmi_username': _("IPMI username. Required.")}
 COMMON_PROPERTIES = REQUIRED_PROPERTIES
+CONSOLE_PROPERTIES = {
+    'ipmi_terminal_port': _("node's UDP port to connect to. Only required for "
+                            "console access.")
+}
 
 _BOOT_DEVICES_MAP = {
     boot_devices.DISK: 'hd',
@@ -71,7 +80,9 @@ _BOOT_DEVICES_MAP = {
 def _parse_driver_info(node):
     """Gets the bmc access info for the given node.
     :raises: MissingParameterValue when required ipmi credentials
-              are missing.
+            are missing.
+    :raises: InvalidParameterValue when the IPMI terminal port is not an
+            integer.
     """
 
     info = node.driver_info or {}
@@ -90,7 +101,23 @@ def _parse_driver_info(node):
     # get additional info
     bmc_info['uuid'] = node.uuid
 
+    # terminal port must be an integer
+    port = info.get('ipmi_terminal_port')
+    if port is not None:
+        try:
+            port = int(port)
+        except ValueError:
+            raise exception.InvalidParameterValue(_(
+                "IPMI terminal port is not an integer."))
+    bmc_info['port'] = port
+
     return bmc_info
+
+
+def _console_pwfile_path(uuid):
+    """Return the file path for storing the ipmi password."""
+    file_name = "%(uuid)s.pw" % {'uuid': uuid}
+    return os.path.join(tempfile.gettempdir(), file_name)
 
 
 def _power_on(driver_info):
@@ -103,8 +130,8 @@ def _power_on(driver_info):
              from ipmi.
     """
 
-    msg = _("IPMI power on failed for node %(node_id)s with the "
-            "following error: %(error)s")
+    msg = _LW("IPMI power on failed for node %(node_id)s with the "
+              "following error: %(error)s")
     try:
         ipmicmd = ipmi_command.Command(bmc=driver_info['address'],
                            userid=driver_info['username'],
@@ -112,14 +139,14 @@ def _power_on(driver_info):
         wait = CONF.ipmi.retry_timeout
         ret = ipmicmd.set_power('on', wait)
     except pyghmi_exception.IpmiException as e:
-        LOG.warning(msg % {'node_id': driver_info['uuid'], 'error': str(e)})
+        LOG.warning(msg, {'node_id': driver_info['uuid'], 'error': str(e)})
         raise exception.IPMIFailure(cmd=str(e))
 
     state = ret.get('powerstate')
     if state == 'on':
         return states.POWER_ON
     else:
-        LOG.warning(msg % {'node_id': driver_info['uuid'], 'error': ret})
+        LOG.warning(msg, {'node_id': driver_info['uuid'], 'error': ret})
         raise exception.PowerStateFailure(pstate=state)
 
 
@@ -133,8 +160,8 @@ def _power_off(driver_info):
              from ipmi.
     """
 
-    msg = _("IPMI power off failed for node %(node_id)s with the "
-            "following error: %(error)s")
+    msg = _LW("IPMI power off failed for node %(node_id)s with the "
+              "following error: %(error)s")
     try:
         ipmicmd = ipmi_command.Command(bmc=driver_info['address'],
                            userid=driver_info['username'],
@@ -142,7 +169,7 @@ def _power_off(driver_info):
         wait = CONF.ipmi.retry_timeout
         ret = ipmicmd.set_power('off', wait)
     except pyghmi_exception.IpmiException as e:
-        LOG.warning(msg % {'node_id': driver_info['uuid'], 'error': str(e)})
+        LOG.warning(msg, {'node_id': driver_info['uuid'], 'error': str(e)})
         raise exception.IPMIFailure(cmd=str(e))
 
     state = ret.get('powerstate')
@@ -165,8 +192,8 @@ def _reboot(driver_info):
              from ipmi.
     """
 
-    msg = _("IPMI power reboot failed for node %(node_id)s with the "
-            "following error: %(error)s")
+    msg = _LW("IPMI power reboot failed for node %(node_id)s with the "
+              "following error: %(error)s")
     try:
         ipmicmd = ipmi_command.Command(bmc=driver_info['address'],
                            userid=driver_info['username'],
@@ -200,9 +227,9 @@ def _power_status(driver_info):
                            password=driver_info['password'])
         ret = ipmicmd.get_power()
     except pyghmi_exception.IpmiException as e:
-        LOG.warning(_("IPMI get power state failed for node %(node_id)s "
-                      "with the following error: %(error)s")
-                    % {'node_id': driver_info['uuid'], 'error': str(e)})
+        LOG.warning(_LW("IPMI get power state failed for node %(node_id)s "
+                        "with the following error: %(error)s"),
+                    {'node_id': driver_info['uuid'], 'error': str(e)})
         raise exception.IPMIFailure(cmd=str(e))
 
     state = ret.get('powerstate')
@@ -214,9 +241,9 @@ def _power_status(driver_info):
         # NOTE(linggao): Do not throw an exception here because it might
         # return other valid values. It is up to the caller to decide
         # what to do.
-        LOG.warning(_("IPMI get power state for node %(node_id)s returns the  "
-                      "following details: %(detail)s")
-                    % {'node_id': driver_info['uuid'], 'detail': ret})
+        LOG.warning(_LW("IPMI get power state for node %(node_id)s returns the"
+                        " following details: %(detail)s"),
+                    {'node_id': driver_info['uuid'], 'detail': ret})
         return states.ERROR
 
 
@@ -249,11 +276,11 @@ def _get_sensors_data(driver_info):
             continue
         sensors_data.setdefault(reading.type,
             {})[reading.name] = {
-              'Sensor Reading': reading.value,
+              'Sensor Reading': '%s %s' % (reading.value, reading.units),
               'Sensor ID': reading.name,
-              'States': reading.states,
+              'States': str(reading.states),
               'Units': reading.units,
-              'Health': reading.health}
+              'Health': str(reading.health)}
 
     return sensors_data
 
@@ -443,3 +470,88 @@ class NativeIPMIManagement(base.ManagementInterface):
         """
         driver_info = _parse_driver_info(task.node)
         return _get_sensors_data(driver_info)
+
+
+class NativeIPMIShellinaboxConsole(base.ConsoleInterface):
+    """A ConsoleInterface that uses pyghmi and shellinabox."""
+
+    def get_properties(self):
+        d = COMMON_PROPERTIES.copy()
+        d.update(CONSOLE_PROPERTIES)
+        return d
+
+    def validate(self, task):
+        """Validate the Node console info.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :raises: MissingParameterValue when required IPMI credentials or
+            the IPMI terminal port are missing
+        :raises: InvalidParameterValue when the IPMI terminal port is not
+                an integer.
+        """
+        driver_info = _parse_driver_info(task.node)
+        if not driver_info['port']:
+            raise exception.MissingParameterValue(_(
+                "IPMI terminal port not supplied to the IPMI driver."))
+
+    def start_console(self, task):
+        """Start a remote console for the node.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :raises: MissingParameterValue when required ipmi credentials
+                are missing.
+        :raises: InvalidParameterValue when the IPMI terminal port is not an
+                integer.
+        :raises: ConsoleError if unable to start the console process.
+        """
+        driver_info = _parse_driver_info(task.node)
+
+        path = _console_pwfile_path(driver_info['uuid'])
+        pw_file = console_utils.make_persistent_password_file(
+                path, driver_info['password'])
+
+        console_cmd = "/:%(uid)s:%(gid)s:HOME:pyghmicons %(bmc)s" \
+                      " %(user)s" \
+                      " %(passwd_file)s" \
+                      % {'uid': os.getuid(),
+                         'gid': os.getgid(),
+                         'bmc': driver_info['address'],
+                         'user': driver_info['username'],
+                         'passwd_file': pw_file}
+        try:
+            console_utils.start_shellinabox_console(driver_info['uuid'],
+                                                    driver_info['port'],
+                                                    console_cmd)
+        except exception.ConsoleError:
+            with excutils.save_and_reraise_exception():
+                utils.unlink_without_raise(path)
+
+    def stop_console(self, task):
+        """Stop the remote console session for the node.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :raises: MissingParameterValue when required IPMI credentials or
+            the IPMI terminal port are missing
+        :raises: InvalidParameterValue when the IPMI terminal port is not
+                an integer.
+        :raises: ConsoleError if unable to stop the console process.
+        """
+        driver_info = _parse_driver_info(task.node)
+        try:
+            console_utils.stop_shellinabox_console(driver_info['uuid'])
+        finally:
+            password_file = _console_pwfile_path(driver_info['uuid'])
+            utils.unlink_without_raise(password_file)
+
+    def get_console(self, task):
+        """Get the type and connection information about the console.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :raises: MissingParameterValue when required IPMI credentials or
+            the IPMI terminal port are missing
+        :raises: InvalidParameterValue when the IPMI terminal port is not
+                an integer.
+        """
+        driver_info = _parse_driver_info(task.node)
+        url = console_utils.get_shellinabox_console_url(driver_info['port'])
+        return {'type': 'shellinabox', 'url': url}

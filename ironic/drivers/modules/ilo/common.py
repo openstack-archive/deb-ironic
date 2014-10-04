@@ -22,11 +22,13 @@ from oslo.config import cfg
 from oslo.utils import importutils
 
 from ironic.common import exception
-from ironic.common import i18n
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LI
 from ironic.common import images
 from ironic.common import swift
 from ironic.common import utils
+from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import log as logging
 
 ilo_client = importutils.try_import('proliantutils.ilo.ribcl')
@@ -56,9 +58,6 @@ CONF.register_opts(opts, group='ilo')
 
 LOG = logging.getLogger(__name__)
 
-_LE = i18n._LE
-_LI = i18n._LI
-
 REQUIRED_PROPERTIES = {
     'ilo_address': _("IP address or hostname of the iLO. Required."),
     'ilo_username': _("username for the iLO with administrator privileges. "
@@ -69,8 +68,18 @@ OPTIONAL_PROPERTIES = {
     'client_port': _("port to be used for iLO operations. Optional."),
     'client_timeout': _("timeout (in seconds) for iLO operations. Optional.")
 }
+CONSOLE_PROPERTIES = {
+    'console_port': _("node's UDP port to connect to. Only required for "
+                      "console access.")
+}
+
 COMMON_PROPERTIES = REQUIRED_PROPERTIES.copy()
 COMMON_PROPERTIES.update(OPTIONAL_PROPERTIES)
+DEFAULT_BOOT_MODE = 'LEGACY'
+
+BOOT_MODE_GENERIC_TO_ILO = {'bios': 'legacy', 'uefi': 'uefi'}
+BOOT_MODE_ILO_TO_GENERIC = dict((v, k)
+                           for (k, v) in BOOT_MODE_GENERIC_TO_ILO.items())
 
 
 def parse_driver_info(node):
@@ -108,6 +117,15 @@ def parse_driver_info(node):
             error_msgs.append(_("'%s' is not an integer.") % param)
             continue
         d_info[param] = value
+
+    for param in CONSOLE_PROPERTIES:
+        value = info.get(param)
+        if value:
+            try:
+                value = int(value)
+                d_info[param] = value
+            except ValueError:
+                error_msgs.append(_("'%s' is not an integer.") % param)
 
     if error_msgs:
         msg = (_("The following errors were encountered while parsing "
@@ -256,7 +274,7 @@ def attach_vmedia(node, device, url):
 
 
 # TODO(rameshg87): This needs to be moved to iLO's management interface.
-def set_boot_device(node, device):
+def set_boot_device(node, device, persistent=False):
     """Sets the node to boot from a device for the next boot.
 
     :param node: an ironic node object.
@@ -266,14 +284,74 @@ def set_boot_device(node, device):
     ilo_object = get_ilo_object(node)
 
     try:
-        ilo_object.set_one_time_boot(device)
+        if not persistent:
+            ilo_object.set_one_time_boot(device)
+        else:
+            ilo_object.update_persistent_boot([device])
     except ilo_client.IloError as ilo_exception:
         operation = _("Setting %s as boot device") % device
         raise exception.IloOperationError(operation=operation,
                                           error=ilo_exception)
 
-    LOG.debug(_LI("Node %(uuid)s set to boot from %(device)s."),
+    LOG.debug("Node %(uuid)s set to boot from %(device)s.",
              {'uuid': node.uuid, 'device': device})
+
+
+def set_boot_mode(node, boot_mode):
+    """Sets the node to boot using boot_mode for the next boot.
+
+    :param node: an ironic node object.
+    :param boot_mode: Next boot mode.
+    :raises: IloOperationError if setting boot mode failed.
+    """
+    ilo_object = get_ilo_object(node)
+
+    try:
+        p_boot_mode = ilo_object.get_pending_boot_mode()
+    except ilo_client.IloCommandNotSupportedError:
+        p_boot_mode = DEFAULT_BOOT_MODE
+
+    if BOOT_MODE_ILO_TO_GENERIC[p_boot_mode.lower()] == boot_mode:
+        LOG.info(_LI("Node %(uuid)s pending boot mode is %(boot_mode)s."),
+                 {'uuid': node.uuid, 'boot_mode': boot_mode})
+        return
+
+    try:
+        ilo_object.set_pending_boot_mode(
+                        BOOT_MODE_GENERIC_TO_ILO[boot_mode].upper())
+    except ilo_client.IloError as ilo_exception:
+        operation = _("Setting %s as boot mode") % boot_mode
+        raise exception.IloOperationError(operation=operation,
+                error=ilo_exception)
+
+    LOG.info(_LI("Node %(uuid)s boot mode is set to %(boot_mode)s."),
+             {'uuid': node.uuid, 'boot_mode': boot_mode})
+
+
+def update_boot_mode_capability(task):
+    """Update 'boot_mode' capability value of node's 'capabilities' property.
+
+    :param task: Task object.
+
+    """
+    ilo_object = get_ilo_object(task.node)
+
+    try:
+        p_boot_mode = ilo_object.get_pending_boot_mode()
+        if p_boot_mode == 'UNKNOWN':
+            # NOTE(faizan) ILO will return this in remote cases and mostly on
+            # the nodes which supports UEFI. Such nodes mostly comes with UEFI
+            # as default boot mode. So we will try setting bootmode to UEFI
+            # and if it fails then we fall back to BIOS boot mode.
+            ilo_object.set_pending_boot_mode('UEFI')
+            p_boot_mode = 'UEFI'
+    except ilo_client.IloCommandNotSupportedError:
+        p_boot_mode = DEFAULT_BOOT_MODE
+
+    driver_utils.rm_node_capability(task, 'boot_mode')
+
+    driver_utils.add_node_capability(task, 'boot_mode',
+        BOOT_MODE_ILO_TO_GENERIC[p_boot_mode.lower()])
 
 
 def setup_vmedia_for_boot(task, boot_iso, parameters=None):
@@ -293,7 +371,8 @@ def setup_vmedia_for_boot(task, boot_iso, parameters=None):
     :raises: ImageCreationFailed, if it failed while creating the floppy image.
     :raises: IloOperationError, if attaching virtual media failed.
     """
-    LOG.info("Setting up node %s to boot from virtual media", task.node.uuid)
+    LOG.info(_LI("Setting up node %s to boot from virtual media"),
+             task.node.uuid)
 
     if parameters:
         floppy_image_temp_url = _prepare_floppy_image(task, parameters)

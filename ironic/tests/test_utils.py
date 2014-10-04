@@ -150,6 +150,30 @@ grep foo
             os.unlink(tmpfilename)
             os.unlink(tmpfilename2)
 
+    @mock.patch.object(processutils, 'execute')
+    @mock.patch.object(os.environ, 'copy', return_value={})
+    def test_execute_use_standard_locale_no_env_variables(self, env_mock,
+                                                          execute_mock):
+        utils.execute('foo', use_standard_locale=True)
+        execute_mock.assert_called_once_with('foo',
+                                             env_variables={'LC_ALL': 'C'})
+
+    @mock.patch.object(processutils, 'execute')
+    def test_execute_use_standard_locale_with_env_variables(self,
+                                                            execute_mock):
+        utils.execute('foo', use_standard_locale=True,
+                      env_variables={'foo': 'bar'})
+        execute_mock.assert_called_once_with('foo',
+                                             env_variables={'LC_ALL': 'C',
+                                                            'foo': 'bar'})
+
+    @mock.patch.object(processutils, 'execute')
+    def test_execute_not_use_standard_locale(self, execute_mock):
+        utils.execute('foo', use_standard_locale=False,
+                      env_variables={'foo': 'bar'})
+        execute_mock.assert_called_once_with('foo',
+                                             env_variables={'foo': 'bar'})
+
     def test_execute_get_root_helper(self):
         with mock.patch.object(processutils, 'execute') as execute_mock:
             helper = utils._get_root_helper()
@@ -224,7 +248,7 @@ class GenericUtilsTestCase(base.TestCase):
                 self.assertTrue(self.reload_called)
                 getmtime_mock.assert_called_once_with(mock.ANY)
                 open_mock.assert_called_once_with(mock.ANY)
-                fake_file.read.called_once_with()
+                fake_file.read.assert_called_once_with()
                 fake_context_manager.__exit__.assert_called_once_with(mock.ANY,
                                                                       mock.ANY,
                                                                       mock.ANY)
@@ -349,33 +373,53 @@ class GenericUtilsTestCase(base.TestCase):
 
 class MkfsTestCase(base.TestCase):
 
-    def test_mkfs(self):
-        with mock.patch.object(utils, 'execute') as execute_mock:
-            utils.mkfs('ext4', '/my/block/dev')
-            utils.mkfs('msdos', '/my/msdos/block/dev')
-            utils.mkfs('swap', '/my/swap/block/dev')
+    @mock.patch.object(utils, 'execute')
+    def test_mkfs(self, execute_mock):
+        utils.mkfs('ext4', '/my/block/dev')
+        utils.mkfs('msdos', '/my/msdos/block/dev')
+        utils.mkfs('swap', '/my/swap/block/dev')
 
-            expected = [mock.call('mkfs', '-t', 'ext4', '-F', '/my/block/dev',
-                                  run_as_root=True),
-                        mock.call('mkfs', '-t', 'msdos', '/my/msdos/block/dev',
-                                  run_as_root=True),
-                        mock.call('mkswap', '/my/swap/block/dev',
-                                  run_as_root=True)]
-            self.assertEqual(expected, execute_mock.call_args_list)
+        expected = [mock.call('mkfs', '-t', 'ext4', '-F', '/my/block/dev',
+                              run_as_root=True,
+                              use_standard_locale=True),
+                    mock.call('mkfs', '-t', 'msdos', '/my/msdos/block/dev',
+                              run_as_root=True,
+                              use_standard_locale=True),
+                    mock.call('mkswap', '/my/swap/block/dev',
+                              run_as_root=True,
+                              use_standard_locale=True)]
+        self.assertEqual(expected, execute_mock.call_args_list)
 
-    def test_mkfs_with_label(self):
-        with mock.patch.object(utils, 'execute') as execute_mock:
-            utils.mkfs('ext4', '/my/block/dev', 'ext4-vol')
-            utils.mkfs('msdos', '/my/msdos/block/dev', 'msdos-vol')
-            utils.mkfs('swap', '/my/swap/block/dev', 'swap-vol')
+    @mock.patch.object(utils, 'execute')
+    def test_mkfs_with_label(self, execute_mock):
+        utils.mkfs('ext4', '/my/block/dev', 'ext4-vol')
+        utils.mkfs('msdos', '/my/msdos/block/dev', 'msdos-vol')
+        utils.mkfs('swap', '/my/swap/block/dev', 'swap-vol')
 
-            expected = [mock.call('mkfs', '-t', 'ext4', '-F', '-L', 'ext4-vol',
-                                  '/my/block/dev', run_as_root=True),
-                        mock.call('mkfs', '-t', 'msdos', '-n', 'msdos-vol',
-                                  '/my/msdos/block/dev', run_as_root=True),
-                        mock.call('mkswap', '-L', 'swap-vol',
-                                  '/my/swap/block/dev', run_as_root=True)]
-            self.assertEqual(expected, execute_mock.call_args_list)
+        expected = [mock.call('mkfs', '-t', 'ext4', '-F', '-L', 'ext4-vol',
+                              '/my/block/dev', run_as_root=True,
+                              use_standard_locale=True),
+                    mock.call('mkfs', '-t', 'msdos', '-n', 'msdos-vol',
+                              '/my/msdos/block/dev', run_as_root=True,
+                              use_standard_locale=True),
+                    mock.call('mkswap', '-L', 'swap-vol',
+                              '/my/swap/block/dev', run_as_root=True,
+                              use_standard_locale=True)]
+        self.assertEqual(expected, execute_mock.call_args_list)
+
+    @mock.patch.object(utils, 'execute',
+                       side_effect=processutils.ProcessExecutionError(
+                           stderr=os.strerror(errno.ENOENT)))
+    def test_mkfs_with_unsupported_fs(self, execute_mock):
+        self.assertRaises(exception.FileSystemNotSupported,
+                          utils.mkfs, 'foo', '/my/block/dev')
+
+    @mock.patch.object(utils, 'execute',
+                       side_effect=processutils.ProcessExecutionError(
+                           stderr='fake'))
+    def test_mkfs_with_unexpected_error(self, execute_mock):
+        self.assertRaises(processutils.ProcessExecutionError, utils.mkfs,
+                          'ext4', '/my/block/dev', 'ext4-vol')
 
 
 class IntLikeTestCase(base.TestCase):

@@ -13,15 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import datetime
-
 import mock
-from oslo.utils import timeutils
 from testtools.matchers import HasLength
 
 from ironic.common import exception
 from ironic.db import api as db_api
-from ironic.db.sqlalchemy import models
 from ironic import objects
 from ironic.tests.db import base
 from ironic.tests.db import utils
@@ -40,9 +36,10 @@ class TestNodeObject(base.DbTestCase):
                                autospec=True) as mock_get_node:
             mock_get_node.return_value = self.fake_node
 
-            objects.Node.get(self.context, node_id)
+            node = objects.Node.get(self.context, node_id)
 
             mock_get_node.assert_called_once_with(node_id)
+            self.assertEqual(self.context, node._context)
 
     def test_get_by_uuid(self):
         uuid = self.fake_node['uuid']
@@ -50,9 +47,10 @@ class TestNodeObject(base.DbTestCase):
                                autospec=True) as mock_get_node:
             mock_get_node.return_value = self.fake_node
 
-            objects.Node.get(self.context, uuid)
+            node = objects.Node.get(self.context, uuid)
 
             mock_get_node.assert_called_once_with(uuid)
+            self.assertEqual(self.context, node._context)
 
     def test_get_bad_id_and_uuid(self):
         self.assertRaises(exception.InvalidIdentity,
@@ -73,6 +71,7 @@ class TestNodeObject(base.DbTestCase):
                 mock_get_node.assert_called_once_with(uuid)
                 mock_update_node.assert_called_once_with(
                         uuid, {'properties': {"fake": "property"}})
+                self.assertEqual(self.context, n._context)
 
     def test_refresh(self):
         uuid = self.fake_node['uuid']
@@ -87,53 +86,7 @@ class TestNodeObject(base.DbTestCase):
             n.refresh()
             self.assertEqual({"fake": "second"}, n.properties)
             self.assertEqual(expected, mock_get_node.call_args_list)
-
-    def test_objectify(self):
-        def _get_db_node():
-            n = models.Node()
-            n.update(self.fake_node)
-            return n
-
-        @objects.objectify(objects.Node)
-        def _convert_db_node():
-            return _get_db_node()
-
-        self.assertIsInstance(_get_db_node(), models.Node)
-        self.assertIsInstance(_convert_db_node(), objects.Node)
-
-    def test_objectify_deserialize_provision_updated_at(self):
-        dt = timeutils.isotime(datetime.datetime(2000, 1, 1, 0, 0))
-        self.fake_node['provision_updated_at'] = dt
-
-        def _get_db_node():
-            n = models.Node()
-            n.update(self.fake_node)
-            return n
-
-        @objects.objectify(objects.Node)
-        def _convert_db_node():
-            return _get_db_node()
-
-        self.assertIsInstance(_get_db_node(), models.Node)
-        self.assertIsInstance(_convert_db_node(), objects.Node)
-
-    def test_objectify_many(self):
-        def _get_db_nodes():
-            nodes = []
-            for i in range(5):
-                n = models.Node()
-                n.update(self.fake_node)
-                nodes.append(n)
-            return nodes
-
-        @objects.objectify(objects.Node)
-        def _convert_db_nodes():
-            return _get_db_nodes()
-
-        for n in _get_db_nodes():
-            self.assertIsInstance(n, models.Node)
-        for n in _convert_db_nodes():
-            self.assertIsInstance(n, objects.Node)
+            self.assertEqual(self.context, n._context)
 
     def test_list(self):
         with mock.patch.object(self.dbapi, 'get_node_list',
@@ -142,3 +95,41 @@ class TestNodeObject(base.DbTestCase):
             nodes = objects.Node.list(self.context)
             self.assertThat(nodes, HasLength(1))
             self.assertIsInstance(nodes[0], objects.Node)
+            self.assertEqual(self.context, nodes[0]._context)
+
+    def test_reserve(self):
+        with mock.patch.object(self.dbapi, 'reserve_node',
+                               autospec=True) as mock_reserve:
+            mock_reserve.return_value = self.fake_node
+            node_id = self.fake_node['id']
+            fake_tag = 'fake-tag'
+            node = objects.Node.reserve(self.context, fake_tag, node_id)
+            self.assertIsInstance(node, objects.Node)
+            mock_reserve.assert_called_once_with(fake_tag, node_id)
+            self.assertEqual(self.context, node._context)
+
+    def test_reserve_node_not_found(self):
+        with mock.patch.object(self.dbapi, 'reserve_node',
+                               autospec=True) as mock_reserve:
+            node_id = 'non-existent'
+            mock_reserve.side_effect = exception.NodeNotFound(node=node_id)
+            self.assertRaises(exception.NodeNotFound,
+                              objects.Node.reserve, self.context, 'fake-tag',
+                              node_id)
+
+    def test_release(self):
+        with mock.patch.object(self.dbapi, 'release_node',
+                               autospec=True) as mock_release:
+            node_id = self.fake_node['id']
+            fake_tag = 'fake-tag'
+            objects.Node.release(self.context, fake_tag, node_id)
+            mock_release.assert_called_once_with(fake_tag, node_id)
+
+    def test_release_node_not_found(self):
+        with mock.patch.object(self.dbapi, 'release_node',
+                               autospec=True) as mock_release:
+            node_id = 'non-existent'
+            mock_release.side_effect = exception.NodeNotFound(node=node_id)
+            self.assertRaises(exception.NodeNotFound,
+                              objects.Node.release, self.context,
+                              'fake-tag', node_id)

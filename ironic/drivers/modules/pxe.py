@@ -24,8 +24,10 @@ from oslo.config import cfg
 
 from ironic.common import dhcp_factory
 from ironic.common import exception
-from ironic.common import i18n
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LI
+from ironic.common.i18n import _LW
 from ironic.common import image_service as service
 from ironic.common import paths
 from ironic.common import pxe_utils
@@ -37,12 +39,10 @@ from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
 from ironic.drivers.modules import iscsi_deploy
+from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import fileutils
 from ironic.openstack.common import log as logging
 
-
-_LE = i18n._LE
-_LW = i18n._LW
 
 pxe_opts = [
     cfg.StrOpt('pxe_config_template',
@@ -87,9 +87,6 @@ pxe_opts = [
     ]
 
 LOG = logging.getLogger(__name__)
-
-_LE = i18n._LE
-_LI = i18n._LI
 
 CONF = cfg.CONF
 CONF.register_opts(pxe_opts, group='pxe')
@@ -182,8 +179,7 @@ def _build_pxe_config_options(node, pxe_info, ctx):
         'tftp_server': CONF.pxe.tftp_server
     }
 
-    deploy_ramdisk_options = iscsi_deploy.build_deploy_ramdisk_options(node,
-            ctx)
+    deploy_ramdisk_options = iscsi_deploy.build_deploy_ramdisk_options(node)
     pxe_options.update(deploy_ramdisk_options)
     return pxe_options
 
@@ -237,7 +233,7 @@ def _get_image_info(node, ctx):
         for label in labels:
             i_info[label] = str(iproperties[label + '_id']).split('/')[-1]
         node.instance_info = i_info
-        node.save(ctx)
+        node.save()
 
     for label in labels:
         image_info[label] = (
@@ -277,8 +273,9 @@ class PXEDeploy(base.DeployInterface):
         :raises: InvalidParameterValue.
         :raises: MissingParameterValue
         """
+
         # Check the boot_mode capability parameter value.
-        pxe_utils.validate_boot_mode_capability(task.node)
+        driver_utils.validate_boot_mode_capability(task.node)
 
         if CONF.pxe.ipxe_enabled:
             if not CONF.pxe.http_url or not CONF.pxe.http_root:
@@ -286,7 +283,8 @@ class PXEDeploy(base.DeployInterface):
                     "iPXE boot is enabled but no HTTP URL or HTTP "
                     "root was specified."))
             # iPXE and UEFI should not be configured together.
-            if pxe_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
+            if driver_utils.get_node_capability(task.node,
+                                                'boot_mode') == 'uefi':
                 LOG.error(_LE("UEFI boot mode is not supported with "
                               "iPXE boot enabled."))
                 raise exception.InvalidParameterValue(_(
@@ -323,7 +321,7 @@ class PXEDeploy(base.DeployInterface):
         #               to deploy ramdisk
         _create_token_file(task)
         dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
-        provider = dhcp_factory.DHCPFactory(token=task.context.auth_token)
+        provider = dhcp_factory.DHCPFactory()
         provider.update_dhcp(task, dhcp_opts)
 
         # NOTE(faizan): Under UEFI boot mode, setting of boot device may differ
@@ -334,7 +332,8 @@ class PXEDeploy(base.DeployInterface):
         try:
             manager_utils.node_set_boot_device(task, 'pxe', persistent=True)
         except exception.IPMIFailure:
-            if pxe_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
+            if driver_utils.get_node_capability(task.node,
+                                                'boot_mode') == 'uefi':
                 LOG.warning(_LW("ipmitool is unable to set boot device while "
                                 "the node is in UEFI boot mode."
                                 "Please set the boot device manually."))
@@ -377,7 +376,7 @@ class PXEDeploy(base.DeployInterface):
         pxe_options = _build_pxe_config_options(task.node, pxe_info,
                                                 task.context)
 
-        if pxe_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
+        if driver_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
             pxe_config_template = CONF.pxe.uefi_pxe_config_template
         else:
             pxe_config_template = CONF.pxe.pxe_config_template
@@ -396,10 +395,17 @@ class PXEDeploy(base.DeployInterface):
         :param task: a TaskManager instance containing the node to act on.
         """
         node = task.node
-        pxe_info = _get_image_info(node, task.context)
-        for label in pxe_info:
-            path = pxe_info[label][1]
-            utils.unlink_without_raise(path)
+        try:
+            pxe_info = _get_image_info(node, task.context)
+        except exception.MissingParameterValue as e:
+            LOG.warning(_LW('Could not get image info to clean up images '
+                            'for node %(node)s: %(err)s'),
+                        {'node': node.uuid, 'err': e})
+        else:
+            for label in pxe_info:
+                path = pxe_info[label][1]
+                utils.unlink_without_raise(path)
+
         TFTPImageCache().clean_up()
 
         pxe_utils.clean_up_pxe_config(task)
@@ -409,7 +415,7 @@ class PXEDeploy(base.DeployInterface):
 
     def take_over(self, task):
         dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
-        provider = dhcp_factory.DHCPFactory(token=task.context.auth_token)
+        provider = dhcp_factory.DHCPFactory()
         provider.update_dhcp(task, dhcp_opts)
 
 
@@ -465,14 +471,14 @@ class VendorPassthru(base.VendorInterface):
         try:
             pxe_config_path = pxe_utils.get_pxe_config_file_path(node.uuid)
             deploy_utils.switch_pxe_config(pxe_config_path, root_uuid,
-                            pxe_utils.get_node_capability(node, 'boot_mode'))
+                          driver_utils.get_node_capability(node, 'boot_mode'))
 
             deploy_utils.notify_deploy_complete(kwargs['address'])
 
             LOG.info(_LI('Deployment to node %s done'), node.uuid)
             node.provision_state = states.ACTIVE
             node.target_provision_state = states.NOSTATE
-            node.save(task.context)
+            node.save()
         except Exception as e:
 
             LOG.error(_LE('Deploy failed for instance %(instance)s. '

@@ -19,6 +19,7 @@ from oslo.config import cfg
 
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common.i18n import _LW
 from ironic.common import utils
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import loopingcall
@@ -129,8 +130,8 @@ class DiskPartitioner(object):
                     pids_match = re.search(self._fuser_pids_re, out)
                     pids[0] = pids_match.group()
         except processutils.ProcessExecutionError as exc:
-            LOG.warning(_('Failed to check the device %(device)s with fuser: '
-                          ' %(err)s') % {'device': self._device, 'err': exc})
+            LOG.warning(_LW('Failed to check the device %(device)s with fuser:'
+                            ' %(err)s'), {'device': self._device, 'err': exc})
 
     def commit(self):
         """Write to the disk."""
@@ -186,7 +187,8 @@ def list_partitions(device):
               start, end, size (in MiB), filesystem, flags
     """
     output = utils.execute(
-        'parted', '-s', '-m', device, 'unit', 'MiB', 'print')[0]
+        'parted', '-s', '-m', device, 'unit', 'MiB', 'print',
+        use_standard_locale=True)[0]
     lines = [line for line in output.split('\n') if line.strip()][2:]
     # Example of line: 1:1.00MiB:501MiB:500MiB:ext4::boot
     fields = ('start', 'end', 'size', 'filesystem', 'flags')
@@ -194,9 +196,9 @@ def list_partitions(device):
     for line in lines:
         match = _PARTED_PRINT_RE.match(line)
         if match is None:
-            LOG.warn(_("Partition information from parted for device "
-                       "%(device)s does not match "
-                       "expected format: %(line)s"),
+            LOG.warn(_LW("Partition information from parted for device "
+                         "%(device)s does not match "
+                         "expected format: %(line)s"),
                      dict(device=device, line=line))
             continue
         # Cast int fields to ints (some are floats and we round them down)

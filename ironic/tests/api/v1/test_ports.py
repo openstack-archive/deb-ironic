@@ -26,7 +26,6 @@ from testtools.matchers import HasLength
 from ironic.common import exception
 from ironic.common import utils
 from ironic.conductor import rpcapi
-from ironic.openstack.common import context
 from ironic.tests.api import base
 from ironic.tests.api import utils as apiutils
 from ironic.tests.db import utils as dbutils
@@ -47,7 +46,7 @@ class TestListPorts(base.FunctionalTest):
 
     def setUp(self):
         super(TestListPorts, self).setUp()
-        self.node = obj_utils.create_test_node(context.get_admin_context())
+        self.node = obj_utils.create_test_node(self.context)
 
     def test_empty(self):
         data = self.get_json('/ports')
@@ -173,7 +172,7 @@ class TestPatch(base.FunctionalTest):
 
     def setUp(self):
         super(TestPatch, self).setUp()
-        self.node = obj_utils.create_test_node(context.get_admin_context())
+        self.node = obj_utils.create_test_node(self.context)
         self.port = obj_utils.create_test_port(self.context)
 
         p = mock.patch.object(rpcapi.ConductorAPI, 'get_topic_for')
@@ -316,7 +315,7 @@ class TestPatch(base.FunctionalTest):
     def test_replace_multi(self, mock_upd):
         extra = {"foo1": "bar1", "foo2": "bar2", "foo3": "bar3"}
         self.port.extra = extra
-        self.port.save(context.get_admin_context())
+        self.port.save()
 
         # mutate extra so we replace all of them
         extra = dict((k, extra[k] + 'x') for k in extra.keys())
@@ -339,7 +338,7 @@ class TestPatch(base.FunctionalTest):
     def test_remove_multi(self, mock_upd):
         extra = {"foo1": "bar1", "foo2": "bar2", "foo3": "bar3"}
         self.port.extra = extra
-        self.port.save(context.get_admin_context())
+        self.port.save()
 
         # Removing one item from the collection
         extra.pop('foo1')
@@ -472,7 +471,7 @@ class TestPost(base.FunctionalTest):
 
     def setUp(self):
         super(TestPost, self).setUp()
-        self.node = obj_utils.create_test_node(context.get_admin_context())
+        self.node = obj_utils.create_test_node(self.context)
 
     @mock.patch.object(timeutils, 'utcnow')
     def test_create_port(self, mock_utcnow):
@@ -604,22 +603,28 @@ class TestDelete(base.FunctionalTest):
 
     def setUp(self):
         super(TestDelete, self).setUp()
-        self.node = obj_utils.create_test_node(context.get_admin_context())
-        obj_utils.create_test_port(self.context)
+        self.node = obj_utils.create_test_node(self.context)
+        self.port = obj_utils.create_test_port(self.context)
 
     def test_delete_port_byid(self):
-        pdict = dbutils.get_test_port()
-        self.delete('/ports/%s' % pdict['uuid'])
-        response = self.get_json('/ports/%s' % pdict['uuid'],
+        self.delete('/ports/%s' % self.port.uuid)
+        response = self.get_json('/ports/%s' % self.port.uuid,
                                  expect_errors=True)
         self.assertEqual(404, response.status_int)
         self.assertEqual('application/json', response.content_type)
-        self.assertTrue(response.json['error_message'])
+        self.assertIn(self.port.uuid, response.json['error_message'])
 
     def test_delete_port_byaddress(self):
-        pdict = dbutils.get_test_port()
-        response = self.delete('/ports/%s' % pdict['address'],
+        response = self.delete('/ports/%s' % self.port.address,
                                expect_errors=True)
         self.assertEqual(400, response.status_int)
         self.assertEqual('application/json', response.content_type)
-        self.assertIn(pdict['address'], response.json['error_message'])
+        self.assertIn(self.port.address, response.json['error_message'])
+
+    def test_delete_port_node_locked(self):
+        self.node.reserve(self.context, 'fake', self.node.uuid)
+        response = self.delete('/ports/%s' % self.port.uuid,
+                               expect_errors=True)
+        self.assertEqual(409, response.status_int)
+        self.assertEqual('application/json', response.content_type)
+        self.assertIn(self.node.uuid, response.json['error_message'])

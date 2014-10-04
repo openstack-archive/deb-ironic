@@ -234,7 +234,7 @@ configured for your needs.
 
 #. Create the Bare Metal Service database tables::
 
-    ironic-dbsync --config-file /etc/ironic/ironic.conf
+    ironic-dbsync --config-file /etc/ironic/ironic.conf create_schema
 
 #. Restart the Bare Metal Service::
 
@@ -260,7 +260,7 @@ Compute Service's controller nodes and compute nodes.*
     # vmwareapi.VMwareESXDriver, vmwareapi.VMwareVCDriver (string
     # value)
     #compute_driver=<None>
-    compute_driver=ironic.nova.virt.ironic.IronicDriver
+    compute_driver=nova.virt.ironic.IronicDriver
 
     # Firewall driver (defaults to hypervisor specific iptables
     # driver) (string value)
@@ -269,7 +269,7 @@ Compute Service's controller nodes and compute nodes.*
 
     # The scheduler host manager class to use (string value)
     #scheduler_host_manager=nova.scheduler.host_manager.HostManager
-    scheduler_host_manager=ironic.nova.scheduler.ironic_host_manager.IronicHostManager
+    scheduler_host_manager=nova.scheduler.ironic_host_manager.IronicHostManager
 
     # Virtual ram to physical ram allocation ratio which affects
     # all ram filters. This configuration specifies a global ratio
@@ -465,8 +465,9 @@ Note that certain distros, notably Mac OS X and SLES, install ``openipmi``
 instead of ``ipmitool`` by default. THIS DRIVER IS NOT COMPATIBLE WITH
 ``openipmi`` AS IT RELIES ON ERROR HANDLING OPTIONS NOT PROVIDED BY THIS TOOL.
 
-Ironic supports sending IPMI sensor data to Ceilometer with pxe_ipmitool
-driver. By default, support for sending IPMI sensor data to Ceilometer is
+Ironic supports sending IPMI sensor data to Ceilometer with pxe_ipmitool, 
+pxe_ipminative, agent_ipmitool, agent_pyghmi, agent_ilo, iscsi_ilo and pxe_ilo
+drivers. By default, support for sending IPMI sensor data to Ceilometer is 
 disabled. If you want to enable it set the following options in the
 ``conductor`` section of ``ironic.conf``:
 

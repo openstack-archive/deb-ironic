@@ -20,6 +20,7 @@ import tempfile
 
 from oslo.config import cfg
 
+from ironic.common import exception
 from ironic.common import images
 from ironic.common import states
 from ironic.common import swift
@@ -32,10 +33,11 @@ from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules.ilo import common as ilo_common
 from ironic.drivers.modules.ilo import deploy as ilo_deploy
 from ironic.drivers.modules import iscsi_deploy
-from ironic.openstack.common import context
+from ironic.drivers.modules import pxe
+from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import importutils
-from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
+from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
 from ironic.tests.objects import utils as obj_utils
 
@@ -46,12 +48,11 @@ INFO_DICT = db_utils.get_test_ilo_info()
 CONF = cfg.CONF
 
 
-class IloDeployPrivateMethodsTestCase(base.TestCase):
+class IloDeployPrivateMethodsTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IloDeployPrivateMethodsTestCase, self).setUp()
         self.dbapi = dbapi.get_instance()
-        self.context = context.get_admin_context()
         mgr_utils.mock_the_extension_manager(driver="iscsi_ilo")
         self.node = obj_utils.create_test_node(self.context,
                 driver='iscsi_ilo', driver_info=INFO_DICT)
@@ -76,6 +77,24 @@ class IloDeployPrivateMethodsTestCase(base.TestCase):
                 'boot_iso')
             boot_iso_expected = 'glance:boot-iso-uuid'
             self.assertEqual(boot_iso_expected, boot_iso_actual)
+
+    @mock.patch.object(driver_utils, 'get_node_capability')
+    @mock.patch.object(images, 'get_glance_image_property')
+    @mock.patch.object(ilo_deploy, '_parse_deploy_info')
+    def test__get_boot_iso_uefi_no_glance_image(self, deploy_info_mock,
+            image_prop_mock, get_node_cap_mock):
+        deploy_info_mock.return_value = {'image_source': 'image-uuid'}
+        image_prop_mock.return_value = None
+        get_node_cap_mock.return_value = 'uefi'
+
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            boot_iso_result = ilo_deploy._get_boot_iso(task, 'root-uuid')
+            deploy_info_mock.assert_called_once_with(task.node)
+            image_prop_mock.assert_called_once_with(task.context, 'image-uuid',
+                'boot_iso')
+            get_node_cap_mock.assert_called_once_with(task.node, 'boot_mode')
+            self.assertIsNone(boot_iso_result)
 
     @mock.patch.object(tempfile, 'NamedTemporaryFile')
     @mock.patch.object(images, 'create_boot_iso')
@@ -175,21 +194,21 @@ class IloDeployPrivateMethodsTestCase(base.TestCase):
             node_power_action_mock.assert_called_once_with(task, states.REBOOT)
 
 
-class IloVirtualMediaIscsiDeployTestCase(base.TestCase):
+class IloVirtualMediaIscsiDeployTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IloVirtualMediaIscsiDeployTestCase, self).setUp()
         self.dbapi = dbapi.get_instance()
-        self.context = context.get_admin_context()
         mgr_utils.mock_the_extension_manager(driver="iscsi_ilo")
         self.node = obj_utils.create_test_node(self.context,
                 driver='iscsi_ilo', driver_info=INFO_DICT)
 
+    @mock.patch.object(driver_utils, 'validate_boot_mode_capability')
     @mock.patch.object(iscsi_deploy, 'validate_glance_image_properties')
     @mock.patch.object(ilo_deploy, '_parse_deploy_info')
     @mock.patch.object(iscsi_deploy, 'validate')
     def test_validate(self, validate_mock, deploy_info_mock,
-                      validate_prop_mock):
+                      validate_prop_mock, validate_boot_mode_mock):
         d_info = {'a': 'b'}
         deploy_info_mock.return_value = d_info
         with task_manager.acquire(self.context, self.node.uuid,
@@ -199,6 +218,7 @@ class IloVirtualMediaIscsiDeployTestCase(base.TestCase):
             deploy_info_mock.assert_called_once_with(task.node)
             validate_prop_mock.assert_called_once_with(task.context,
                     d_info, ['kernel_id', 'ramdisk_id'])
+            validate_boot_mode_mock.assert_called_once_with(task.node)
 
     @mock.patch.object(ilo_deploy, '_reboot_into')
     @mock.patch.object(ilo_deploy, '_get_single_nic_with_vif_port_id')
@@ -224,7 +244,7 @@ class IloVirtualMediaIscsiDeployTestCase(base.TestCase):
                     task.node)
             check_image_size_mock.assert_called_once_with(task)
             expected_ramdisk_opts = {'a': 'b', 'BOOTIF': '12:34:56:78:90:ab'}
-            build_opts_mock.assert_called_once_with(task.node, task.context)
+            build_opts_mock.assert_called_once_with(task.node)
             get_nic_mock.assert_called_once_with(task)
             reboot_into_mock.assert_called_once_with(task, 'glance:deploy-iso',
                                                      expected_ramdisk_opts)
@@ -250,12 +270,11 @@ class IloVirtualMediaIscsiDeployTestCase(base.TestCase):
             clean_up_boot_mock.assert_called_once_with(task.node)
 
 
-class IloVirtualMediaAgentDeployTestCase(base.TestCase):
+class IloVirtualMediaAgentDeployTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IloVirtualMediaAgentDeployTestCase, self).setUp()
         self.dbapi = dbapi.get_instance()
-        self.context = context.get_admin_context()
         mgr_utils.mock_the_extension_manager(driver="agent_ilo")
         self.node = obj_utils.create_test_node(self.context,
                 driver='agent_ilo', driver_info=INFO_DICT)
@@ -278,7 +297,7 @@ class IloVirtualMediaAgentDeployTestCase(base.TestCase):
 
             returned_state = task.driver.deploy.deploy(task)
 
-            build_options_mock.assert_called_once_with()
+            build_options_mock.assert_called_once_with(task.node)
             reboot_into_mock.assert_called_once_with(task,
                                                      'glance:deploy-iso-uuid',
                                                      deploy_opts)
@@ -303,12 +322,11 @@ class IloVirtualMediaAgentDeployTestCase(base.TestCase):
             self.assertEqual(deploy_opts, task.node.instance_info)
 
 
-class VendorPassthruTestCase(base.TestCase):
+class VendorPassthruTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(VendorPassthruTestCase, self).setUp()
         self.dbapi = dbapi.get_instance()
-        self.context = context.get_admin_context()
         mgr_utils.mock_the_extension_manager(driver="iscsi_ilo")
         self.node = obj_utils.create_test_node(self.context,
                 driver='iscsi_ilo', driver_info=INFO_DICT)
@@ -369,3 +387,107 @@ class VendorPassthruTestCase(base.TestCase):
 
             cleanup_vmedia_boot_mock.assert_called_once_with(task)
             continue_deploy_mock.assert_called_once_with(task, **kwargs)
+
+
+class IloPXEDeployTestCase(db_base.DbTestCase):
+
+    def setUp(self):
+        super(IloPXEDeployTestCase, self).setUp()
+        self.dbapi = dbapi.get_instance()
+        mgr_utils.mock_the_extension_manager(driver="pxe_ilo")
+        self.node = obj_utils.create_test_node(self.context,
+                driver='pxe_ilo', driver_info=INFO_DICT)
+
+    @mock.patch.object(pxe.PXEDeploy, 'validate')
+    @mock.patch.object(driver_utils, 'validate_boot_mode_capability')
+    def test_validate(self, boot_mode_mock, pxe_validate_mock):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.driver.deploy.validate(task)
+            boot_mode_mock.assert_called_once_with(task.node)
+            pxe_validate_mock.assert_called_once_with(task)
+
+    @mock.patch.object(pxe.PXEDeploy, 'prepare')
+    @mock.patch.object(ilo_common, 'set_boot_mode')
+    @mock.patch.object(driver_utils, 'get_node_capability')
+    def test_prepare(self, node_capability_mock,
+                     set_boot_mode_mock, pxe_prepare_mock):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            node_capability_mock.return_value = 'uefi'
+            task.driver.deploy.prepare(task)
+            node_capability_mock.assert_called_once_with(task.node,
+                                                         'boot_mode')
+            set_boot_mode_mock.assert_called_once_with(task.node, 'uefi')
+            pxe_prepare_mock.assert_called_once_with(task)
+
+    @mock.patch.object(pxe.PXEDeploy, 'prepare')
+    @mock.patch.object(ilo_common, 'update_boot_mode_capability')
+    @mock.patch.object(driver_utils, 'get_node_capability')
+    def test_prepare_boot_mode_doesnt_exist(self, node_capability_mock,
+                                            update_capability_mock,
+                                            pxe_prepare_mock):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            node_capability_mock.return_value = None
+            task.driver.deploy.prepare(task)
+            update_capability_mock.assert_called_once_with(task)
+            pxe_prepare_mock.assert_called_once_with(task)
+
+    @mock.patch.object(pxe.PXEDeploy, 'deploy')
+    @mock.patch.object(ilo_common, 'set_boot_device')
+    def test_deploy_boot_mode_exists(self, set_persistent_mock,
+                                     pxe_deploy_mock):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.driver.deploy.deploy(task)
+            set_persistent_mock.assert_called_with(task.node, 'NETWORK', False)
+            pxe_deploy_mock.assert_called_once_with(task)
+
+
+class IloManagementTestCase(db_base.DbTestCase):
+
+    def setUp(self):
+        super(IloManagementTestCase, self).setUp()
+        self.dbapi = dbapi.get_instance()
+        mgr_utils.mock_the_extension_manager(driver="pxe_ilo")
+        self.node = obj_utils.create_test_node(self.context,
+                driver='pxe_ilo', driver_info=INFO_DICT)
+
+    @mock.patch.object(ilo_common, 'set_boot_device')
+    def test_set_boot_device_ok(self, set_persistent_mock):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.driver.management.set_boot_device(task, 'pxe', True)
+            set_persistent_mock.assert_called_once_with(task.node,
+                                                           'NETWORK', True)
+
+    @mock.patch.object(ilo_common, 'set_boot_device')
+    def test_set_boot_device_invalid_device(self, set_persistent_mock):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            self.assertRaises(exception.InvalidParameterValue,
+                    task.driver.management.set_boot_device,
+                    task, 'fake-device')
+
+
+class IloPXEVendorPassthruTestCase(db_base.DbTestCase):
+
+    def setUp(self):
+        super(IloPXEVendorPassthruTestCase, self).setUp()
+        self.dbapi = dbapi.get_instance()
+        mgr_utils.mock_the_extension_manager(driver="pxe_ilo")
+        self.node = obj_utils.create_test_node(self.context,
+                driver='pxe_ilo', driver_info=INFO_DICT)
+
+    @mock.patch.object(pxe.VendorPassthru, 'vendor_passthru')
+    @mock.patch.object(ilo_common, 'set_boot_device')
+    def test_vendorpassthru(self, set_persistent_mock,
+                            pxe_vendorpassthru_mock):
+        kwargs = {'method': 'pass_deploy_info', 'address': '123456'}
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.provision_state = states.DEPLOYWAIT
+            task.driver.vendor.vendor_passthru(task, **kwargs)
+            set_persistent_mock.assert_called_with(task.node, 'NETWORK', True)
+            pxe_vendorpassthru_mock.assert_called_once_with(task, **kwargs)

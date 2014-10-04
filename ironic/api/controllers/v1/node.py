@@ -432,6 +432,9 @@ class Node(base.APIBase):
     ports = wsme.wsattr([link.Link], readonly=True)
     "Links to the collection of ports on this node"
 
+    # NOTE(deva): "conductor_affinity" shouldn't be presented on the
+    #             API because it's an internal value. Don't add it here.
+
     def __init__(self, **kwargs):
         self.fields = []
         fields = objects.Node.fields.keys()
@@ -748,7 +751,7 @@ class NodesController(rest.RestController):
             e.code = 400
             raise e
 
-        new_node = objects.Node(context=pecan.request.context,
+        new_node = objects.Node(pecan.request.context,
                                 **node.as_dict())
         new_node.create()
         # Set the HTTP Location Header

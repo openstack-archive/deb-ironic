@@ -83,10 +83,15 @@ class FakeSSHDriver(base.BaseDriver):
 
 
 class FakeIPMINativeDriver(base.BaseDriver):
-    """Example implementation of a Driver."""
+    """Fake IPMINative driver."""
 
     def __init__(self):
+        if not importutils.try_import('pyghmi'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason=_("Unable to import pyghmi IPMI library"))
         self.power = ipminative.NativeIPMIPower()
+        self.console = ipminative.NativeIPMIShellinaboxConsole()
         self.deploy = fake.FakeDeploy()
         self.management = ipminative.NativeIPMIManagement()
 
@@ -98,7 +103,7 @@ class FakeSeaMicroDriver(base.BaseDriver):
         if not importutils.try_import('seamicroclient'):
             raise exception.DriverLoadError(
                     driver=self.__class__.__name__,
-                    reason="Unable to import seamicroclient library")
+                    reason=_("Unable to import seamicroclient library"))
         self.power = seamicro.Power()
         self.deploy = fake.FakeDeploy()
         self.management = seamicro.Management()
@@ -115,9 +120,13 @@ class FakeAgentDriver(base.BaseDriver):
 
 
 class FakeIBootDriver(base.BaseDriver):
-    """Example implementation of a Driver."""
+    """Fake iBoot driver."""
 
     def __init__(self):
+        if not importutils.try_import('iboot'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason=_("Unable to import iboot library"))
         self.power = iboot.IBootPower()
         self.deploy = fake.FakeDeploy()
 
@@ -155,6 +164,6 @@ class FakeSNMPDriver(base.BaseDriver):
         if not importutils.try_import('pysnmp'):
             raise exception.DriverLoadError(
                     driver=self.__class__.__name__,
-                    reason="Unable to import pysnmp library")
+                    reason=_("Unable to import pysnmp library"))
         self.power = snmp.SNMPPower()
         self.deploy = fake.FakeDeploy()

@@ -26,6 +26,7 @@ from oslo import messaging
 from ironic.common import boot_devices
 from ironic.common import driver_factory
 from ironic.common import exception
+from ironic.common import keystone
 from ironic.common import states
 from ironic.common import utils as ironic_utils
 from ironic.conductor import manager
@@ -315,7 +316,7 @@ class ChangeNodePowerStateTestCase(_ServiceSetUpMixin,
             node.refresh()
             self.assertEqual(initial_state, node.power_state)
             self.assertIsNone(node.target_power_state)
-            self.assertIsNone(node.last_error)
+            self.assertIsNotNone(node.last_error)
             # Verify the picked reservation has been cleared due to full pool.
             self.assertIsNone(node.reservation)
 
@@ -686,8 +687,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         task = task_manager.TaskManager(self.context, node.uuid)
 
         self.assertRaises(exception.InstanceDeployFailure,
-                          self.service._do_node_deploy,
-                          self.context, task)
+                          self.service._do_node_deploy, task)
         node.refresh()
         self.assertEqual(states.DEPLOYFAIL, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
@@ -696,13 +696,14 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
 
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy')
     def test__do_node_deploy_ok(self, mock_deploy):
+        self._start_service()
         # test when driver.deploy.deploy returns DEPLOYDONE
         mock_deploy.return_value = states.DEPLOYDONE
         node = obj_utils.create_test_node(self.context, driver='fake',
                                           provision_state=states.NOSTATE)
         task = task_manager.TaskManager(self.context, node.uuid)
 
-        self.service._do_node_deploy(self.context, task)
+        self.service._do_node_deploy(task)
         node.refresh()
         self.assertEqual(states.ACTIVE, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
@@ -727,7 +728,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
             self.assertIsNone(node.last_error)
             # Verify reservation has been cleared.
             self.assertIsNone(node.reservation)
-            mock_spawn.assert_called_once_with(mock.ANY, mock.ANY, mock.ANY)
+            mock_spawn.assert_called_once_with(mock.ANY, mock.ANY)
 
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy')
     def test_do_node_deploy_rebuild_active_state(self, mock_deploy):
@@ -745,7 +746,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         self.assertIsNone(node.last_error)
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
-        mock_deploy.assert_called_once()
+        mock_deploy.assert_called_once_with(mock.ANY)
 
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy')
     def test_do_node_deploy_rebuild_deployfail_state(self, mock_deploy):
@@ -763,7 +764,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         self.assertIsNone(node.last_error)
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
-        mock_deploy.assert_called_once()
+        mock_deploy.assert_called_once_with(mock.ANY)
 
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy')
     def test_do_node_deploy_rebuild_error_state(self, mock_deploy):
@@ -781,7 +782,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         self.assertIsNone(node.last_error)
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
-        mock_deploy.assert_called_once()
+        mock_deploy.assert_called_once_with(mock.ANY)
 
     def test_do_node_deploy_rebuild_nostate_state(self):
         # test node will not rebuild if state is NOSTATE
@@ -856,8 +857,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         self._start_service()
         mock_tear_down.side_effect = exception.InstanceDeployFailure('test')
         self.assertRaises(exception.InstanceDeployFailure,
-                          self.service._do_node_tear_down,
-                          self.context, task)
+                          self.service._do_node_tear_down, task)
         node.refresh()
         self.assertEqual(states.ERROR, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
@@ -876,7 +876,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         task = task_manager.TaskManager(self.context, node.uuid)
         self._start_service()
         mock_tear_down.return_value = states.DELETED
-        self.service._do_node_tear_down(self.context, task)
+        self.service._do_node_tear_down(task)
         node.refresh()
         self.assertEqual(states.NOSTATE, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
@@ -894,7 +894,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         self._start_service()
         task = task_manager.TaskManager(self.context, node.uuid)
         mock_tear_down.return_value = states.DELETING
-        self.service._do_node_tear_down(self.context, task)
+        self.service._do_node_tear_down(task)
         node.refresh()
         self.assertEqual(states.DELETING, node.provision_state)
         self.assertIsNone(node.last_error)
@@ -996,7 +996,7 @@ class MiscTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
                                 self.context, node.uuid, True)
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.NodeMaintenanceFailure, exc.exc_info[0])
-        node.refresh(self.context)
+        node.refresh()
         self.assertTrue(node.maintenance)
 
     def test_maintenance_mode_off_failed(self):
@@ -1006,7 +1006,7 @@ class MiscTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
                                 self.context, node.uuid, False)
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.NodeMaintenanceFailure, exc.exc_info[0])
-        node.refresh(self.context)
+        node.refresh()
         self.assertFalse(node.maintenance)
 
 
@@ -1254,7 +1254,8 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         port.address = new_address
         res = self.service.update_port(self.context, port)
         self.assertEqual(new_address, res.address)
-        mac_update_mock.assert_called_once_with('fake-id', new_address)
+        mac_update_mock.assert_called_once_with('fake-id', new_address,
+                                                token=self.context.auth_token)
 
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.update_port_address')
     def test_update_port_address_fail(self, mac_update_mock):
@@ -1270,7 +1271,7 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
                                 self.context, port)
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.FailedToUpdateMacOnPort, exc.exc_info[0])
-        port.refresh(self.context)
+        port.refresh()
         self.assertEqual(old_address, port.address)
 
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.update_port_address')
@@ -1323,15 +1324,18 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         acquire_mock.return_value.__enter__.return_value.driver = self.driver
         with mock.patch.object(self.driver.management,
                                'get_sensors_data') as get_sensors_data_mock:
-            get_sensors_data_mock.return_value = 'fake-sensor-data'
-            _mapped_to_this_conductor_mock.return_value = True
-            get_nodeinfo_list_mock.return_value = [(node.uuid, node.driver,
-                                                 node.instance_uuid)]
-            self.service._send_sensor_data(self.context)
-            self.assertTrue(get_nodeinfo_list_mock.called)
-            self.assertTrue(_mapped_to_this_conductor_mock.called)
-            self.assertTrue(acquire_mock.called)
-            self.assertTrue(get_sensors_data_mock.called)
+            with mock.patch.object(self.driver.management,
+                                   'validate') as validate_mock:
+                get_sensors_data_mock.return_value = 'fake-sensor-data'
+                _mapped_to_this_conductor_mock.return_value = True
+                get_nodeinfo_list_mock.return_value = [(node.uuid, node.driver,
+                                                     node.instance_uuid)]
+                self.service._send_sensor_data(self.context)
+                self.assertTrue(get_nodeinfo_list_mock.called)
+                self.assertTrue(_mapped_to_this_conductor_mock.called)
+                self.assertTrue(acquire_mock.called)
+                self.assertTrue(get_sensors_data_mock.called)
+                self.assertTrue(validate_mock.called)
 
     @mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
     @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
@@ -1344,15 +1348,18 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         acquire_mock.return_value.__enter__.return_value.driver = self.driver
         with mock.patch.object(self.driver.management,
                                'get_sensors_data') as get_sensors_data_mock:
-            get_sensors_data_mock.return_value = 'fake-sensor-data'
-            _mapped_to_this_conductor_mock.return_value = True
-            get_nodeinfo_list_mock.return_value = [(node.uuid, node.driver,
-                                                 node.instance_uuid)]
-            self.service._send_sensor_data(self.context)
-            self.assertFalse(get_nodeinfo_list_mock.called)
-            self.assertFalse(_mapped_to_this_conductor_mock.called)
-            self.assertFalse(acquire_mock.called)
-            self.assertFalse(get_sensors_data_mock.called)
+            with mock.patch.object(self.driver.management,
+                                   'validate') as validate_mock:
+                get_sensors_data_mock.return_value = 'fake-sensor-data'
+                _mapped_to_this_conductor_mock.return_value = True
+                get_nodeinfo_list_mock.return_value = [(node.uuid, node.driver,
+                                                     node.instance_uuid)]
+                self.service._send_sensor_data(self.context)
+                self.assertFalse(get_nodeinfo_list_mock.called)
+                self.assertFalse(_mapped_to_this_conductor_mock.called)
+                self.assertFalse(acquire_mock.called)
+                self.assertFalse(get_sensors_data_mock.called)
+                self.assertFalse(validate_mock.called)
 
     def test_set_boot_device(self):
         node = obj_utils.create_test_node(self.context, driver='fake')
@@ -1476,11 +1483,10 @@ class ManagerSpawnWorkerTestCase(tests_base.TestCase):
 
 
 @mock.patch.object(conductor_utils, 'node_power_action')
-class ManagerDoSyncPowerStateTestCase(tests_base.TestCase):
+class ManagerDoSyncPowerStateTestCase(tests_db_base.DbTestCase):
     def setUp(self):
         super(ManagerDoSyncPowerStateTestCase, self).setUp()
         self.service = manager.ConductorManager('hostname', 'test-topic')
-        self.context = context.get_admin_context()
         self.driver = mock.Mock(spec_set=drivers_base.BaseDriver)
         self.power = self.driver.power
         self.node = mock.Mock(spec_set=objects.Node)
@@ -1522,7 +1528,7 @@ class ManagerDoSyncPowerStateTestCase(tests_base.TestCase):
 
         self.power.validate.assert_called_once_with(self.task)
         self.power.get_power_state.assert_called_once_with(self.task)
-        self.node.save.assert_called_once_with(self.context)
+        self.node.save.assert_called_once_with()
         self.assertFalse(node_power_action.called)
         self.assertEqual(states.POWER_ON, self.node.power_state)
 
@@ -1563,7 +1569,7 @@ class ManagerDoSyncPowerStateTestCase(tests_base.TestCase):
 
         self.assertFalse(self.power.validate.called)
         self.power.get_power_state.assert_called_once_with(self.task)
-        self.node.save.assert_called_once_with(self.context)
+        self.node.save.assert_called_once_with()
         self.assertFalse(node_power_action.called)
         self.assertEqual(states.POWER_OFF, self.node.power_state)
 
@@ -1605,7 +1611,7 @@ class ManagerDoSyncPowerStateTestCase(tests_base.TestCase):
         power_exp_calls = [mock.call(self.task)] * 2
         self.assertEqual(power_exp_calls,
                          self.power.get_power_state.call_args_list)
-        self.node.save.assert_called_once_with(self.context)
+        self.node.save.assert_called_once_with()
         node_power_action.assert_called_once_with(self.task, states.POWER_ON)
         self.assertEqual(states.POWER_OFF, self.node.power_state)
         self.assertEqual(1,
@@ -1624,7 +1630,7 @@ class ManagerDoSyncPowerStateTestCase(tests_base.TestCase):
         power_exp_calls = [mock.call(self.task)] * 3
         self.assertEqual(power_exp_calls,
                          self.power.get_power_state.call_args_list)
-        self.node.save.assert_called_once_with(self.context)
+        self.node.save.assert_called_once_with()
         npa_exp_calls = [mock.call(self.task, states.POWER_ON)] * 2
         self.assertEqual(npa_exp_calls, node_power_action.call_args_list)
         self.assertEqual(states.POWER_OFF, self.node.power_state)
@@ -1674,13 +1680,12 @@ class ManagerDoSyncPowerStateTestCase(tests_base.TestCase):
 @mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
 @mock.patch.object(objects.Node, 'get_by_id')
 @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
-class ManagerSyncPowerStatesTestCase(_CommonMixIn, tests_base.TestCase):
+class ManagerSyncPowerStatesTestCase(_CommonMixIn, tests_db_base.DbTestCase):
     def setUp(self):
         super(ManagerSyncPowerStatesTestCase, self).setUp()
         self.service = manager.ConductorManager('hostname', 'test-topic')
         self.dbapi = dbapi.get_instance()
         self.service.dbapi = self.dbapi
-        self.context = context.get_admin_context()
         self.node = self._create_node()
         self.filters = {'reserved': False, 'maintenance': False}
         self.columns = ['id', 'uuid', 'driver']
@@ -1940,11 +1945,11 @@ class ManagerSyncPowerStatesTestCase(_CommonMixIn, tests_base.TestCase):
 @mock.patch.object(task_manager, 'acquire')
 @mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
 @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
-class ManagerCheckDeployTimeoutsTestCase(_CommonMixIn, tests_base.TestCase):
+class ManagerCheckDeployTimeoutsTestCase(_CommonMixIn,
+                                         tests_db_base.DbTestCase):
     def setUp(self):
         super(ManagerCheckDeployTimeoutsTestCase, self).setUp()
         self.config(deploy_callback_timeout=300, group='conductor')
-        self.context = context.get_admin_context()
         self.service = manager.ConductorManager('hostname', 'test-topic')
         self.dbapi = dbapi.get_instance()
         self.service.dbapi = self.dbapi
@@ -2171,7 +2176,6 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
     def setUp(self):
         super(ManagerTestProperties, self).setUp()
         self.service = manager.ConductorManager('test-host', 'test-topic')
-        self.context = context.get_admin_context()
 
     def _check_driver_properties(self, driver, expected):
         mgr_utils.mock_the_extension_manager(driver=driver)
@@ -2195,7 +2199,8 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
         self._check_driver_properties("fake_ipmitool", expected)
 
     def test_driver_properties_fake_ipminative(self):
-        expected = ['ipmi_address', 'ipmi_password', 'ipmi_username']
+        expected = ['ipmi_address', 'ipmi_password', 'ipmi_username',
+                    'ipmi_terminal_port']
         self._check_driver_properties("fake_ipminative", expected)
 
     def test_driver_properties_fake_ssh(self):
@@ -2231,7 +2236,8 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
 
     def test_driver_properties_pxe_ipminative(self):
         expected = ['ipmi_address', 'ipmi_password', 'ipmi_username',
-                    'pxe_deploy_kernel', 'pxe_deploy_ramdisk']
+                    'pxe_deploy_kernel', 'pxe_deploy_ramdisk',
+                    'ipmi_terminal_port']
         self._check_driver_properties("pxe_ipminative", expected)
 
     def test_driver_properties_pxe_ssh(self):
@@ -2262,21 +2268,13 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
     def test_driver_properties_ilo_iscsi(self):
         expected = ['ilo_address', 'ilo_username', 'ilo_password',
                    'client_port', 'client_timeout', 'ilo_deploy_iso',
-                   'ipmi_address', 'ipmi_terminal_port',
-                   'ipmi_password', 'ipmi_priv_level',
-                   'ipmi_username', 'ipmi_bridging', 'ipmi_transit_channel',
-                   'ipmi_transit_address', 'ipmi_target_channel',
-                   'ipmi_target_address', 'ipmi_local_address']
+                   'console_port']
         self._check_driver_properties("iscsi_ilo", expected)
 
     def test_driver_properties_agent_ilo(self):
         expected = ['ilo_address', 'ilo_username', 'ilo_password',
                    'client_port', 'client_timeout', 'ilo_deploy_iso',
-                   'ipmi_address', 'ipmi_terminal_port',
-                   'ipmi_password', 'ipmi_priv_level',
-                   'ipmi_username', 'ipmi_bridging', 'ipmi_transit_channel',
-                   'ipmi_transit_address', 'ipmi_target_channel',
-                   'ipmi_target_address', 'ipmi_local_address']
+                   'console_port']
         self._check_driver_properties("agent_ilo", expected)
 
     def test_driver_properties_fail(self):
@@ -2288,3 +2286,185 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
                           self.context, "bad-driver")
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.DriverNotFound, exc.exc_info[0])
+
+
+@mock.patch.object(keystone, 'get_admin_auth_token')
+@mock.patch.object(task_manager, 'acquire')
+@mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+@mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
+class ManagerSyncLocalStateTestCase(_CommonMixIn, tests_db_base.DbTestCase):
+
+    def setUp(self):
+        super(ManagerSyncLocalStateTestCase, self).setUp()
+
+        self.dbapi = dbapi.get_instance()
+        self.service = manager.ConductorManager('hostname', 'test-topic')
+
+        self.service.conductor = mock.Mock()
+        self.service.dbapi = self.dbapi
+        self.service.ring_manager = mock.Mock()
+
+        self.node = self._create_node(provision_state=states.ACTIVE)
+        self.task = self._create_task(node=self.node)
+
+        self.filters = {'reserved': False,
+                        'maintenance': False,
+                        'provision_state': states.ACTIVE}
+        self.columns = ['id', 'uuid', 'driver', 'conductor_affinity']
+
+    def _assert_get_nodeinfo_args(self, get_nodeinfo_mock):
+        get_nodeinfo_mock.assert_called_once_with(
+                columns=self.columns, filters=self.filters)
+
+    def test_not_mapped(self, get_nodeinfo_mock, mapped_mock, acquire_mock,
+                        get_authtoken_mock):
+        get_nodeinfo_mock.return_value = self._get_nodeinfo_list_response()
+        mapped_mock.return_value = False
+
+        self.service._sync_local_state(self.context)
+
+        self._assert_get_nodeinfo_args(get_nodeinfo_mock)
+        mapped_mock.assert_called_once_with(self.node.uuid, self.node.driver)
+        self.assertFalse(acquire_mock.called)
+        self.assertFalse(get_authtoken_mock.called)
+        self.service.ring_manager.reset.assert_called_once_with()
+
+    def test_already_mapped(self, get_nodeinfo_mock, mapped_mock,
+                             acquire_mock, get_authtoken_mock):
+        # Node is already mapped to the conductor running the periodic task
+        self.node.conductor_affinity = 123
+        self.service.conductor.id = 123
+
+        get_nodeinfo_mock.return_value = self._get_nodeinfo_list_response()
+        mapped_mock.return_value = True
+
+        self.service._sync_local_state(self.context)
+
+        self._assert_get_nodeinfo_args(get_nodeinfo_mock)
+        mapped_mock.assert_called_once_with(self.node.uuid, self.node.driver)
+        self.assertFalse(acquire_mock.called)
+        self.assertFalse(get_authtoken_mock.called)
+        self.service.ring_manager.reset.assert_called_once_with()
+
+    @mock.patch.object(context, 'get_admin_context')
+    def test_good(self, get_ctx_mock, get_nodeinfo_mock, mapped_mock,
+                  acquire_mock, get_authtoken_mock):
+        get_ctx_mock.return_value = self.context
+        get_nodeinfo_mock.return_value = self._get_nodeinfo_list_response()
+        mapped_mock.return_value = True
+        acquire_mock.side_effect = self._get_acquire_side_effect(self.task)
+
+        self.service._sync_local_state(self.context)
+
+        self._assert_get_nodeinfo_args(get_nodeinfo_mock)
+        mapped_mock.assert_called_once_with(self.node.uuid, self.node.driver)
+        get_authtoken_mock.assert_called_once_with()
+        acquire_mock.assert_called_once_with(self.context, self.node.id)
+        # assert spawn_after has been called
+        self.task.spawn_after.assert_called_once_with(
+                self.service._spawn_worker,
+                self.service._do_takeover, self.task)
+
+    @mock.patch.object(context, 'get_admin_context')
+    def test_no_free_worker(self, get_ctx_mock, get_nodeinfo_mock, mapped_mock,
+                            acquire_mock, get_authtoken_mock):
+        get_ctx_mock.return_value = self.context
+        mapped_mock.return_value = True
+        acquire_mock.side_effect = \
+            self._get_acquire_side_effect([self.task] * 3)
+        self.task.spawn_after.side_effect = \
+            [None, exception.NoFreeConductorWorker('error')]
+
+        # 3 nodes to be checked
+        get_nodeinfo_mock.return_value = \
+            self._get_nodeinfo_list_response([self.node] * 3)
+
+        self.service._sync_local_state(self.context)
+
+        self._assert_get_nodeinfo_args(get_nodeinfo_mock)
+
+        # assert  _mapped_to_this_conductor() gets called 2 times only
+        # instead of 3. When NoFreeConductorWorker is raised the loop
+        # should be broken
+        expected = [mock.call(self.node.uuid, self.node.driver)] * 2
+        self.assertEqual(expected, mapped_mock.call_args_list)
+
+        # assert  acquire() gets called 2 times only instead of 3. When
+        # NoFreeConductorWorker is raised the loop should be broken
+        expected = [mock.call(self.context, self.node.id)] * 2
+        self.assertEqual(expected, acquire_mock.call_args_list)
+
+        # Only one auth token needed for all runs
+        get_authtoken_mock.assert_called_once_with()
+
+        # assert spawn_after has been called twice
+        expected = [mock.call(self.service._spawn_worker,
+                    self.service._do_takeover, self.task)] * 2
+        self.assertEqual(expected, self.task.spawn_after.call_args_list)
+
+    @mock.patch.object(context, 'get_admin_context')
+    def test_node_locked(self, get_ctx_mock, get_nodeinfo_mock, mapped_mock,
+                            acquire_mock, get_authtoken_mock):
+        get_ctx_mock.return_value = self.context
+        mapped_mock.return_value = True
+        acquire_mock.side_effect = self._get_acquire_side_effect(
+                [self.task, exception.NodeLocked('error'), self.task])
+        self.task.spawn_after.side_effect = [None, None]
+
+        # 3 nodes to be checked
+        get_nodeinfo_mock.return_value = \
+            self._get_nodeinfo_list_response([self.node] * 3)
+
+        self.service._sync_local_state(self.context)
+
+        self._assert_get_nodeinfo_args(get_nodeinfo_mock)
+
+        # assert _mapped_to_this_conductor() gets called 3 times
+        expected = [mock.call(self.node.uuid, self.node.driver)] * 3
+        self.assertEqual(expected, mapped_mock.call_args_list)
+
+        # assert acquire() gets called 3 times
+        expected = [mock.call(self.context, self.node.id)] * 3
+        self.assertEqual(expected, acquire_mock.call_args_list)
+
+        # Only one auth token needed for all runs
+        get_authtoken_mock.assert_called_once_with()
+
+        # assert spawn_after has been called only 2 times
+        expected = [mock.call(self.service._spawn_worker,
+                    self.service._do_takeover, self.task)] * 2
+        self.assertEqual(expected, self.task.spawn_after.call_args_list)
+
+    @mock.patch.object(context, 'get_admin_context')
+    def test_worker_limit(self, get_ctx_mock, get_nodeinfo_mock, mapped_mock,
+                          acquire_mock, get_authtoken_mock):
+        # Limit to only 1 worker
+        self.config(periodic_max_workers=1, group='conductor')
+        get_ctx_mock.return_value = self.context
+        mapped_mock.return_value = True
+        acquire_mock.side_effect = \
+            self._get_acquire_side_effect([self.task] * 3)
+        self.task.spawn_after.side_effect = [None] * 3
+
+        # 3 nodes to be checked
+        get_nodeinfo_mock.return_value = \
+            self._get_nodeinfo_list_response([self.node] * 3)
+
+        self.service._sync_local_state(self.context)
+
+        self._assert_get_nodeinfo_args(get_nodeinfo_mock)
+
+        # assert _mapped_to_this_conductor() gets called only once
+        # because of the worker limit
+        mapped_mock.assert_called_once_with(self.node.uuid, self.node.driver)
+
+        # assert acquire() gets called only once because of the worker limit
+        acquire_mock.assert_called_once_with(self.context, self.node.id)
+
+        # Only one auth token needed for all runs
+        get_authtoken_mock.assert_called_once_with()
+
+        # assert spawn_after has been called
+        self.task.spawn_after.assert_called_once_with(
+                self.service._spawn_worker,
+                self.service._do_takeover, self.task)

@@ -32,8 +32,9 @@ from oslo.config import cfg
 
 from ironic.common import boot_devices
 from ironic.common import exception
-from ironic.common import i18n
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LW
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
@@ -47,9 +48,6 @@ libvirt_opts = [
                default='qemu:///system',
                help='libvirt uri')
 ]
-
-_LW = i18n._LW
-_LE = i18n._LE
 
 CONF = cfg.CONF
 CONF.register_opts(libvirt_opts, group='ssh')
@@ -112,18 +110,14 @@ def _get_boot_device_map(virt_type):
 def _get_command_sets(virt_type):
     if virt_type == 'vbox':
         return {
-            'base_cmd': '/usr/bin/VBoxManage',
+            'base_cmd': 'LC_ALL=C /usr/bin/VBoxManage',
             'start_cmd': 'startvm {_NodeName_}',
             'stop_cmd': 'controlvm {_NodeName_} poweroff',
             'reboot_cmd': 'controlvm {_NodeName_} reset',
             'list_all': "list vms|awk -F'\"' '{print $2}'",
             'list_running': 'list runningvms',
             'get_node_macs': ("showvminfo --machinereadable {_NodeName_} | "
-                "grep "
-                '"macaddress" | awk -F '
-                "'"
-                '"'
-                "' '{print $2}'"),
+                "awk -F '\"' '/macaddress/{print $2}'"),
             'set_boot_device': ('{_BaseCmd_} modifyvm {_NodeName_} '
                 '--boot1 {_BootDevice_}'),
             'get_boot_device': ("{_BaseCmd_} showvminfo "
@@ -132,7 +126,7 @@ def _get_command_sets(virt_type):
             }
     elif virt_type == 'vmware':
         return {
-            'base_cmd': '/bin/vim-cmd',
+            'base_cmd': 'LC_ALL=C /bin/vim-cmd',
             'start_cmd': 'vmsvc/power.on {_NodeName_}',
             'stop_cmd': 'vmsvc/power.off {_NodeName_}',
             'reboot_cmd': 'vmsvc/power.reboot {_NodeName_}',
@@ -157,19 +151,15 @@ def _get_command_sets(virt_type):
         #                  Change-Id: I160e4202952b7551b855dc7d91784d6a184cb0ed
         #                  for more detail.
         virsh_cmds = {
-            'base_cmd': '/usr/bin/virsh',
+            'base_cmd': 'LC_ALL=C /usr/bin/virsh',
             'start_cmd': 'start {_NodeName_}',
             'stop_cmd': 'destroy {_NodeName_}',
             'reboot_cmd': 'reset {_NodeName_}',
             'list_all': "list --all | tail -n +2 | awk -F\" \" '{print $2}'",
             'list_running': ("list --all|grep running | "
                 "awk -v qc='\"' -F\" \" '{print qc$2qc}'"),
-            'get_node_macs': ("dumpxml {_NodeName_} | grep "
-                '"mac address" | awk -F'
-                '"'
-                "'"
-                '" '
-                "'{print $2}' | tr -d ':'"),
+            'get_node_macs': ("dumpxml {_NodeName_} | "
+                "awk -F \"'\" '/mac address/{print $2}'| tr -d ':'"),
             'set_boot_device': ("EDITOR=\"sed -i '/<boot \(dev\|order\)=*\>/d;"
                 "/<\/os>/i\<boot dev=\\\"{_BootDevice_}\\\"/>'\" "
                 "{_BaseCmd_} edit {_NodeName_}"),
@@ -186,7 +176,7 @@ def _get_command_sets(virt_type):
         return virsh_cmds
     elif virt_type == 'parallels':
         return {
-            'base_cmd': '/usr/bin/prlctl',
+            'base_cmd': 'LC_ALL=C /usr/bin/prlctl',
             'start_cmd': 'start {_NodeName_}',
             'stop_cmd': 'stop {_NodeName_} --kill',
             'reboot_cmd': 'reset {_NodeName_}',
@@ -367,7 +357,7 @@ def _get_power_status(ssh_obj, driver_info):
         if not power_state:
             power_state = states.POWER_OFF
     else:
-        err_msg = _('Node "%(host)s" with MAC address %(mac)s not found.')
+        err_msg = _LE('Node "%(host)s" with MAC address %(mac)s not found.')
         LOG.error(err_msg, {'host': driver_info['host'],
                             'mac': driver_info['macs']})
 

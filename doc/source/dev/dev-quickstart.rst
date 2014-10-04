@@ -23,6 +23,9 @@ Install prerequisites::
     sudo easy_install nose
     sudo pip install virtualenv setuptools-git flake8 tox testrepository
 
+    # openSUSE/SLE 12:
+    sudo zypper install git git-review libffi-devel libmysqlclient-devel libopenssl-devel libxml2-devel libxslt-devel postgresql-devel python-devel python-flake8 python-nose python-pip python-setuptools-git python-testrepository python-tox python-virtualenv
+
 You may need to explicitly upgrade virtualenv if you've installed the one
 from your OS distribution and it is too old (tox will complain). You can
 upgrade it individually, if you need to::
@@ -88,6 +91,10 @@ First, install a few system prerequisites::
     sudo yum install rabbitmq-server
     sudo service rabbitmq-server start
 
+    # openSUSE/SLE 12:
+    sudo zypper install rabbitmq-server
+    sudo systemctl start rabbitmq-server.service
+
     # optionally, install mysql-server
 
     # Ubuntu/Debian:
@@ -96,6 +103,10 @@ First, install a few system prerequisites::
     # Fedora/RHEL:
     # sudo yum install mysql-server
     # sudo service mysqld start
+
+    # openSUSE/SLE 12:
+    # sudo zypper install mariadb
+    # sudo systemctl start mysql.service
 
 Next, clone the client and install it within a virtualenv as well::
 
@@ -146,7 +157,8 @@ created in the previous section to run everything else within::
     # and switch the DB connection from sqlite to something else, eg. mysql
     # sed -i "s/#connection=.*/connection=mysql:\/\/root@localhost\/ironic/" etc/ironic/ironic.conf.local
 
-    ironic-dbsync --config-file etc/ironic/ironic.conf.local
+    # This creates the database tables.
+    ironic-dbsync --config-file etc/ironic/ironic.conf.local create_schema
 
 Start the API service in debug mode and watch its output::
 
@@ -218,21 +230,12 @@ DevStack may be configured to deploy Ironic, setup Nova to use the Ironic
 driver and provide hardware resources (network, baremetal compute nodes)
 using a combination of OpenVSwitch and libvirt.  It is highly recommended
 to deploy on an expendable virtual machine and not on your personal work
-station.
+station.  Deploying Ironic with DevStack requires a machine running Ubuntu
+14.04 (or later) or Fedora 20 (or later).
 
 .. seealso::
 
     https://devstack.org
-
-Install the basic dependencies::
-
-    sudo apt-get update
-    sudo apt-get install python-software-properties git
-
-If you are using Ubuntu 12.04, use the latest Cloud Archive repository::
-
-    sudo add-apt-repository cloud-archive:icehouse
-    sudo apt-get update
 
 Devstack will no longer create the user 'stack' with the desired
 permissions, but does provide a script to perform the task::
@@ -300,7 +303,11 @@ or the agent driver, not both.::
     SCREEN_LOGDIR=$HOME/logs
     IRONIC_VM_LOG_DIR=$HOME/ironic-bm-logs
 
-    # If running with the agent driver:
+    END
+
+If running with the agent driver::
+
+    cat >>localrc <<END
     enable_service s-proxy s-object s-container s-account
     SWIFT_ENABLE_TEMPURLS=True
     IRONIC_ENABLED_DRIVERS=fake,agent_ssh,agent_ipmitool
@@ -318,7 +325,7 @@ Source credentials, create a key, and spawn an instance::
     source ~/devstack/openrc
 
     # query the image id of the default cirros image
-    image=$(nova image-list | egrep "$DEFAULT_IMAGE_NAME[^-]" | awk '{ print $2 }')
+    image=$(nova image-list | egrep "$DEFAULT_IMAGE_NAME"'[^-]' | awk '{ print $2 }')
 
     # create keypair
     ssh-keygen

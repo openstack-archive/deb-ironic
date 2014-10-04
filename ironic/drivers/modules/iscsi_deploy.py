@@ -16,10 +16,12 @@
 import os
 
 from oslo.config import cfg
+from oslo.utils import strutils
 
 from ironic.common import exception
-from ironic.common import i18n
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LI
 from ironic.common import image_service as service
 from ironic.common import keystone
 from ironic.common import states
@@ -30,12 +32,8 @@ from ironic.drivers.modules import image_cache
 from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import fileutils
 from ironic.openstack.common import log as logging
-from ironic.openstack.common import strutils
 
 LOG = logging.getLogger(__name__)
-
-_LE = i18n._LE
-_LI = i18n._LI
 
 # NOTE(rameshg87): This file now registers some of opts in pxe group.
 # This is acceptable for now as a future refactoring into
@@ -257,7 +255,7 @@ def set_failed_state(task, msg):
     node = task.node
     node.provision_state = states.DEPLOYFAIL
     node.target_provision_state = states.NOSTATE
-    node.save(task.context)
+    node.save()
     try:
         manager_utils.node_power_action(task, states.POWER_OFF)
     except Exception:
@@ -270,7 +268,7 @@ def set_failed_state(task, msg):
         # NOTE(deva): node_power_action() erases node.last_error
         #             so we need to set it again here.
         node.last_error = msg
-        node.save(task.context)
+        node.save()
 
 
 def continue_deploy(task, **kwargs):
@@ -286,7 +284,7 @@ def continue_deploy(task, **kwargs):
     node = task.node
 
     node.provision_state = states.DEPLOYING
-    node.save(task.context)
+    node.save()
 
     params = get_deploy_info(node, **kwargs)
     ramdisk_error = kwargs.get('error')
@@ -314,14 +312,13 @@ def continue_deploy(task, **kwargs):
     return root_uuid
 
 
-def build_deploy_ramdisk_options(node, ctx):
+def build_deploy_ramdisk_options(node):
     """Build the ramdisk config options for a node
 
     This method builds the ramdisk options for a node,
     given all the required parameters for doing iscsi deploy.
 
     :param node: a single Node.
-    :param ctx: security context
     :returns: A dictionary of options to be passed to ramdisk for performing
         the deploy.
     """
@@ -334,7 +331,7 @@ def build_deploy_ramdisk_options(node, ctx):
     i_info = node.instance_info
     i_info['deploy_key'] = deploy_key
     node.instance_info = i_info
-    node.save(ctx)
+    node.save()
 
     deploy_options = {
         'deployment_id': node['uuid'],

@@ -26,9 +26,7 @@ from ironic.common import utils
 from ironic.db import api as dbapi
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import iscsi_deploy
-from ironic.openstack.common import context
 from ironic.openstack.common import fileutils
-from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
@@ -40,11 +38,10 @@ INST_INFO_DICT = db_utils.get_test_pxe_instance_info()
 DRV_INFO_DICT = db_utils.get_test_pxe_driver_info()
 
 
-class IscsiDeployValidateParametersTestCase(base.TestCase):
+class IscsiDeployValidateParametersTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IscsiDeployValidateParametersTestCase, self).setUp()
-        self.context = context.get_admin_context()
         self.dbapi = dbapi.get_instance()
 
     def test_parse_instance_info_good(self):
@@ -156,7 +153,6 @@ class IscsiDeployPrivateMethodsTestCase(db_base.DbTestCase):
         }
         mgr_utils.mock_the_extension_manager(driver="fake_pxe")
         self.dbapi = dbapi.get_instance()
-        self.context = context.get_admin_context()
         self.node = obj_utils.create_test_node(self.context, **n)
 
     def test__get_image_dir_path(self):
@@ -182,7 +178,6 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         }
         mgr_utils.mock_the_extension_manager(driver="fake_pxe")
         self.dbapi = dbapi.get_instance()
-        self.context = context.get_admin_context()
         self.node = obj_utils.create_test_node(self.context, **n)
 
     @mock.patch.object(deploy_utils, 'fetch_images')
@@ -203,3 +198,15 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
                                       self.node.uuid,
                                       'disk'),
                          image_path)
+
+    @mock.patch.object(utils, 'unlink_without_raise')
+    @mock.patch.object(utils, 'rmtree_without_raise')
+    @mock.patch.object(iscsi_deploy, 'InstanceImageCache')
+    def test_destroy_images(self, mock_cache, mock_rmtree, mock_unlink):
+        self.config(images_path='/path', group='pxe')
+
+        iscsi_deploy.destroy_images('uuid')
+
+        mock_cache.return_value.clean_up.assert_called_once_with()
+        mock_unlink.assert_called_once_with('/path/uuid/disk')
+        mock_rmtree.assert_called_once_with('/path/uuid')

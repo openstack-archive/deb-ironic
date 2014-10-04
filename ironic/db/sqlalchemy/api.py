@@ -32,7 +32,6 @@ from ironic.common import states
 from ironic.common import utils
 from ironic.db import api
 from ironic.db.sqlalchemy import models
-from ironic import objects
 from ironic.openstack.common import log
 
 CONF = cfg.CONF
@@ -138,7 +137,7 @@ def _check_port_change_forbidden(port, session):
         query = query.filter_by(id=node_id)
         node_ref = query.one()
         if node_ref['reservation'] is not None:
-            raise exception.NodeLocked(node=node_id,
+            raise exception.NodeLocked(node=node_ref['uuid'],
                                        host=node_ref['reservation'])
 
 
@@ -213,7 +212,6 @@ class Connection(api.Connection):
         return _paginate_query(models.Node, limit, marker,
                                sort_key, sort_dir, query)
 
-    @objects.objectify(objects.Node)
     def reserve_node(self, tag, node_id):
         session = get_session()
         with session.begin():
@@ -383,7 +381,6 @@ class Connection(api.Connection):
         return _paginate_query(models.Port, limit, marker,
                                sort_key, sort_dir)
 
-    @objects.objectify(objects.Port)
     def get_ports_by_node_id(self, node_id, limit=None, marker=None,
                              sort_key=None, sort_dir=None):
         query = model_query(models.Port)
@@ -505,23 +502,31 @@ class Connection(api.Connection):
             if count != 1:
                 raise exception.ChassisNotFound(chassis=chassis_id)
 
-    def register_conductor(self, values):
-        try:
-            conductor = models.Conductor()
-            conductor.update(values)
-            # NOTE(deva): ensure updated_at field has a non-null initial value
-            if not conductor.get('updated_at'):
-                conductor.update({'updated_at': timeutils.utcnow()})
-            conductor.save()
-            return conductor
-        except db_exc.DBDuplicateEntry:
-            raise exception.ConductorAlreadyRegistered(
-                    conductor=values['hostname'])
+    def register_conductor(self, values, update_existing=False):
+        session = get_session()
+        with session.begin():
+            query = model_query(models.Conductor, session=session).\
+                        filter_by(hostname=values['hostname'])
+            try:
+                ref = query.one()
+                if ref.online is True and not update_existing:
+                    raise exception.ConductorAlreadyRegistered(
+                            conductor=values['hostname'])
+            except NoResultFound:
+                ref = models.Conductor()
+            ref.update(values)
+            # always set online and updated_at fields when registering
+            # a conductor, especially when updating an existing one
+            ref.update({'updated_at': timeutils.utcnow(),
+                        'online': True})
+            ref.save(session)
+        return ref
 
     def get_conductor(self, hostname):
         try:
             return model_query(models.Conductor).\
-                            filter_by(hostname=hostname).\
+                            filter_by(hostname=hostname,
+                                      online=True).\
                             one()
         except NoResultFound:
             raise exception.ConductorNotFound(conductor=hostname)
@@ -530,8 +535,9 @@ class Connection(api.Connection):
         session = get_session()
         with session.begin():
             query = model_query(models.Conductor, session=session).\
-                        filter_by(hostname=hostname)
-            count = query.delete()
+                        filter_by(hostname=hostname,
+                                  online=True)
+            count = query.update({'online': False})
             if count == 0:
                 raise exception.ConductorNotFound(conductor=hostname)
 
@@ -541,7 +547,9 @@ class Connection(api.Connection):
             query = model_query(models.Conductor, session=session).\
                         filter_by(hostname=hostname)
             # since we're not changing any other field, manually set updated_at
-            count = query.update({'updated_at': timeutils.utcnow()})
+            # and since we're heartbeating, make sure that online=True
+            count = query.update({'updated_at': timeutils.utcnow(),
+                                  'online': True})
             if count == 0:
                 raise exception.ConductorNotFound(conductor=hostname)
 
@@ -551,6 +559,7 @@ class Connection(api.Connection):
 
         limit = timeutils.utcnow() - datetime.timedelta(seconds=interval)
         result = model_query(models.Conductor).\
+                    filter_by(online=True).\
                     filter(models.Conductor.updated_at >= limit).\
                     all()
 

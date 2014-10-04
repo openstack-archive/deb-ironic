@@ -73,10 +73,7 @@ class Chassis(base.IronicObject):
         :returns: a :class:`Chassis` object.
         """
         db_chassis = cls.dbapi.get_chassis_by_id(chassis_id)
-        chassis = Chassis._from_db_object(cls(), db_chassis)
-        # FIXME(comstud): Setting of the context should be moved to
-        # _from_db_object().
-        chassis._context = context
+        chassis = Chassis._from_db_object(cls(context), db_chassis)
         return chassis
 
     @base.remotable_classmethod
@@ -88,10 +85,7 @@ class Chassis(base.IronicObject):
         :returns: a :class:`Chassis` object.
         """
         db_chassis = cls.dbapi.get_chassis_by_uuid(uuid)
-        chassis = Chassis._from_db_object(cls(), db_chassis)
-        # FIXME(comstud): Setting of the context should be moved to
-        # _from_db_object().
-        chassis._context = context
+        chassis = Chassis._from_db_object(cls(context), db_chassis)
         return chassis
 
     @base.remotable_classmethod
@@ -107,18 +101,12 @@ class Chassis(base.IronicObject):
         :returns: a list of :class:`Chassis` object.
 
         """
-        chassis_list = []
         db_chassis = cls.dbapi.get_chassis_list(limit=limit,
                                                 marker=marker,
                                                 sort_key=sort_key,
                                                 sort_dir=sort_dir)
-        for obj in db_chassis:
-            chassis = Chassis._from_db_object(cls(), obj)
-            # FIXME(comstud): Setting of the context should be moved to
-            # _from_db_object().
-            chassis._context = context
-            chassis_list.append(chassis)
-        return chassis_list
+        return [Chassis._from_db_object(cls(context), obj)
+                for obj in db_chassis]
 
     @base.remotable
     def create(self, context=None):
@@ -134,7 +122,7 @@ class Chassis(base.IronicObject):
                         Unfortunately, RPC requires context as the first
                         argument, even though we don't use it.
                         A context should be set when instantiating the
-                        object, e.g.: Chassis(context=context)
+                        object, e.g.: Chassis(context)
 
         """
         values = self.obj_get_changes()
@@ -150,9 +138,9 @@ class Chassis(base.IronicObject):
                         Unfortunately, RPC requires context as the first
                         argument, even though we don't use it.
                         A context should be set when instantiating the
-                        object, e.g.: Chassis(context=context)
+                        object, e.g.: Chassis(context)
         """
-        self.dbapi.destroy_chassis(self.id)
+        self.dbapi.destroy_chassis(self.uuid)
         self.obj_reset_changes()
 
     @base.remotable
@@ -162,8 +150,12 @@ class Chassis(base.IronicObject):
         Updates will be made column by column based on the result
         of self.what_changed().
 
-        :param context: Security context. NOTE: This is only used
-                        internally by the indirection_api.
+        :param context: Security context. NOTE: This should only
+                        be used internally by the indirection_api.
+                        Unfortunately, RPC requires context as the first
+                        argument, even though we don't use it.
+                        A context should be set when instantiating the
+                        object, e.g.: Chassis(context)
         """
         updates = self.obj_get_changes()
         self.dbapi.update_chassis(self.uuid, updates)
@@ -178,8 +170,12 @@ class Chassis(base.IronicObject):
         checks for updated attributes. Updates are applied from
         the loaded chassis column by column, if there are any updates.
 
-        :param context: Security context. NOTE: This is only used
-                        internally by the indirection_api.
+        :param context: Security context. NOTE: This should only
+                        be used internally by the indirection_api.
+                        Unfortunately, RPC requires context as the first
+                        argument, even though we don't use it.
+                        A context should be set when instantiating the
+                        object, e.g.: Chassis(context)
         """
         current = self.__class__.get_by_uuid(self._context, uuid=self.uuid)
         for field in self.fields:

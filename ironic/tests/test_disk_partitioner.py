@@ -183,7 +183,8 @@ BYT;
         result = disk_partitioner.list_partitions('/dev/fake')
         self.assertEqual(expected, result)
         execute_mock.assert_called_once_with(
-            'parted', '-s', '-m', '/dev/fake', 'unit', 'MiB', 'print')
+            'parted', '-s', '-m', '/dev/fake', 'unit', 'MiB', 'print',
+            use_standard_locale=True)
 
     @mock.patch.object(disk_partitioner.LOG, 'warn')
     def test_incorrect(self, log_mock, execute_mock):

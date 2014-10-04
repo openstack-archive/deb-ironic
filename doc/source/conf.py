@@ -6,7 +6,6 @@
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
 extensions = ['sphinx.ext.autodoc',
-              'sphinx.ext.intersphinx',
               'sphinx.ext.viewcode',
               'sphinxcontrib.httpdomain',
               'sphinxcontrib.pecanwsme.rest',
@@ -14,7 +13,7 @@ extensions = ['sphinx.ext.autodoc',
               'oslosphinx',
               ]
 
-wsme_protocols = ['restjson', 'restxml']
+wsme_protocols = ['restjson']
 
 # autodoc generation is a bit aggressive and a nuisance when doing heavy
 # text edit cycles.
@@ -64,6 +63,7 @@ pygments_style = 'sphinx'
 #html_theme_path = ["."]
 #html_theme = '_theme'
 #html_static_path = ['_static']
+html_theme_options = {'incubating': True}
 
 # Output file base name for HTML help builder.
 htmlhelp_basename = '%sdoc' % project
@@ -81,6 +81,3 @@ latex_documents = [
         'manual'
     ),
 ]
-
-# Example configuration for intersphinx: refer to the Python standard library.
-intersphinx_mapping = {'http://docs.python.org/': None}

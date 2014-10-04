@@ -18,7 +18,6 @@ from testtools.matchers import HasLength
 
 from ironic.common import exception
 from ironic.db import api as db_api
-from ironic.db.sqlalchemy import models
 from ironic import objects
 from ironic.tests.db import base
 from ironic.tests.db import utils
@@ -37,9 +36,10 @@ class TestPortObject(base.DbTestCase):
                                autospec=True) as mock_get_port:
             mock_get_port.return_value = self.fake_port
 
-            objects.Port.get(self.context, port_id)
+            port = objects.Port.get(self.context, port_id)
 
             mock_get_port.assert_called_once_with(port_id)
+            self.assertEqual(self.context, port._context)
 
     def test_get_by_uuid(self):
         uuid = self.fake_port['uuid']
@@ -47,9 +47,10 @@ class TestPortObject(base.DbTestCase):
                                autospec=True) as mock_get_port:
             mock_get_port.return_value = self.fake_port
 
-            objects.Port.get(self.context, uuid)
+            port = objects.Port.get(self.context, uuid)
 
             mock_get_port.assert_called_once_with(uuid)
+            self.assertEqual(self.context, port._context)
 
     def test_get_by_address(self):
         address = self.fake_port['address']
@@ -57,9 +58,10 @@ class TestPortObject(base.DbTestCase):
                                autospec=True) as mock_get_port:
             mock_get_port.return_value = self.fake_port
 
-            objects.Port.get(self.context, address)
+            port = objects.Port.get(self.context, address)
 
             mock_get_port.assert_called_once_with(address)
+            self.assertEqual(self.context, port._context)
 
     def test_get_bad_id_and_uuid_and_address(self):
         self.assertRaises(exception.InvalidIdentity,
@@ -79,6 +81,7 @@ class TestPortObject(base.DbTestCase):
                 mock_get_port.assert_called_once_with(uuid)
                 mock_update_port.assert_called_once_with(
                         uuid, {'address': "b2:54:00:cf:2d:40"})
+                self.assertEqual(self.context, p._context)
 
     def test_refresh(self):
         uuid = self.fake_port['uuid']
@@ -94,37 +97,7 @@ class TestPortObject(base.DbTestCase):
             self.assertEqual("c3:54:00:cf:2d:40", p.address)
 
             self.assertEqual(expected, mock_get_port.call_args_list)
-
-    def test_objectify(self):
-        def _get_db_port():
-            p = models.Port()
-            p.update(self.fake_port)
-            return p
-
-        @objects.objectify(objects.Port)
-        def _convert_db_port():
-            return _get_db_port()
-
-        self.assertIsInstance(_get_db_port(), models.Port)
-        self.assertIsInstance(_convert_db_port(), objects.Port)
-
-    def test_objectify_many(self):
-        def _get_db_ports():
-            nodes = []
-            for i in range(5):
-                n = models.Port()
-                n.update(self.fake_port)
-                nodes.append(n)
-            return nodes
-
-        @objects.objectify(objects.Port)
-        def _convert_db_nodes():
-            return _get_db_ports()
-
-        for p in _get_db_ports():
-            self.assertIsInstance(p, models.Port)
-        for p in _convert_db_nodes():
-            self.assertIsInstance(p, objects.Port)
+            self.assertEqual(self.context, p._context)
 
     def test_list(self):
         with mock.patch.object(self.dbapi, 'get_port_list',
@@ -133,3 +106,4 @@ class TestPortObject(base.DbTestCase):
             ports = objects.Port.list(self.context)
             self.assertThat(ports, HasLength(1))
             self.assertIsInstance(ports[0], objects.Port)
+            self.assertEqual(self.context, ports[0]._context)

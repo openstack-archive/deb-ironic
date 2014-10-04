@@ -22,6 +22,7 @@ import six
 
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
 from ironic.objects import utils as obj_utils
 from ironic.openstack.common import context
 from ironic.openstack.common import log as logging
@@ -67,7 +68,7 @@ def make_class_properties(cls):
                 return setattr(self, get_attrname(name), typefn(value))
             except Exception:
                 attr = "%s.%s" % (self.obj_name(), name)
-                LOG.exception(_('Error setting %(attr)s') %
+                LOG.exception(_LE('Error setting %(attr)s'),
                               {'attr': attr})
                 raise
 
@@ -202,7 +203,7 @@ class IronicObject(object):
     _attr_created_at_to_primitive = obj_utils.dt_serializer('created_at')
     _attr_updated_at_to_primitive = obj_utils.dt_serializer('updated_at')
 
-    def __init__(self, context=None, **kwargs):
+    def __init__(self, context, **kwargs):
         self._changed_fields = set()
         self._context = context
         self.update(kwargs)
@@ -218,8 +219,8 @@ class IronicObject(object):
     def obj_class_from_name(cls, objname, objver):
         """Returns a class from the registry based on a name and version."""
         if objname not in cls._obj_classes:
-            LOG.error(_('Unable to instantiate unregistered object type '
-                        '%(objtype)s') % dict(objtype=objname))
+            LOG.error(_LE('Unable to instantiate unregistered object type '
+                          '%(objtype)s'), dict(objtype=objname))
             raise exception.UnsupportedObjectError(objtype=objname)
 
         latest = None
@@ -259,8 +260,7 @@ class IronicObject(object):
 
     @classmethod
     def _obj_from_primitive(cls, context, objver, primitive):
-        self = cls()
-        self._context = context
+        self = cls(context)
         self.VERSION = objver
         objdata = primitive['ironic_object.data']
         changes = primitive.get('ironic_object.changes', [])
@@ -297,8 +297,7 @@ class IronicObject(object):
         # some objects may be uncopyable, so we can avoid those sorts
         # of issues by copying only our field data.
 
-        nobj = self.__class__()
-        nobj._context = self._context
+        nobj = self.__class__(self._context)
         for name in self.fields:
             if self.obj_attr_is_set(name):
                 nval = copy.deepcopy(getattr(self, name), memo)
@@ -436,8 +435,9 @@ class IronicObject(object):
         NOTE(danms): May be removed in the future.
         """
         if key not in self.obj_fields:
-            raise AttributeError("'%s' object has no attribute '%s'" % (
-                    self.__class__, key))
+            raise AttributeError(
+                _("'%(objclass)s' object has no attribute '%(attrname)s'") %
+                {'objclass': self.__class__, 'attrname': key})
         if value != NotSpecifiedSentinel and not self.obj_attr_is_set(key):
             return value
         else:
@@ -485,11 +485,10 @@ class ObjectListBase(object):
     def __getitem__(self, index):
         """List index access."""
         if isinstance(index, slice):
-            new_obj = self.__class__()
+            new_obj = self.__class__(self._context)
             new_obj.objects = self.objects[index]
             # NOTE(danms): We must be mixed in with an IronicObject!
             new_obj.obj_reset_changes()
-            new_obj._context = self._context
             return new_obj
         return self.objects[index]
 

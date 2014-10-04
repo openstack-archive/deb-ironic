@@ -28,9 +28,7 @@ from ironic.conductor import task_manager
 from ironic.db import api as dbapi
 from ironic.drivers.modules import ssh
 from ironic.drivers import utils as driver_utils
-from ironic.openstack.common import context
 from ironic.openstack.common import processutils
-from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
@@ -41,10 +39,7 @@ from oslo.config import cfg
 CONF = cfg.CONF
 
 
-class SSHValidateParametersTestCase(base.TestCase):
-    def setUp(self):
-        super(SSHValidateParametersTestCase, self).setUp()
-        self.context = context.get_admin_context()
+class SSHValidateParametersTestCase(db_base.DbTestCase):
 
     def test__parse_driver_info_good_password(self):
         # make sure we get back the expected things
@@ -171,7 +166,7 @@ class SSHValidateParametersTestCase(base.TestCase):
 
     def test__parse_driver_info_with_custom_libvirt_uri(self):
         CONF.set_override('libvirt_uri', 'qemu:///foo', 'ssh')
-        expected_base_cmd = "/usr/bin/virsh --connect qemu:///foo"
+        expected_base_cmd = "LC_ALL=C /usr/bin/virsh --connect qemu:///foo"
 
         node = obj_utils.get_test_node(
                     self.context,
@@ -195,11 +190,10 @@ class SSHValidateParametersTestCase(base.TestCase):
                           'this_doesn_t_exist')
 
 
-class SSHPrivateMethodsTestCase(base.TestCase):
+class SSHPrivateMethodsTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(SSHPrivateMethodsTestCase, self).setUp()
-        self.context = context.get_admin_context()
         self.node = obj_utils.get_test_node(
                         self.context,
                         driver='fake_ssh',
@@ -806,7 +800,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             task.node['driver_info']['ssh_virt_type'] = 'vbox'
             self.driver.management.set_boot_device(task, boot_devices.PXE)
-        expected_cmd = ('/usr/bin/VBoxManage modifyvm %s '
+        expected_cmd = ('LC_ALL=C /usr/bin/VBoxManage modifyvm %s '
                         '--boot1 net') % fake_name
         mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
 
@@ -822,7 +816,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             task.node['driver_info']['ssh_virt_type'] = 'parallels'
             self.driver.management.set_boot_device(task, boot_devices.PXE)
-        expected_cmd = ('/usr/bin/prlctl set %s '
+        expected_cmd = ('LC_ALL=C /usr/bin/prlctl set %s '
                         '--device-bootorder "net0"') % fake_name
         mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
 
@@ -840,7 +834,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
             self.driver.management.set_boot_device(task, boot_devices.PXE)
         expected_cmd = ('EDITOR="sed -i \'/<boot \\(dev\\|order\\)=*\\>'
                         '/d;/<\\/os>/i\\<boot dev=\\"network\\"/>\'" '
-                        '/usr/bin/virsh --connect qemu:///system '
+                        'LC_ALL=C /usr/bin/virsh --connect qemu:///system '
                         'edit %s') % fake_name
         mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
 
@@ -883,7 +877,8 @@ class SSHDriverTestCase(db_base.DbTestCase):
             task.node['driver_info']['ssh_virt_type'] = 'vbox'
             result = self.driver.management.get_boot_device(task)
             self.assertEqual(boot_devices.PXE, result['boot_device'])
-        expected_cmd = ('/usr/bin/VBoxManage showvminfo --machinereadable %s '
+        expected_cmd = ('LC_ALL=C /usr/bin/VBoxManage showvminfo '
+                        '--machinereadable %s '
                         '| awk -F \'"\' \'/boot1/{print $2}\'') % fake_name
         mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
 
@@ -901,7 +896,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
             task.node['driver_info']['ssh_virt_type'] = 'parallels'
             result = self.driver.management.get_boot_device(task)
             self.assertEqual(boot_devices.PXE, result['boot_device'])
-        expected_cmd = ('/usr/bin/prlctl list -i %s '
+        expected_cmd = ('LC_ALL=C /usr/bin/prlctl list -i %s '
                         '| awk \'/^Boot order:/ {print $3}\'') % fake_name
         mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
 
@@ -919,10 +914,10 @@ class SSHDriverTestCase(db_base.DbTestCase):
             task.node['driver_info']['ssh_virt_type'] = 'virsh'
             result = self.driver.management.get_boot_device(task)
             self.assertEqual(boot_devices.PXE, result['boot_device'])
-        expected_cmd = ('/usr/bin/virsh --connect qemu:///system dumpxml '
-                        '%s | awk \'/boot dev=/ { gsub( ".*dev=" Q, "" ); '
-                        'gsub( Q ".*", "" ); print; }\' Q="\'" RS="[<>]" | '
-                        'head -1') % fake_name
+        expected_cmd = ('LC_ALL=C /usr/bin/virsh --connect '
+                        'qemu:///system dumpxml %s | awk \'/boot dev=/ '
+                        '{ gsub( ".*dev=" Q, "" ); gsub( Q ".*", "" ); '
+                        'print; }\' Q="\'" RS="[<>]" | head -1') % fake_name
         mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
 
     @mock.patch.object(ssh, '_get_connection')

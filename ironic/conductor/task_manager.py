@@ -92,9 +92,8 @@ from oslo.utils import excutils
 
 from ironic.common import driver_factory
 from ironic.common import exception
-from ironic.db import api as dbapi
+from ironic.common.i18n import _LW
 from ironic import objects
-from ironic.openstack.common.gettextutils import _LW
 from ironic.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
@@ -161,7 +160,6 @@ class TaskManager(object):
 
         """
 
-        self._dbapi = dbapi.get_instance()
         self._spawn_method = None
         self._on_error_method = None
 
@@ -179,14 +177,14 @@ class TaskManager(object):
         def reserve_node():
             LOG.debug("Attempting to reserve node %(node)s",
                       {'node': node_id})
-            self.node = self._dbapi.reserve_node(CONF.host, node_id)
+            self.node = objects.Node.reserve(context, CONF.host, node_id)
 
         try:
             if not self.shared:
                 reserve_node()
             else:
                 self.node = objects.Node.get(context, node_id)
-            self.ports = self._dbapi.get_ports_by_node_id(self.node.id)
+            self.ports = objects.Port.list_by_node_id(context, self.node.id)
             self.driver = driver_factory.get_driver(driver_name or
                                                     self.node.driver)
         except Exception:
@@ -226,7 +224,7 @@ class TaskManager(object):
         if not self.shared:
             try:
                 if self.node:
-                    self._dbapi.release_node(CONF.host, self.node.id)
+                    objects.Node.release(self.context, CONF.host, self.node.id)
             except exception.NodeNotFound:
                 # squelch the exception if the node was deleted
                 # within the task's context.

@@ -31,9 +31,8 @@ from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.db import api as db_api
+from ironic.drivers.modules import console_utils
 from ironic.drivers.modules import ipminative
-from ironic.openstack.common import context
-from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
@@ -44,12 +43,11 @@ CONF = cfg.CONF
 INFO_DICT = db_utils.get_test_ipmi_info()
 
 
-class IPMINativePrivateMethodTestCase(base.TestCase):
+class IPMINativePrivateMethodTestCase(db_base.DbTestCase):
     """Test cases for ipminative private methods."""
 
     def setUp(self):
         super(IPMINativePrivateMethodTestCase, self).setUp()
-        self.context = context.get_admin_context()
         self.node = obj_utils.create_test_node(self.context,
                                                driver='fake_ipminative',
                                                driver_info=INFO_DICT)
@@ -154,26 +152,26 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
         expected = {
               'fake_type_A': {
                 'fake_name1': {
-                  'Health': 0,
+                  'Health': '0',
                   'Sensor ID': 'fake_name1',
-                  'Sensor Reading': 'fake_value1',
-                  'States': [],
+                  'Sensor Reading': 'fake_value1 fake_units',
+                  'States': '[]',
                   'Units': 'fake_units'
                 },
                 'fake_name2': {
-                  'Health': 0,
+                  'Health': '0',
                   'Sensor ID': 'fake_name2',
-                  'Sensor Reading': 'fake_value2',
-                  'States': [],
+                  'Sensor Reading': 'fake_value2 fake_units',
+                  'States': '[]',
                   'Units': 'fake_units'
                 }
               },
               'fake_type_B': {
                 'fake_name3': {
-                  'Health': 0,
+                  'Health': '0',
                   'Sensor ID': 'fake_name3',
-                  'Sensor Reading': 'fake_value3',
-                  'States': [], 'Units': 'fake_units'
+                  'Sensor Reading': 'fake_value3 fake_units',
+                  'States': '[]', 'Units': 'fake_units'
                 }
               }
             }
@@ -198,10 +196,10 @@ class IPMINativePrivateMethodTestCase(base.TestCase):
         expected = {
               'fake_type_A': {
                 'fake_name1': {
-                  'Health': 0,
+                  'Health': '0',
                   'Sensor ID': 'fake_name1',
-                  'Sensor Reading': 'fake_value1',
-                  'States': [],
+                  'Sensor Reading': 'fake_value1 fake_units',
+                  'States': '[]',
                   'Units': 'fake_units'
                 }
               }
@@ -216,7 +214,6 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IPMINativeDriverTestCase, self).setUp()
-        self.context = context.get_admin_context()
         mgr_utils.mock_the_extension_manager(driver="fake_ipminative")
         self.driver = driver_factory.get_driver("fake_ipminative")
 
@@ -228,8 +225,15 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
 
     def test_get_properties(self):
         expected = ipminative.COMMON_PROPERTIES
-        self.assertEqual(expected, self.driver.get_properties())
+        self.assertEqual(expected, self.driver.power.get_properties())
         self.assertEqual(expected, self.driver.management.get_properties())
+
+        expected = ipminative.COMMON_PROPERTIES.keys()
+        expected += ipminative.CONSOLE_PROPERTIES.keys()
+        self.assertEqual(sorted(expected),
+                         sorted(self.driver.console.get_properties().keys()))
+        self.assertEqual(sorted(expected),
+                         sorted(self.driver.get_properties().keys()))
 
     @mock.patch('pyghmi.ipmi.command.Command')
     def test_get_power_state(self, ipmi_mock):
@@ -404,3 +408,69 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                                   self.node.uuid) as task:
             self.driver.management.get_sensors_data(task)
         ipmicmd.get_sensor_data.assert_called_once_with()
+
+    @mock.patch.object(console_utils, 'start_shellinabox_console',
+                       autospec=True)
+    def test_start_console(self, mock_exec):
+        mock_exec.return_value = None
+
+        with task_manager.acquire(self.context,
+                                  self.node.uuid) as task:
+            self.driver.console.start_console(task)
+
+        mock_exec.assert_called_once_with(self.info['uuid'],
+                                          self.info['port'],
+                                          mock.ANY)
+        self.assertTrue(mock_exec.called)
+
+    @mock.patch.object(console_utils, 'start_shellinabox_console',
+                       autospec=True)
+    def test_start_console_fail(self, mock_exec):
+        mock_exec.side_effect = exception.ConsoleSubprocessFailed(
+                error='error')
+
+        with task_manager.acquire(self.context,
+                                  self.node.uuid) as task:
+            self.assertRaises(exception.ConsoleSubprocessFailed,
+                              self.driver.console.start_console,
+                              task)
+
+    @mock.patch.object(console_utils, 'stop_shellinabox_console',
+                       autospec=True)
+    def test_stop_console(self, mock_exec):
+        mock_exec.return_value = None
+
+        with task_manager.acquire(self.context,
+                                  self.node['uuid']) as task:
+            self.driver.console.stop_console(task)
+
+        mock_exec.assert_called_once_with(self.info['uuid'])
+        self.assertTrue(mock_exec.called)
+
+    @mock.patch.object(console_utils, 'stop_shellinabox_console',
+                       autospec=True)
+    def test_stop_console_fail(self, mock_stop):
+        mock_stop.side_effect = exception.ConsoleError()
+
+        with task_manager.acquire(self.context,
+                                  self.node.uuid) as task:
+            self.assertRaises(exception.ConsoleError,
+                              self.driver.console.stop_console,
+                              task)
+
+        mock_stop.assert_called_once_with(self.node.uuid)
+
+    @mock.patch.object(console_utils, 'get_shellinabox_console_url',
+                       autospec=True)
+    def test_get_console(self, mock_exec):
+        url = 'http://localhost:4201'
+        mock_exec.return_value = url
+        expected = {'type': 'shellinabox', 'url': url}
+
+        with task_manager.acquire(self.context,
+                                  self.node.uuid) as task:
+            console_info = self.driver.console.get_console(task)
+
+        self.assertEqual(expected, console_info)
+        mock_exec.assert_called_once_with(self.info['port'])
+        self.assertTrue(mock_exec.called)

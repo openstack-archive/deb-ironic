@@ -19,11 +19,9 @@ import os
 import mock
 from oslo.config import cfg
 
-from ironic.common import exception
 from ironic.common import pxe_utils
 from ironic.conductor import task_manager
 from ironic.db import api as dbapi
-from ironic.openstack.common import context
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.objects import utils as object_utils
@@ -37,7 +35,6 @@ class TestPXEUtils(db_base.DbTestCase):
         super(TestPXEUtils, self).setUp()
         mgr_utils.mock_the_extension_manager(driver="fake")
         self.dbapi = dbapi.get_instance()
-        self.context = context.get_admin_context()
         self.pxe_options = {
             'deployment_key': '0123456789ABCDEFGHIJKLMNOPQRSTUV',
             'ari_path': u'/tftpboot/1be26c0b-03f2-4d2e-ae87-c02d7f33c123/'
@@ -55,6 +52,17 @@ class TestPXEUtils(db_base.DbTestCase):
                                    u'c02d7f33c123/deploy_kernel',
             'disk': 'cciss/c0d0,sda,hda,vda'
         }
+        self.agent_pxe_options = {
+            'deployment_ari_path': u'/tftpboot/1be26c0b-03f2-4d2e-ae87-c02d7'
+                                   u'f33c123/deploy_ramdisk',
+            'pxe_append_params': 'test_param',
+            'aki_path': u'/tftpboot/1be26c0b-03f2-4d2e-ae87-c02d7f33c123/'
+                        u'kernel',
+            'ipa-api-url': 'http://192.168.122.184:6385',
+            'ipa-driver-name': 'agent_ipmitool',
+            'deployment_aki_path': u'/tftpboot/1be26c0b-03f2-4d2e-ae87-'
+                                   u'c02d7f33c123/deploy_kernel',
+        }
         self.node = object_utils.create_test_node(self.context)
 
     def test__build_pxe_config(self):
@@ -65,7 +73,17 @@ class TestPXEUtils(db_base.DbTestCase):
         expected_template = open(
             'ironic/tests/drivers/pxe_config.template').read().rstrip()
 
-        self.assertEqual(rendered_template, unicode(expected_template))
+        self.assertEqual(unicode(expected_template), rendered_template)
+
+    def test__build_pxe_config_with_agent(self):
+
+        rendered_template = pxe_utils._build_pxe_config(
+                self.agent_pxe_options, CONF.agent.agent_pxe_config_template)
+
+        expected_template = open(
+            'ironic/tests/drivers/agent_pxe_config.template').read().rstrip()
+
+        self.assertEqual(unicode(expected_template), rendered_template)
 
     @mock.patch('ironic.common.utils.create_link_without_raise')
     @mock.patch('ironic.common.utils.unlink_without_raise')
@@ -95,18 +113,18 @@ class TestPXEUtils(db_base.DbTestCase):
 
     @mock.patch('ironic.common.utils.create_link_without_raise')
     @mock.patch('ironic.common.utils.unlink_without_raise')
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.get_ip_addresses')
-    def test__link_ip_address_pxe_configs(self, get_ip_mock, unlink_mock,
-                                    create_link_mock):
+    @mock.patch('ironic.common.dhcp_factory.DHCPFactory.provider')
+    def test__link_ip_address_pxe_configs(self, provider_mock, unlink_mock,
+                                          create_link_mock):
         ip_address = '10.10.0.1'
         address = "aa:aa:aa:aa:aa:aa"
-        object_utils.create_test_port(self.context, node_uuid=self.node.uuid,
+        object_utils.create_test_port(self.context, node_id=self.node.id,
                                       address=address)
 
-        get_ip_mock.return_value = [ip_address]
+        provider_mock.get_ip_addresses.return_value = [ip_address]
         create_link_calls = [
             mock.call(u'/tftpboot/1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
-                      '/tftpboot/0A0A0001.conf'),
+                      u'/tftpboot/0A0A0001.conf'),
         ]
         with task_manager.acquire(self.context, self.node.uuid) as task:
             pxe_utils._link_ip_address_pxe_configs(task)
@@ -138,7 +156,7 @@ class TestPXEUtils(db_base.DbTestCase):
     @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
     def test_clean_up_pxe_config(self, unlink_mock, rmtree_mock):
         address = "aa:aa:aa:aa:aa:aa"
-        object_utils.create_test_port(self.context, node_uuid=self.node.uuid,
+        object_utils.create_test_port(self.context, node_id=self.node.id,
                                       address=address)
 
         with task_manager.acquire(self.context, self.node.uuid) as task:
@@ -255,47 +273,18 @@ class TestPXEUtils(db_base.DbTestCase):
             self.assertEqual(sorted(expected_info),
                              sorted(pxe_utils.dhcp_options_for_instance(task)))
 
-    def test_get_node_capability(self):
-        properties = {'capabilities': 'cap1:value1,cap2:value2'}
-        self.node.properties = properties
-        expected = 'value1'
-
-        result = pxe_utils.get_node_capability(self.node, 'cap1')
-        self.assertEqual(expected, result)
-
-    def test_get_node_capability_returns_none(self):
-        properties = {'capabilities': 'cap1:value1,cap2:value2'}
-        self.node.properties = properties
-
-        result = pxe_utils.get_node_capability(self.node, 'capX')
-        self.assertIsNone(result)
-
-    def test_validate_boot_mode_capability(self):
-        properties = {'capabilities': 'boot_mode:uefi,cap2:value2'}
-        self.node.properties = properties
-
-        result = pxe_utils.validate_boot_mode_capability(self.node)
-        self.assertIsNone(result)
-
-    def test_validate_boot_mode_capability_with_exception(self):
-        properties = {'capabilities': 'boot_mode:foo,cap2:value2'}
-        self.node.properties = properties
-
-        self.assertRaises(exception.InvalidParameterValue,
-                          pxe_utils.validate_boot_mode_capability, self.node)
-
     @mock.patch('ironic.common.utils.rmtree_without_raise', autospec=True)
     @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi._get_port_ip_address')
-    def test_clean_up_pxe_config_uefi(self, get_ip_mock, unlink_mock,
-                                                          rmtree_mock):
+    @mock.patch('ironic.common.dhcp_factory.DHCPFactory.provider')
+    def test_clean_up_pxe_config_uefi(self, provider_mock, unlink_mock,
+                                      rmtree_mock):
         ip_address = '10.10.0.1'
         address = "aa:aa:aa:aa:aa:aa"
         properties = {'capabilities': 'boot_mode:uefi'}
-        object_utils.create_test_port(self.context, node_uuid=self.node.uuid,
+        object_utils.create_test_port(self.context, node_id=self.node.id,
                                       address=address)
 
-        get_ip_mock.return_value = ip_address
+        provider_mock.get_ip_addresses.return_value = [ip_address]
 
         with task_manager.acquire(self.context, self.node.uuid) as task:
             task.node.properties = properties

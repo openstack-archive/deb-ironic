@@ -17,7 +17,6 @@ from ironic.drivers.modules import agent
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules import ssh
-from ironic.drivers import utils
 
 
 class AgentAndIPMIToolDriver(base.BaseDriver):
@@ -36,11 +35,7 @@ class AgentAndIPMIToolDriver(base.BaseDriver):
         self.deploy = agent.AgentDeploy()
         self.management = ipmitool.IPMIManagement()
         self.console = ipmitool.IPMIShellinaboxConsole()
-        self.agent_vendor = agent.AgentVendorInterface()
-        self.mapping = {'heartbeat': self.agent_vendor}
-        self.dl_mapping = {'lookup': self.agent_vendor}
-        self.vendor = utils.MixinVendorInterface(self.mapping,
-                driver_passthru_mapping=self.dl_mapping)
+        self.vendor = agent.AgentVendorInterface()
 
 
 class AgentAndIPMINativeDriver(base.BaseDriver):
@@ -59,11 +54,8 @@ class AgentAndIPMINativeDriver(base.BaseDriver):
         self.power = ipminative.NativeIPMIPower()
         self.deploy = agent.AgentDeploy()
         self.management = ipminative.NativeIPMIManagement()
-        self.agent_vendor = agent.AgentVendorInterface()
-        self.mapping = {'heartbeat': self.agent_vendor}
-        self.dl_mapping = {'lookup': self.agent_vendor}
-        self.vendor = utils.MixinVendorInterface(self.mapping,
-                driver_passthru_mapping=self.dl_mapping)
+        self.console = ipminative.NativeIPMIShellinaboxConsole()
+        self.vendor = agent.AgentVendorInterface()
 
 
 class AgentAndSSHDriver(base.BaseDriver):
@@ -83,8 +75,4 @@ class AgentAndSSHDriver(base.BaseDriver):
         self.power = ssh.SSHPower()
         self.deploy = agent.AgentDeploy()
         self.management = ssh.SSHManagement()
-        self.agent_vendor = agent.AgentVendorInterface()
-        self.mapping = {'heartbeat': self.agent_vendor}
-        self.dl_mapping = {'lookup': self.agent_vendor}
-        self.vendor = utils.MixinVendorInterface(self.mapping,
-                driver_passthru_mapping=self.dl_mapping)
+        self.vendor = agent.AgentVendorInterface()

@@ -30,11 +30,14 @@ import uuid
 
 import netaddr
 from oslo.config import cfg
+from oslo.utils import excutils
 import paramiko
 import six
 
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LW
 from ironic.openstack.common import log as logging
 from ironic.openstack.common import processutils
 
@@ -58,7 +61,22 @@ def _get_root_helper():
 
 
 def execute(*cmd, **kwargs):
-    """Convenience wrapper around oslo's execute() method."""
+    """Convenience wrapper around oslo's execute() method.
+
+    :param cmd: Passed to processutils.execute.
+    :param use_standard_locale: True | False. Defaults to False. If set to
+                                True, execute command with standard locale
+                                added to environment variables.
+    :returns: (stdout, stderr) from process execution
+    :raises: UnknownArgumentError
+    :raises: ProcessExecutionError
+    """
+
+    use_standard_locale = kwargs.pop('use_standard_locale', False)
+    if use_standard_locale:
+        env = kwargs.pop('env_variables', os.environ.copy())
+        env['LC_ALL'] = 'C'
+        kwargs['env_variables'] = env
     if kwargs.get('run_as_root') and 'root_helper' not in kwargs:
         kwargs['root_helper'] = _get_root_helper()
     result = processutils.execute(*cmd, **kwargs)
@@ -125,41 +143,6 @@ def generate_uid(topic, size=8):
 def random_alnum(size=32):
     characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     return ''.join(random.choice(characters) for _ in range(size))
-
-
-class LazyPluggable(object):
-    """A pluggable backend loaded lazily based on some value."""
-
-    def __init__(self, pivot, config_group=None, **backends):
-        self.__backends = backends
-        self.__pivot = pivot
-        self.__backend = None
-        self.__config_group = config_group
-
-    def __get_backend(self):
-        if not self.__backend:
-            if self.__config_group is None:
-                backend_name = CONF[self.__pivot]
-            else:
-                backend_name = CONF[self.__config_group][self.__pivot]
-            if backend_name not in self.__backends:
-                msg = _('Invalid backend: %s') % backend_name
-                raise exception.IronicException(msg)
-
-            backend = self.__backends[backend_name]
-            if isinstance(backend, tuple):
-                name = backend[0]
-                fromlist = backend[1]
-            else:
-                name = backend
-                fromlist = backend
-
-            self.__backend = __import__(name, None, None, fromlist)
-        return self.__backend
-
-    def __getattr__(self, key):
-        backend = self.__get_backend()
-        return getattr(backend, key)
 
 
 def delete_if_exists(pathname):
@@ -409,7 +392,7 @@ def tempdir(**kwargs):
         try:
             shutil.rmtree(tmpdir)
         except OSError as e:
-            LOG.error(_('Could not remove tmpdir: %s'), str(e))
+            LOG.error(_LE('Could not remove tmpdir: %s'), e)
 
 
 def mkfs(fs, path, label=None):
@@ -434,7 +417,19 @@ def mkfs(fs, path, label=None):
             label_opt = '-L'
         args.extend([label_opt, label])
     args.append(path)
-    execute(*args, run_as_root=True)
+    try:
+        execute(*args, run_as_root=True, use_standard_locale=True)
+    except processutils.ProcessExecutionError as e:
+        with excutils.save_and_reraise_exception() as ctx:
+            if os.strerror(errno.ENOENT) in e.stderr:
+                ctx.reraise = False
+                LOG.exception(_LE('Failed to make file system. '
+                                  'File system %s is not supported.'), fs)
+                raise exception.FileSystemNotSupported(fs=fs)
+            else:
+                LOG.exception(_LE('Failed to create a file system '
+                                  'in %(path)s. Error: %(error)s'),
+                              {'path': path, 'error': e})
 
 
 def unlink_without_raise(path):
@@ -444,8 +439,8 @@ def unlink_without_raise(path):
         if e.errno == errno.ENOENT:
             return
         else:
-            LOG.warn(_("Failed to unlink %(path)s, error: %(e)s") %
-                      {'path': path, 'e': e})
+            LOG.warn(_LW("Failed to unlink %(path)s, error: %(e)s"),
+                        {'path': path, 'e': e})
 
 
 def rmtree_without_raise(path):
@@ -453,7 +448,7 @@ def rmtree_without_raise(path):
         if os.path.isdir(path):
             shutil.rmtree(path)
     except OSError as e:
-        LOG.warn(_("Failed to remove dir %(path)s, error: %(e)s") %
+        LOG.warn(_LW("Failed to remove dir %(path)s, error: %(e)s"),
                 {'path': path, 'e': e})
 
 
@@ -469,9 +464,9 @@ def create_link_without_raise(source, link):
         if e.errno == errno.EEXIST:
             return
         else:
-            LOG.warn(_("Failed to create symlink from %(source)s to %(link)s"
-                       ", error: %(e)s") %
-                       {'source': source, 'link': link, 'e': e})
+            LOG.warn(_LW("Failed to create symlink from %(source)s to %(link)s"
+                         ", error: %(e)s"),
+                         {'source': source, 'link': link, 'e': e})
 
 
 def safe_rstrip(value, chars=None):
@@ -483,8 +478,8 @@ def safe_rstrip(value, chars=None):
 
     """
     if not isinstance(value, six.string_types):
-        LOG.warn(_("Failed to remove trailing character. Returning original "
-                   "object. Supplied object is not a string: %s,") % value)
+        LOG.warn(_LW("Failed to remove trailing character. Returning original "
+                     "object. Supplied object is not a string: %s,"), value)
         return value
 
     return value.rstrip(chars) or value

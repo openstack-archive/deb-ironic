@@ -20,8 +20,9 @@ from oslo.utils import excutils
 
 from ironic.common import dhcp_factory
 from ironic.common import exception
-from ironic.common import i18n
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LW
 from ironic.common import image_service
 from ironic.common import keystone
 from ironic.common import paths
@@ -37,9 +38,6 @@ from ironic import objects
 from ironic.openstack.common import fileutils
 from ironic.openstack.common import log
 
-
-_LE = i18n._LE
-_LW = i18n._LW
 
 agent_opts = [
     cfg.StrOpt('agent_pxe_append_params',
@@ -74,9 +72,10 @@ def _get_client():
     return client
 
 
-def build_agent_options():
+def build_agent_options(node):
     """Build the options to be passed to the agent ramdisk.
 
+    :param node: an ironic node object
     :returns: a dictionary containing the parameters to be passed to
         agent ramdisk.
     """
@@ -84,15 +83,17 @@ def build_agent_options():
                   keystone.get_service_url()).rstrip('/')
     return {
         'ipa-api-url': ironic_api,
+        'ipa-driver-name': node.driver
     }
 
 
-def _build_pxe_config_options(pxe_info):
+def _build_pxe_config_options(node, pxe_info):
     """Builds the pxe config options for booting agent.
 
     This method builds the config options to be replaced on
     the agent pxe config template.
 
+    :param node: an ironic node object
     :param pxe_info: A dict containing the 'deploy_kernel' and
         'deploy_ramdisk' for the agent pxe config template.
     :returns: a dict containing the options to be applied on
@@ -103,7 +104,7 @@ def _build_pxe_config_options(pxe_info):
         'deployment_ari_path': pxe_info['deploy_ramdisk'][1],
         'pxe_append_params': CONF.agent.agent_pxe_append_params,
     }
-    agent_opts = build_agent_options()
+    agent_opts = build_agent_options(node)
     agent_config_opts.update(agent_opts)
     return agent_config_opts
 
@@ -124,7 +125,7 @@ def _set_failed_state(task, msg):
     node = task.node
     node.provision_state = states.DEPLOYFAIL
     node.target_provision_state = states.NOSTATE
-    node.save(task.context)
+    node.save()
     try:
         manager_utils.node_power_action(task, states.POWER_OFF)
     except Exception:
@@ -137,7 +138,7 @@ def _set_failed_state(task, msg):
         # NOTE(deva): node_power_action() erases node.last_error
         #             so we need to set it again here.
         node.last_error = msg
-        node.save(task.context)
+        node.save()
 
 
 @image_cache.cleanup(priority=25)
@@ -230,7 +231,7 @@ class AgentDeploy(base.DeployInterface):
             _get_tftp_image_info(task.node)
         except KeyError:
             raise exception.InvalidParameterValue(_(
-                    'Node %s failed to validate deploy image info'),
+                    'Node %s failed to validate deploy image info') %
                     task.node.uuid)
 
     @task_manager.require_exclusive_lock
@@ -246,7 +247,7 @@ class AgentDeploy(base.DeployInterface):
         :returns: status of the deploy. One of ironic.common.states.
         """
         dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
-        provider = dhcp_factory.DHCPFactory(token=task.context.auth_token)
+        provider = dhcp_factory.DHCPFactory()
         provider.update_dhcp(task, dhcp_opts)
         manager_utils.node_set_boot_device(task, 'pxe', persistent=True)
         manager_utils.node_power_action(task, states.REBOOT)
@@ -270,14 +271,14 @@ class AgentDeploy(base.DeployInterface):
         """
         node = task.node
         pxe_info = _get_tftp_image_info(task.node)
-        pxe_options = _build_pxe_config_options(pxe_info)
+        pxe_options = _build_pxe_config_options(task.node, pxe_info)
         pxe_utils.create_pxe_config(task,
                                     pxe_options,
                                     CONF.agent.agent_pxe_config_template)
         _cache_tftp_images(task.context, node, pxe_info)
 
         node.instance_info = build_instance_info_for_deploy(task)
-        node.save(task.context)
+        node.save()
 
     def clean_up(self, task):
         """Clean up the deployment environment for this node.
@@ -320,7 +321,7 @@ class AgentDeploy(base.DeployInterface):
 
         :param task: a TaskManager instance.
         """
-        provider = dhcp_factory.DHCPFactory(token=task.context.auth_token)
+        provider = dhcp_factory.DHCPFactory()
         provider.update_dhcp(task, CONF.agent.agent_pxe_bootfile_name)
 
 
@@ -376,11 +377,18 @@ class AgentVendorInterface(base.VendorInterface):
         func = self.vendor_routes[method]
         try:
             return func(task, **kwargs)
-        except Exception:
-            # catch-all in case something bubbles up here
+        except exception.IronicException as e:
             with excutils.save_and_reraise_exception():
-                LOG.exception(_('vendor_passthru failed with method %s'),
+                # log this because even though the exception is being
+                # reraised, it won't be handled if it is an async. call.
+                LOG.exception(_LE('vendor_passthru failed with method %s'),
                               method)
+        except Exception as e:
+            # catch-all in case something bubbles up here
+            # log this because even though the exception is being
+            # reraised, it won't be handled if it is an async. call.
+            LOG.exception(_LE('vendor_passthru failed with method %s'), method)
+            raise exception.VendorPassthruException(message=e)
 
     def _heartbeat(self, task, **kwargs):
         """Method for agent to periodically check in.
@@ -401,9 +409,12 @@ class AgentVendorInterface(base.VendorInterface):
             {'node': node.uuid,
              'heartbeat': driver_info.get('agent_last_heartbeat')})
         driver_info['agent_last_heartbeat'] = int(_time())
+        # FIXME(rloo): This could raise KeyError exception if 'agent_url'
+        #              wasn't specified. Instead, raise MissingParameterValue.
         driver_info['agent_url'] = kwargs['agent_url']
+
         node.driver_info = driver_info
-        node.save(task.context)
+        node.save()
 
         # Async call backs don't set error state on their own
         # TODO(jimrollenhagen) improve error messages here
@@ -442,7 +453,7 @@ class AgentVendorInterface(base.VendorInterface):
                   {'res': res, 'node': node.uuid})
 
         node.provision_state = states.DEPLOYING
-        node.save(task.context)
+        node.save()
 
     def _check_deploy_success(self, node):
         # should only ever be called after we've validated that
@@ -472,7 +483,7 @@ class AgentVendorInterface(base.VendorInterface):
 
         node.provision_state = states.ACTIVE
         node.target_provision_state = states.NOSTATE
-        node.save(task.context)
+        node.save()
 
     def _lookup(self, context, **kwargs):
         """Method to be called the first time a ramdisk agent checks in. This
@@ -583,8 +594,8 @@ class AgentVendorInterface(base.VendorInterface):
             node = objects.Node.get_by_id(context, node_id)
         except exception.NodeNotFound:
             with excutils.save_and_reraise_exception():
-                LOG.exception(_('Could not find matching node for the '
-                                'provided MACs %s.'), mac_addresses)
+                LOG.exception(_LE('Could not find matching node for the '
+                                  'provided MACs %s.'), mac_addresses)
 
         return node
 

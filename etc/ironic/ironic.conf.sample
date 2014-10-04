@@ -43,6 +43,10 @@
 # Whether to disable the Nagle algorithm. (boolean value)
 #qpid_tcp_nodelay=true
 
+# The number of prefetched messages held by receiver. (integer
+# value)
+#qpid_receiver_capacity=1
+
 # The qpid topology version to use.  Version 1 is what was
 # originally used by impl_qpid.  Version 2 includes some
 # backwards-incompatible changes that allow broker federation
@@ -232,8 +236,14 @@
 # distributing load across conductors. Larger values will
 # result in more even distribution of load and less load when
 # rebalancing the ring, but more memory usage. Number of
-# partitions is (2^hash_partition_exponent). (integer value)
-#hash_partition_exponent=16
+# partitions per conductor is (2^hash_partition_exponent).
+# This determines the granularity of rebalancing: given 10
+# hosts, and an exponent of the 2, there are 40 partitions in
+# the ring.A few thousand partitions should make rebalancing
+# smooth in most cases. The default is suitable for up to a
+# few hundred conductors. Too many partitions has a CPU
+# impact. (integer value)
+#hash_partition_exponent=5
 
 # [Experimental Feature] Number of hosts to map onto each hash
 # partition. Setting this to more than one will cause
@@ -568,6 +578,14 @@
 # to Ceilometer. The default value, "ALL", is a special value
 # meaning send all the sensor data. (list value)
 #send_sensor_data_types=ALL
+
+# When conductors join or leave the cluster, existing
+# conductors may need to update any persistent local state as
+# nodes are moved around the cluster. This option controls how
+# often, in seconds, each conductor will check for nodes that
+# it should "take over". Set it to a negative value to disable
+# the check entirely. (integer value)
+#sync_local_state_interval=180
 
 
 [console]
@@ -995,6 +1013,32 @@
 # defined) this string is used for key derivation. (string
 # value)
 #memcache_secret_key=<None>
+
+# (optional) number of seconds memcached server is considered
+# dead before it is tried again. (integer value)
+#memcache_pool_dead_retry=300
+
+# (optional) max total number of open connections to every
+# memcached server. (integer value)
+#memcache_pool_maxsize=10
+
+# (optional) socket timeout in seconds for communicating with
+# a memcache server. (integer value)
+#memcache_pool_socket_timeout=3
+
+# (optional) number of seconds a connection to memcached is
+# held unused in the pool before it is closed. (integer value)
+#memcache_pool_unused_timeout=60
+
+# (optional) number of seconds that an operation will wait to
+# get a memcache client connection from the pool. (integer
+# value)
+#memcache_pool_conn_get_timeout=10
+
+# (optional) use the advanced (eventlet safe) memcache client
+# pool. The advanced pool will only work under python 2.x.
+# (boolean value)
+#memcache_use_advanced_pool=false
 
 # (optional) indicate whether to set the X-Service-Catalog
 # header. If False, middleware will not ask for service

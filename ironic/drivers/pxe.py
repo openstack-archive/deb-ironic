@@ -23,6 +23,7 @@ from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.drivers import base
 from ironic.drivers.modules import iboot
+from ironic.drivers.modules.ilo import deploy as ilo_deploy
 from ironic.drivers.modules.ilo import power as ilo_power
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
@@ -86,6 +87,7 @@ class PXEAndIPMINativeDriver(base.BaseDriver):
                     driver=self.__class__.__name__,
                     reason=_("Unable to import pyghmi library"))
         self.power = ipminative.NativeIPMIPower()
+        self.console = ipminative.NativeIPMIShellinaboxConsole()
         self.deploy = pxe.PXEDeploy()
         self.management = ipminative.NativeIPMIManagement()
         self.vendor = pxe.VendorPassthru()
@@ -106,7 +108,7 @@ class PXEAndSeaMicroDriver(base.BaseDriver):
         if not importutils.try_import('seamicroclient'):
             raise exception.DriverLoadError(
                     driver=self.__class__.__name__,
-                    reason="Unable to import seamicroclient library")
+                    reason=_("Unable to import seamicroclient library"))
         self.power = seamicro.Power()
         self.deploy = pxe.PXEDeploy()
         self.management = seamicro.Management()
@@ -133,7 +135,7 @@ class PXEAndIBootDriver(base.BaseDriver):
         if not importutils.try_import('iboot'):
             raise exception.DriverLoadError(
                     driver=self.__class__.__name__,
-                    reason="Unable to import iboot library")
+                    reason=_("Unable to import iboot library"))
         self.power = iboot.IBootPower()
         self.deploy = pxe.PXEDeploy()
         self.vendor = pxe.VendorPassthru()
@@ -144,7 +146,11 @@ class PXEAndIloDriver(base.BaseDriver):
 
     This driver implements the `core` functionality using
     :class:ironic.drivers.modules.ilo.power.IloPower for power management
-    and :class:ironic.drivers.modules.pxe.PXE for image deployment.
+    :class:ironic.drivers.modules.ilo.deploy.IloPXEDeploy(pxe.PXEDeploy)
+    :class:ironic.drivers.modules.ilo.deply.IloManagement(
+                                                 ipmitool.IPMIManagement)
+    for image deployment.
+
     """
 
     def __init__(self):
@@ -153,8 +159,10 @@ class PXEAndIloDriver(base.BaseDriver):
                     driver=self.__class__.__name__,
                     reason=_("Unable to import proliantutils library"))
         self.power = ilo_power.IloPower()
-        self.deploy = pxe.PXEDeploy()
-        self.vendor = pxe.VendorPassthru()
+        self.deploy = ilo_deploy.IloPXEDeploy()
+        self.vendor = ilo_deploy.IloPXEVendorPassthru()
+        self.console = ilo_deploy.IloConsoleInterface()
+        self.management = ilo_deploy.IloManagement()
 
 
 class PXEAndSNMPDriver(base.BaseDriver):

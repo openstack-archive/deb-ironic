@@ -20,8 +20,9 @@ import tempfile
 from oslo.config import cfg
 
 from ironic.common import exception
-from ironic.common import i18n
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LI
 from ironic.common import images
 from ironic.common import states
 from ironic.common import swift
@@ -31,13 +32,13 @@ from ironic.drivers import base
 from ironic.drivers.modules import agent
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules.ilo import common as ilo_common
+from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules import iscsi_deploy
+from ironic.drivers.modules import pxe
+from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
-
-_LE = i18n._LE
-_LI = i18n._LI
 
 CONF = cfg.CONF
 
@@ -51,6 +52,29 @@ CONF.import_opt('pxe_append_params', 'ironic.drivers.modules.iscsi_deploy',
                 group='pxe')
 CONF.import_opt('swift_ilo_container', 'ironic.drivers.modules.ilo.common',
                 group='ilo')
+
+BOOT_DEVICE_MAPPING_TO_ILO = {'pxe': 'NETWORK', 'disk': 'HDD',
+                              'cdrom': 'CDROM', 'bios': 'BIOS', 'safe': 'SAFE'}
+
+
+def _update_ipmi_properties(task):
+        """Update ipmi properties to node driver_info
+
+        :param task: a task from TaskManager.
+        """
+        node = task.node
+        info = node.driver_info
+
+        #updating ipmi credentials
+        info['ipmi_address'] = info['ilo_address']
+        info['ipmi_username'] = info['ilo_username']
+        info['ipmi_password'] = info['ilo_password']
+
+        if 'console_port' in info:
+            info['ipmi_terminal_port'] = info['console_port']
+
+        #saving ipmi credentials to task object
+        task.node.driver_info = info
 
 
 def _get_boot_iso_object_name(node):
@@ -93,6 +117,14 @@ def _get_boot_iso(task, root_uuid):
     if boot_iso_uuid:
         LOG.debug("Found boot_iso %s in Glance", boot_iso_uuid)
         return 'glance:%s' % boot_iso_uuid
+
+    # NOTE(faizan) For uefi boot_mode, operator should provide efi capable
+    # boot-iso in glance
+    if driver_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
+        LOG.error(_LE("Unable to find boot_iso in Glance, required to deploy "
+                      "node %(node)s in UEFI boot mode."),
+                  {'node': task.node.uuid})
+        return
 
     kernel_uuid = images.get_glance_image_property(task.context,
             image_uuid, 'kernel_id')
@@ -240,6 +272,7 @@ class IloVirtualMediaIscsiDeploy(base.DeployInterface):
         d_info = _parse_deploy_info(task.node)
         iscsi_deploy.validate_glance_image_properties(task.context, d_info,
                                                       props)
+        driver_utils.validate_boot_mode_capability(task.node)
 
     @task_manager.require_exclusive_lock
     def deploy(self, task):
@@ -257,16 +290,16 @@ class IloVirtualMediaIscsiDeploy(base.DeployInterface):
             image.
         :raises: IloOperationError, if some operation on iLO fails.
         """
+        node = task.node
         manager_utils.node_power_action(task, states.POWER_OFF)
 
-        iscsi_deploy.cache_instance_image(task.context, task.node)
+        iscsi_deploy.cache_instance_image(task.context, node)
         iscsi_deploy.check_image_size(task)
 
-        deploy_ramdisk_opts = iscsi_deploy.build_deploy_ramdisk_options(
-                task.node, task.context)
+        deploy_ramdisk_opts = iscsi_deploy.build_deploy_ramdisk_options(node)
         deploy_nic_mac = _get_single_nic_with_vif_port_id(task)
         deploy_ramdisk_opts['BOOTIF'] = deploy_nic_mac
-        deploy_iso_uuid = task.node.driver_info['ilo_deploy_iso']
+        deploy_iso_uuid = node.driver_info['ilo_deploy_iso']
         deploy_iso = 'glance:' + deploy_iso_uuid
 
         _reboot_into(task, deploy_iso, deploy_ramdisk_opts)
@@ -290,8 +323,13 @@ class IloVirtualMediaIscsiDeploy(base.DeployInterface):
         """Prepare the deployment environment for this task's node.
 
         :param task: a TaskManager instance containing the node to act on.
+        :raises: IloOperationError, if some operation on iLO failed.
         """
-        pass
+        boot_mode = driver_utils.get_node_capability(task.node, 'boot_mode')
+        if boot_mode is not None:
+            ilo_common.set_boot_mode(task.node, boot_mode)
+        else:
+            ilo_common.update_boot_mode_capability(task)
 
     def clean_up(self, task):
         """Clean up the deployment environment for the task's node.
@@ -338,7 +376,7 @@ class IloVirtualMediaAgentDeploy(base.DeployInterface):
             image.
         :raises: IloOperationError, if some operation on iLO fails.
         """
-        deploy_ramdisk_opts = agent.build_agent_options()
+        deploy_ramdisk_opts = agent.build_agent_options(task.node)
         deploy_iso_uuid = task.node.driver_info['ilo_deploy_iso']
         deploy_iso = 'glance:' + deploy_iso_uuid
         _reboot_into(task, deploy_iso, deploy_ramdisk_opts)
@@ -362,7 +400,7 @@ class IloVirtualMediaAgentDeploy(base.DeployInterface):
         """
         node = task.node
         node.instance_info = agent.build_instance_info_for_deploy(task)
-        node.save(task.context)
+        node.save()
 
     def clean_up(self, task):
         """Clean up the deployment environment for this node.
@@ -380,6 +418,165 @@ class IloVirtualMediaAgentDeploy(base.DeployInterface):
         :param task: a TaskManager instance.
         """
         pass
+
+
+class IloPXEDeploy(pxe.PXEDeploy):
+
+    def validate(self, task):
+        """Validate the deployment information for the task's node.
+
+        This method validates the boot mode capability of the node and then
+        call the PXEDeploy's validate method.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :raises: InvalidParameterValue or MissingParameterValue,
+            if some information is missing or invalid.
+        """
+        driver_utils.validate_boot_mode_capability(task.node)
+        super(IloPXEDeploy, self).validate(task)
+
+    def prepare(self, task):
+        """Prepare the deployment environment for this task's node.
+
+        If the node's 'capabilities' property includes a boot_mode, that
+        boot mode will be applied for the node. Otherwise, the existing
+        boot mode of the node is used in the node's 'capabilities' property.
+
+        PXEDeploys' prepare method is then called, to prepare the deploy
+        environment for the node
+
+        :param task: a TaskManager instance containing the node to act on.
+        """
+        boot_mode = driver_utils.get_node_capability(task.node, 'boot_mode')
+        if boot_mode is None:
+            ilo_common.update_boot_mode_capability(task)
+        else:
+            ilo_common.set_boot_mode(task.node, boot_mode)
+        super(IloPXEDeploy, self).prepare(task)
+
+    def deploy(self, task):
+        """Start deployment of the task's node.
+
+        This method sets the boot device to 'NETWORK' and then calls
+        PXEDeploy's deploy method to deploy on the given node.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :returns: deploy state DEPLOYWAIT.
+        """
+        ilo_common.set_boot_device(task.node, 'NETWORK', False)
+        return super(IloPXEDeploy, self).deploy(task)
+
+
+class IloManagement(ipmitool.IPMIManagement):
+
+    # Currently adding support to set_boot_device through iLO. All other
+    # functionalities (get_sensors_data etc) will be used from IPMI.
+
+    # TODO(ramineni):To support other functionalities also using iLO.
+
+    def get_properties(self):
+        return ilo_common.REQUIRED_PROPERTIES
+
+    def validate(self, task):
+        """Check that 'driver_info' contains ILO and IPMI credentials.
+
+        Validates whether the 'driver_info' property of the supplied
+        task's node contains the required credentials information.
+
+        :param task: a task from TaskManager.
+        :raises: InvalidParameterValue if required IPMI/iLO parameters
+            are missing.
+        :raises: MissingParameterValue if a required parameter is missing.
+
+        """
+        ilo_common.parse_driver_info(task.node)
+        _update_ipmi_properties(task)
+        super(IloManagement, self).validate(task)
+
+    @task_manager.require_exclusive_lock
+    def set_boot_device(self, task, device, persistent=False):
+        """Set the boot device for the task's node.
+
+        Set the boot device to use on next reboot of the node.
+
+        :param task: a task from TaskManager.
+        :param device: the boot device, one of
+                       :mod:`ironic.common.boot_devices`.
+        :param persistent: Boolean value. True if the boot device will
+                           persist to all future boots, False if not.
+                           Default: False.
+        :raises: InvalidParameterValue if an invalid boot device is specified
+        :raises: MissingParameterValue if required ilo credentials are missing.
+        :raises: IloOperationError, if unable to set the boot device.
+
+        """
+        try:
+            boot_device = BOOT_DEVICE_MAPPING_TO_ILO[device]
+        except KeyError:
+            raise exception.InvalidParameterValue(_(
+                "Invalid boot device %s specified.") % device)
+
+        ilo_common.parse_driver_info(task.node)
+        ilo_common.set_boot_device(task.node, boot_device, persistent)
+
+    def get_sensors_data(self, task):
+        """Get sensors data.
+
+        :param task: a TaskManager instance.
+        :raises: FailedToGetSensorData when getting the sensor data fails.
+        :raises: FailedToParseSensorData when parsing sensor data fails.
+        :raises: InvalidParameterValue if required ipmi/iLO parameters
+                 are missing.
+        :raises: MissingParameterValue if a required parameter is missing.
+        :returns: returns a dict of sensor data group by sensor type.
+
+        """
+        ilo_common.parse_driver_info(task.node)
+        _update_ipmi_properties(task)
+        super(IloManagement, self).get_sensors_data(task)
+
+
+class IloConsoleInterface(ipmitool.IPMIShellinaboxConsole):
+    """A ConsoleInterface that uses ipmitool and shellinabox."""
+
+    def get_properties(self):
+        d = ilo_common.REQUIRED_PROPERTIES.copy()
+        d.update(ilo_common.CONSOLE_PROPERTIES)
+        return d
+
+    def validate(self, task):
+        """Validate the Node console info.
+
+        :param task: a task from TaskManager.
+        :raises: InvalidParameterValue
+        :raises: MissingParameterValue when a required parameter is missing
+
+        """
+        node = task.node
+        driver_info = ilo_common.parse_driver_info(node)
+        if 'console_port' not in driver_info:
+            raise exception.MissingParameterValue(_(
+                "Console port not supplied to iLO driver."))
+
+        _update_ipmi_properties(task)
+        super(IloConsoleInterface, self).validate(task)
+
+
+class IloPXEVendorPassthru(pxe.VendorPassthru):
+
+    def vendor_passthru(self, task, **kwargs):
+        """Calls a valid vendor passthru method.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :param kwargs: kwargs containing the vendor passthru method and its
+            parameters.
+        """
+        method = kwargs['method']
+        if method == 'pass_deploy_info':
+            ilo_common.set_boot_device(task.node, 'NETWORK', True)
+
+        return super(IloPXEVendorPassthru, self).vendor_passthru(task,
+                                                                 **kwargs)
 
 
 class VendorPassthru(base.VendorInterface):
@@ -448,7 +645,7 @@ class VendorPassthru(base.VendorInterface):
             i_info = node.instance_info
             i_info['ilo_boot_iso'] = boot_iso
             node.instance_info = i_info
-            node.save(task.context)
+            node.save()
             LOG.info(_LI('Deployment to node %s done'), node.uuid)
         except Exception as e:
             LOG.error(_LE('Deploy failed for instance %(instance)s. '

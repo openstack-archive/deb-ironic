@@ -36,7 +36,6 @@ from ironic.conductor import task_manager
 from ironic.db import api as db_api
 from ironic.drivers.modules import console_utils
 from ironic.drivers.modules import ipmitool as ipmi
-from ironic.openstack.common import context
 from ironic.openstack.common import processutils
 from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
@@ -213,11 +212,10 @@ class IPMIToolCheckOptionSupportedTestCase(base.TestCase):
 
 
 @mock.patch.object(time, 'sleep')
-class IPMIToolPrivateMethodTestCase(base.TestCase):
+class IPMIToolPrivateMethodTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IPMIToolPrivateMethodTestCase, self).setUp()
-        self.context = context.get_admin_context()
         self.node = obj_utils.get_test_node(
                 self.context,
                 driver='fake_ipmitool',
@@ -856,7 +854,6 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IPMIToolDriverTestCase, self).setUp()
-        self.context = context.get_admin_context()
         self.dbapi = db_api.get_instance()
         mgr_utils.mock_the_extension_manager(driver="fake_ipmitool")
         self.driver = driver_factory.get_driver("fake_ipmitool")
