@@ -1,3 +1,9 @@
+ironic (2014.1-10) UNRELEASED; urgency=medium
+
+  * Mangling upstream rc and beta versions in watch file.
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 05 Oct 2014 14:35:21 +0800
+
 ironic (2014.1-9) unstable; urgency=medium
 
   * Added Russian debconf template thanks to Yuri Kozlov <yuray@komyakino.ru>
