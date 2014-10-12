@@ -11,10 +11,8 @@
 # Description:       Frontend Baremetal (Ironic) API server
 ### END INIT INFO
 
-# Author: Julien Danjou <acid@debian.org>
+# Author: Thomas Goirand <zigo@debian.org>
 
-# PATH should only include /usr/* if it runs after the mountnfs.sh script
-PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Baremetal Service API"
 PROJECT_NAME=ironic
 NAME=ironic-api

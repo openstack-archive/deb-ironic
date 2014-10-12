@@ -11,10 +11,8 @@
 # Description:       Frontend Baremetal (Ironic) Conductor server
 ### END INIT INFO
 
-# Author: Julien Danjou <acid@debian.org>
+# Author: Thomas Goirand <zigo@debian.org>
 
-# PATH should only include /usr/* if it runs after the mountnfs.sh script
-PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Baremetal Service Conductor"
 PROJECT_NAME=ironic
 NAME=${PROJECT_NAME}-conductor
