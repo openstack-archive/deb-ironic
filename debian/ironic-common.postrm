@@ -22,6 +22,9 @@ if [ "${1}" = "purge" ] ; then
 	rm -rf /var/log/ironic
 	rm -f /etc/ironic/ironic.conf
 	[ -d /etc/ironic ] && rmdir --ignore-fail-on-non-empty /etc/ironic || true
+	rm -rf /var/lib/ironic/cache || true
+	rm -f /var/lib/ironicdb || true
+	[ -d /var/lib/ironic ] && rmdir --ignore-fail-on-non-empty /var/lib/ironic || true
 fi
 
 #DEBHELPER#
