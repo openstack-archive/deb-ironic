@@ -1,6 +1,7 @@
 ironic (2014.2-2) experimental; urgency=medium
 
   * Cleans /var/lib/ironic/{cache, ironicdb} on purge. (Closes: #768561)
+  * Adds dh-python as build-depends.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 10 Nov 2014 14:59:33 +0000
 
