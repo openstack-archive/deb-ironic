@@ -1,6 +1,7 @@
-ironic (2014.1-10) UNRELEASED; urgency=medium
+ironic (2014.1-10) unstable; urgency=medium
 
   * Mangling upstream rc and beta versions in watch file.
+  * Added nl.po debconf translation (Closes: #767479).
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 05 Oct 2014 14:35:21 +0800
 
