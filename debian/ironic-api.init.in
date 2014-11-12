@@ -1,0 +1,18 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          ironic-api
+# Required-Start:    $network $local_fs $remote_fs $syslog
+# Required-Stop:     $remote_fs
+# Should-Start:      postgresql mysql keystone ntp rabbitmq-server
+# Should-Stop:       postgresql mysql keystone ntp rabbitmq-server
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Baremetal API server
+# Description:       Frontend Baremetal (Ironic) API server
+### END INIT INFO
+
+# Author: Thomas Goirand <zigo@debian.org>
+
+DESC="OpenStack Baremetal Service API"
+PROJECT_NAME=ironic
+NAME=ironic-api

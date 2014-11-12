@@ -11,7 +11,7 @@ export OSLO_PACKAGE_VERSION=$(VERSION)
 override_dh_auto_clean:
 	dh_auto_clean -O--buildsystem=python_distutils
 	rm -f debian/ironic-common.config debian/ironic-common.postinst
-	rm -rf doc/build
+	rm -rf doc/build debian/*.init debian/*.service debian/*.upstart
 
 override_dh_auto_build:
 	dh_auto_build
