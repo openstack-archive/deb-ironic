@@ -6,7 +6,7 @@ include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
-	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc
+	dh $@ --buildsystem=python_distutils --with python2,systemd,sphinxdoc
 
 override_dh_auto_clean:
 	dh_auto_clean -O--buildsystem=python_distutils
