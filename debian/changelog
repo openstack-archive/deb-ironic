@@ -2,6 +2,7 @@ ironic (2014.1-10) unstable; urgency=medium
 
   * Mangling upstream rc and beta versions in watch file.
   * Added nl.po debconf translation (Closes: #767479).
+  * Removed BSD license of nature.css of docs (file is gone upstream).
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 05 Oct 2014 14:35:21 +0800
 
