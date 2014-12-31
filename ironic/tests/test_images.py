@@ -16,11 +16,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import mock
 import os
 import shutil
 
+import mock
 from oslo.config import cfg
+from oslo_concurrency import processutils
 import six.moves.builtins as __builtin__
 
 from ironic.common import exception
@@ -28,7 +29,6 @@ from ironic.common import image_service
 from ironic.common import images
 from ironic.common import utils
 from ironic.openstack.common import imageutils
-from ironic.openstack.common import processutils
 from ironic.tests import base
 
 CONF = cfg.CONF
@@ -92,6 +92,23 @@ class IronicImagesTestCase(base.TestCase):
         open_mock.assert_called_once_with('path', 'wb')
         image_service_mock.download.assert_called_once_with(
             'image_href', 'file')
+
+    @mock.patch.object(images, 'image_to_raw')
+    @mock.patch.object(__builtin__, 'open')
+    def test_fetch_image_service_force_raw(self, open_mock, image_to_raw_mock):
+        mock_file_handle = mock.MagicMock(spec=file)
+        mock_file_handle.__enter__.return_value = 'file'
+        open_mock.return_value = mock_file_handle
+        image_service_mock = mock.Mock()
+
+        images.fetch('context', 'image_href', 'path', image_service_mock,
+                     force_raw=True)
+
+        open_mock.assert_called_once_with('path', 'wb')
+        image_service_mock.download.assert_called_once_with(
+            'image_href', 'file')
+        image_to_raw_mock.assert_called_once_with(
+            'image_href', 'path', 'path.part')
 
     @mock.patch.object(images, 'qemu_img_info')
     def test_image_to_raw_no_file_format(self, qemu_img_info_mock):
@@ -187,6 +204,15 @@ class IronicImagesTestCase(base.TestCase):
         image_service_mock = mock.MagicMock()
         images.download_size('context', 'image_href', image_service_mock)
         image_service_mock.show.assert_called_once_with('image_href')
+
+    @mock.patch.object(images, 'qemu_img_info')
+    def test_converted_size(self, qemu_img_info_mock):
+        info = self.FakeImgInfo()
+        info.virtual_size = 1
+        qemu_img_info_mock.return_value = info
+        size = images.converted_size('path')
+        qemu_img_info_mock.assert_called_once_with('path')
+        self.assertEqual(1, size)
 
 
 class FsImageTestCase(base.TestCase):
@@ -394,7 +420,7 @@ class FsImageTestCase(base.TestCase):
                           'path/to/ramdisk')
 
     @mock.patch.object(images, 'create_isolinux_image')
-    @mock.patch.object(images, 'fetch_to_raw')
+    @mock.patch.object(images, 'fetch')
     @mock.patch.object(utils, 'tempdir')
     def test_create_boot_iso(self, tempdir_mock, fetch_images_mock,
                              create_isolinux_mock):

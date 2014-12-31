@@ -22,6 +22,7 @@ from ironic.common import pxe_utils
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.drivers.modules import agent
+from ironic.drivers.modules import deploy_utils
 from ironic import objects
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
@@ -74,13 +75,24 @@ class TestAgentDeploy(db_base.DbTestCase):
                 self.context, self.node['uuid'], shared=False) as task:
             self.driver.validate(task)
 
-    def test_validate_exception(self):
+    def test_validate_driver_info_missing_params(self):
         self.node.driver_info = {}
         self.node.save()
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                             self.driver.validate, task)
+            e = self.assertRaises(exception.MissingParameterValue,
+                                  self.driver.validate, task)
+        self.assertIn('driver_info.deploy_ramdisk', str(e))
+        self.assertIn('driver_info.deploy_kernel', str(e))
+
+    def test_validate_instance_info_missing_params(self):
+        self.node.instance_info = {}
+        self.node.save()
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            e = self.assertRaises(exception.MissingParameterValue,
+                                  self.driver.validate, task)
+        self.assertIn('instance_info.image_source', str(e))
 
     @mock.patch.object(dhcp_factory.DHCPFactory, 'update_dhcp')
     @mock.patch('ironic.conductor.utils.node_set_boot_device')
@@ -122,10 +134,10 @@ class TestAgentDeploy(db_base.DbTestCase):
 class TestAgentVendor(db_base.DbTestCase):
     def setUp(self):
         super(TestAgentVendor, self).setUp()
-        mgr_utils.mock_the_extension_manager(driver="fake_pxe")
+        mgr_utils.mock_the_extension_manager(driver="fake_agent")
         self.passthru = agent.AgentVendorInterface()
         n = {
-              'driver': 'fake_pxe',
+              'driver': 'fake_agent',
               'instance_info': INSTANCE_INFO,
               'driver_info': DRIVER_INFO
         }
@@ -135,22 +147,61 @@ class TestAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.passthru.validate(task)
 
-    @mock.patch('ironic.common.image_service.Service')
-    def test_continue_deploy(self, image_service_mock):
+    def test_driver_validate(self):
+        kwargs = {'version': '2'}
+        method = 'lookup'
+        self.passthru.driver_validate(method, **kwargs)
+
+    def test_driver_validate_invalid_paremeter(self):
+        method = 'lookup'
+        kwargs = {'version': '1'}
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.passthru.driver_validate,
+                          method, **kwargs)
+
+    def test_driver_validate_missing_parameter(self):
+        method = 'lookup'
+        kwargs = {}
+        self.assertRaises(exception.MissingParameterValue,
+                          self.passthru.driver_validate,
+                          method, **kwargs)
+
+    def test_continue_deploy(self):
         test_temp_url = 'http://image'
         expected_image_info = {
             'urls': [test_temp_url],
             'id': 'fake-image',
-            'checksum': 'checksum'
+            'checksum': 'checksum',
+            'disk_format': 'qcow2',
+            'container_format': 'bare',
         }
 
         client_mock = mock.Mock()
-        glance_mock = mock.Mock()
-        glance_mock.show.return_value = {}
-        glance_mock.swift_temp_url.return_value = test_temp_url
-        image_service_mock.return_value = glance_mock
-
         self.passthru._client = client_mock
+
+        with task_manager.acquire(self.context, self.node.uuid,
+                                      shared=False) as task:
+            self.passthru._continue_deploy(task)
+
+            client_mock.prepare_image.assert_called_with(task.node,
+                expected_image_info)
+            self.assertEqual(task.node.provision_state, states.DEPLOYING)
+
+    def test_continue_deploy_image_source_is_url(self):
+        self.node.instance_info['image_source'] = 'glance://fake-image'
+        self.node.save()
+        test_temp_url = 'http://image'
+        expected_image_info = {
+            'urls': [test_temp_url],
+            'id': 'fake-image',
+            'checksum': 'checksum',
+            'disk_format': 'qcow2',
+            'container_format': 'bare',
+        }
+
+        client_mock = mock.Mock()
+        self.passthru._client = client_mock
+
         with task_manager.acquire(self.context, self.node.uuid,
                                       shared=False) as task:
             self.passthru._continue_deploy(task)
@@ -165,7 +216,7 @@ class TestAgentVendor(db_base.DbTestCase):
         }
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.assertRaises(exception.InvalidParameterValue,
-                              self.passthru._lookup,
+                              self.passthru.lookup,
                               task.context,
                               **kwargs)
 
@@ -190,26 +241,26 @@ class TestAgentVendor(db_base.DbTestCase):
         }
         find_mock.return_value = self.node
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            node = self.passthru._lookup(task.context, **kwargs)
+            node = self.passthru.lookup(task.context, **kwargs)
         self.assertEqual(self.node, node['node'])
 
     def test_lookup_v2_missing_inventory(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.assertRaises(exception.InvalidParameterValue,
-                              self.passthru._lookup,
+                              self.passthru.lookup,
                               task.context)
 
     def test_lookup_v2_empty_inventory(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.assertRaises(exception.InvalidParameterValue,
-                              self.passthru._lookup,
+                              self.passthru.lookup,
                               task.context,
                               inventory={})
 
     def test_lookup_v2_empty_interfaces(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.assertRaises(exception.NodeNotFound,
-                              self.passthru._lookup,
+                              self.passthru.lookup,
                               task.context,
                               version='2',
                               inventory={'interfaces': []})
@@ -317,57 +368,63 @@ class TestAgentVendor(db_base.DbTestCase):
                           self.passthru._get_node_id,
                           [fake_port1, fake_port2])
 
+    def test_get_interfaces(self):
+        fake_inventory = {
+            'interfaces': [
+                {
+                    'mac_address': 'aa:bb:cc:dd:ee:ff',
+                    'name': 'eth0'
+                }
+            ]
+        }
+        interfaces = self.passthru._get_interfaces(fake_inventory)
+        self.assertEqual(fake_inventory['interfaces'], interfaces)
+
+    def test_get_interfaces_bad(self):
+        self.assertRaises(exception.InvalidParameterValue,
+                          self.passthru._get_interfaces,
+                          inventory={})
+
     def test_heartbeat(self):
         kwargs = {
             'agent_url': 'http://127.0.0.1:9999/bar'
         }
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=True) as task:
-            self.passthru._heartbeat(task, **kwargs)
+            self.passthru.heartbeat(task, **kwargs)
 
     def test_heartbeat_bad(self):
         kwargs = {}
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=True) as task:
-            self.assertRaises(KeyError,
-                              self.passthru._heartbeat, task, **kwargs)
+            self.assertRaises(exception.MissingParameterValue,
+                              self.passthru.heartbeat, task, **kwargs)
 
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._heartbeat')
-    def test_vendor_passthru_heartbeat(self, mock_heartbeat):
+    @mock.patch.object(deploy_utils, 'set_failed_state')
+    @mock.patch.object(agent.AgentVendorInterface, '_deploy_is_done')
+    def test_heartbeat_deploy_done_fails(self, done_mock, failed_mock):
         kwargs = {
-            'method': 'heartbeat',
+            'agent_url': 'http://127.0.0.1:9999/bar'
         }
-        self.passthru.vendor_routes['heartbeat'] = mock_heartbeat
+        done_mock.side_effect = Exception
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=True) as task:
-            self.passthru.vendor_passthru(task, **kwargs)
-            mock_heartbeat.assert_called_once_with(task, **kwargs)
+            task.node.provision_state = states.DEPLOYING
+            self.passthru.heartbeat(task, **kwargs)
+            failed_mock.assert_called_once_with(task, mock.ANY)
 
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._heartbeat')
-    def test_vendor_passthru_heartbeat_ironic_exc(self, mock_heartbeat):
-        mock_heartbeat.side_effect = exception.IronicException()
-        kwargs = {
-            'method': 'heartbeat',
-        }
-        self.passthru.vendor_routes['heartbeat'] = mock_heartbeat
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            self.assertRaises(exception.IronicException,
-                              self.passthru.vendor_passthru, task, **kwargs)
-            mock_heartbeat.assert_called_once_with(task, **kwargs)
+    def test_vendor_passthru_vendor_routes(self):
+        expected = ['heartbeat']
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            vendor_routes = task.driver.vendor.vendor_routes
+            self.assertIsInstance(vendor_routes, dict)
+            self.assertEqual(expected, list(vendor_routes))
 
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._heartbeat')
-    def test_vendor_passthru_heartbeat_exception(self, mock_heartbeat):
-        mock_heartbeat.side_effect = KeyError()
-        kwargs = {
-            'method': 'heartbeat',
-        }
-        self.passthru.vendor_routes['heartbeat'] = mock_heartbeat
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            self.assertRaises(exception.VendorPassthruException,
-                              self.passthru.vendor_passthru, task, **kwargs)
-            mock_heartbeat.assert_called_once_with(task, **kwargs)
+    def test_vendor_passthru_driver_routes(self):
+        expected = ['lookup']
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            driver_routes = task.driver.vendor.driver_routes
+            self.assertIsInstance(driver_routes, dict)
+            self.assertEqual(expected, list(driver_routes))

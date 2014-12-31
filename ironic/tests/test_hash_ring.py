@@ -13,12 +13,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import hashlib
+
+import mock
 from oslo.config import cfg
 from testtools import matchers
 
 from ironic.common import exception
 from ironic.common import hash_ring
-from ironic.db import api as dbapi
 from ironic.tests import base
 from ironic.tests.db import base as db_base
 
@@ -33,6 +35,20 @@ class HashRingTestCase(base.TestCase):
     #             if hosts = [foo, bar, baz]:
     #                fake -> foo, bar, baz
     #                fake-again -> bar, baz, foo
+
+    @mock.patch.object(hashlib, 'md5')
+    def test__hash2int_returns_int(self, mock_md5):
+        CONF.set_override('hash_partition_exponent', 0)
+        r1 = 32 * 'a'
+        r2 = 32 * 'b'
+        mock_md5.return_value.hexdigest.side_effect = [r1, r2]
+
+        hosts = ['foo', 'bar']
+        replicas = 1
+        ring = hash_ring.HashRing(hosts, replicas=replicas)
+
+        self.assertIn(int(r1, 16), ring._host_hashes)
+        self.assertIn(int(r2, 16), ring._host_hashes)
 
     def test_create_ring(self):
         hosts = ['foo', 'bar']
@@ -199,7 +215,6 @@ class HashRingManagerTestCase(db_base.DbTestCase):
     def setUp(self):
         super(HashRingManagerTestCase, self).setUp()
         self.ring_manager = hash_ring.HashRingManager()
-        self.dbapi = dbapi.get_instance()
 
     def register_conductors(self):
         self.dbapi.register_conductor({

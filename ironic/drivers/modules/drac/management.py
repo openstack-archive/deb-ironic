@@ -26,6 +26,7 @@ from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
+from ironic.conductor import task_manager
 from ironic.drivers import base
 from ironic.drivers.modules.drac import common as drac_common
 from ironic.drivers.modules.drac import resource_uris
@@ -42,12 +43,15 @@ _BOOT_DEVICES_MAP = {
 }
 
 # IsNext constants
-PERSISTENT = '1'  # is the next boot config the system will use
 
-NOT_NEXT = '2'  # is not the next boot config the system will use
+PERSISTENT = '1'
+""" Is the next boot config the system will use. """
 
-ONE_TIME_BOOT = '3'  # is the next boot config the system will use,
-                     # one time boot only
+NOT_NEXT = '2'
+""" Is not the next boot config the system will use. """
+
+ONE_TIME_BOOT = '3'
+""" Is the next boot config the system will use, one time boot only. """
 
 
 def _get_next_boot_mode(node):
@@ -201,6 +205,7 @@ class DracManagement(base.ManagementInterface):
         """
         return list(_BOOT_DEVICES_MAP.keys())
 
+    @task_manager.require_exclusive_lock
     def set_boot_device(self, task, device, persistent=False):
         """Set the boot device for a node.
 

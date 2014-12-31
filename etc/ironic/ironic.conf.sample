@@ -192,9 +192,6 @@
 # IP address of this host. (string value)
 #my_ip=10.0.0.1
 
-# Use IPv6. (boolean value)
-#use_ipv6=false
-
 
 #
 # Options defined in ironic.api.app
@@ -828,7 +825,7 @@
 
 # A list of the glance api servers available to ironic. Prefix
 # with https:// for SSL-based glance API servers. Format is
-# [hostname|IP]:port. (string value)
+# [hostname|IP]:port. (list value)
 #glance_api_servers=<None>
 
 # Allow to perform insecure SSL (https) requests to glance.

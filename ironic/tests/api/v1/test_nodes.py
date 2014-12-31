@@ -16,21 +16,25 @@ Tests for the API /nodes/ methods.
 """
 
 import datetime
+import json
 
 import mock
 from oslo.config import cfg
 from oslo.utils import timeutils
 from six.moves.urllib import parse as urlparse
 from testtools.matchers import HasLength
+from wsme import types as wtypes
 
+from ironic.api.controllers.v1 import node as api_node
 from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import rpcapi
 from ironic import objects
-from ironic.tests.api import base
+from ironic.tests.api import base as api_base
 from ironic.tests.api import utils as apiutils
+from ironic.tests import base
 from ironic.tests.db import utils as dbutils
 from ironic.tests.objects import utils as obj_utils
 
@@ -45,7 +49,16 @@ def post_get_test_node(**kw):
     return node
 
 
-class TestListNodes(base.FunctionalTest):
+class TestNodeObject(base.TestCase):
+
+    def test_node_init(self):
+        node_dict = apiutils.node_post_data(chassis_id=None)
+        del node_dict['instance_uuid']
+        node = api_node.Node(**node_dict)
+        self.assertEqual(wtypes.Unset, node.instance_uuid)
+
+
+class TestListNodes(api_base.FunctionalTest):
 
     def setUp(self):
         super(TestListNodes, self).setUp()
@@ -56,19 +69,18 @@ class TestListNodes(base.FunctionalTest):
         self.addCleanup(p.stop)
 
     def _create_association_test_nodes(self):
-        #create some unassociated nodes
+        # create some unassociated nodes
         unassociated_nodes = []
         for id in range(3):
             node = obj_utils.create_test_node(self.context,
-                                              id=id,
                                               uuid=utils.generate_uuid())
             unassociated_nodes.append(node.uuid)
 
-        #created some associated nodes
+        # created some associated nodes
         associated_nodes = []
-        for id in range(3, 7):
+        for id in range(4):
             node = obj_utils.create_test_node(
-                    self.context, id=id, uuid=utils.generate_uuid(),
+                    self.context, uuid=utils.generate_uuid(),
                     instance_uuid=utils.generate_uuid())
             associated_nodes.append(node['uuid'])
         return {'associated': associated_nodes,
@@ -97,6 +109,7 @@ class TestListNodes(base.FunctionalTest):
         self.assertNotIn('target_power_state', data['nodes'][0])
         self.assertNotIn('target_provision_state', data['nodes'][0])
         self.assertNotIn('provision_updated_at', data['nodes'][0])
+        self.assertNotIn('maintenance_reason', data['nodes'][0])
         # never expose the chassis_id
         self.assertNotIn('chassis_id', data['nodes'][0])
 
@@ -110,6 +123,7 @@ class TestListNodes(base.FunctionalTest):
         self.assertIn('properties', data)
         self.assertIn('chassis_uuid', data)
         self.assertIn('reservation', data)
+        self.assertIn('maintenance_reason', data)
         # never expose the chassis_id
         self.assertNotIn('chassis_id', data)
 
@@ -140,7 +154,7 @@ class TestListNodes(base.FunctionalTest):
     def test_many(self):
         nodes = []
         for id in range(5):
-            node = obj_utils.create_test_node(self.context, id=id,
+            node = obj_utils.create_test_node(self.context,
                                               uuid=utils.generate_uuid())
             nodes.append(node.uuid)
         data = self.get_json('/nodes')
@@ -151,7 +165,7 @@ class TestListNodes(base.FunctionalTest):
 
     def test_links(self):
         uuid = utils.generate_uuid()
-        obj_utils.create_test_node(self.context, id=1, uuid=uuid)
+        obj_utils.create_test_node(self.context, uuid=uuid)
         data = self.get_json('/nodes/%s' % uuid)
         self.assertIn('links', data.keys())
         self.assertEqual(2, len(data['links']))
@@ -163,7 +177,7 @@ class TestListNodes(base.FunctionalTest):
     def test_collection_links(self):
         nodes = []
         for id in range(5):
-            node = obj_utils.create_test_node(self.context, id=id,
+            node = obj_utils.create_test_node(self.context,
                                               uuid=utils.generate_uuid())
             nodes.append(node.uuid)
         data = self.get_json('/nodes/?limit=3')
@@ -176,7 +190,7 @@ class TestListNodes(base.FunctionalTest):
         cfg.CONF.set_override('max_limit', 3, 'api')
         nodes = []
         for id in range(5):
-            node = obj_utils.create_test_node(self.context, id=id,
+            node = obj_utils.create_test_node(self.context,
                                               uuid=utils.generate_uuid())
             nodes.append(node.uuid)
         data = self.get_json('/nodes')
@@ -194,7 +208,7 @@ class TestListNodes(base.FunctionalTest):
         node = obj_utils.create_test_node(self.context)
 
         for id_ in range(2):
-            obj_utils.create_test_port(self.context, id=id_, node_id=node.id,
+            obj_utils.create_test_port(self.context, node_id=node.id,
                                        uuid=utils.generate_uuid(),
                                        address='52:54:00:cf:2d:3%s' % id_)
 
@@ -273,8 +287,9 @@ class TestListNodes(base.FunctionalTest):
         self.assertEqual(400, response.status_code)
 
     def test_associated_nodes_insensitive(self):
-        associated_nodes = self._create_association_test_nodes().\
-                get('associated')
+        associated_nodes = (self
+                            ._create_association_test_nodes()
+                            .get('associated'))
 
         data = self.get_json('/nodes?associated=true')
         data1 = self.get_json('/nodes?associated=True')
@@ -292,8 +307,9 @@ class TestListNodes(base.FunctionalTest):
         self.assertTrue(response.json['error_message'])
 
     def test_unassociated_nodes_insensitive(self):
-        unassociated_nodes = self._create_association_test_nodes().\
-                get('unassociated')
+        unassociated_nodes = (self
+                              ._create_association_test_nodes()
+                              .get('unassociated'))
 
         data = self.get_json('/nodes?associated=false')
         data1 = self.get_json('/nodes?associated=FALSE')
@@ -304,8 +320,9 @@ class TestListNodes(base.FunctionalTest):
         self.assertEqual(sorted(unassociated_nodes), sorted(uuids))
 
     def test_unassociated_nodes_with_limit(self):
-        unassociated_nodes = self._create_association_test_nodes().\
-                get('unassociated')
+        unassociated_nodes = (self
+                              ._create_association_test_nodes()
+                              .get('unassociated'))
 
         data = self.get_json('/nodes?associated=False&limit=2')
 
@@ -319,8 +336,9 @@ class TestListNodes(base.FunctionalTest):
         self.assertIn('associated=True', data['next'])
 
     def test_detail_with_association_filter(self):
-        associated_nodes = self._create_association_test_nodes().\
-                get('associated')
+        associated_nodes = (self
+                            ._create_association_test_nodes()
+                            .get('associated'))
         data = self.get_json('/nodes/detail?associated=true')
         self.assertIn('driver', data['nodes'][0])
         self.assertEqual(len(associated_nodes), len(data['nodes']))
@@ -353,7 +371,7 @@ class TestListNodes(base.FunctionalTest):
     def test_maintenance_nodes(self):
         nodes = []
         for id in range(5):
-            node = obj_utils.create_test_node(self.context, id=id,
+            node = obj_utils.create_test_node(self.context,
                                               uuid=utils.generate_uuid(),
                                               maintenance=id % 2)
             nodes.append(node)
@@ -468,7 +486,7 @@ class TestListNodes(base.FunctionalTest):
         mock_gsbd.assert_called_once_with(mock.ANY, node.uuid, 'test-topic')
 
 
-class TestPatch(base.FunctionalTest):
+class TestPatch(api_base.FunctionalTest):
 
     def setUp(self):
         super(TestPatch, self).setUp()
@@ -487,8 +505,10 @@ class TestPatch(base.FunctionalTest):
 
     def test_update_ok(self):
         self.mock_update_node.return_value = self.node
-        self.mock_update_node.return_value.updated_at = \
-                                   "2013-12-03T06:20:41.184720+00:00"
+        (self
+         .mock_update_node
+         .return_value
+         .updated_at) = "2013-12-03T06:20:41.184720+00:00"
         response = self.patch_json('/nodes/%s' % self.node['uuid'],
                              [{'path': '/instance_uuid',
                                'value': 'aaaaaaaa-1111-bbbb-2222-cccccccccccc',
@@ -608,7 +628,7 @@ class TestPatch(base.FunctionalTest):
         self.assertTrue(response.json['error_message'])
 
     def test_update_state_in_progress(self):
-        node = obj_utils.create_test_node(self.context, id=99,
+        node = obj_utils.create_test_node(self.context,
                                           uuid=utils.generate_uuid(),
                                           target_power_state=states.POWER_OFF)
         response = self.patch_json('/nodes/%s' % node.uuid,
@@ -745,7 +765,7 @@ class TestPatch(base.FunctionalTest):
         self.assertTrue(response.json['error_message'])
 
 
-class TestPost(base.FunctionalTest):
+class TestPost(api_base.FunctionalTest):
 
     def setUp(self):
         super(TestPost, self).setUp()
@@ -803,20 +823,60 @@ class TestPost(base.FunctionalTest):
         self.assertEqual(400, response.status_code)
         self.assertTrue(response.json['error_message'])
 
-    def test_vendor_passthru_ok(self):
-        node = obj_utils.create_test_node(self.context)
-        uuid = node.uuid
-        info = {'foo': 'bar'}
+    def _test_vendor_passthru_ok(self, mock_vendor, return_value=None,
+                                 is_async=True):
+        expected_status = 202 if is_async else 200
+        expected_return_value = json.dumps(return_value)
 
-        with mock.patch.object(
-                rpcapi.ConductorAPI, 'vendor_passthru') as mock_vendor:
-            mock_vendor.return_value = 'OK'
-            response = self.post_json('/nodes/%s/vendor_passthru/test' % uuid,
-                                      info, expect_errors=False)
-            mock_vendor.assert_called_once_with(
-                    mock.ANY, uuid, 'test', info, 'test-topic')
-            self.assertEqual('"OK"', response.body)
-            self.assertEqual(202, response.status_code)
+        node = obj_utils.create_test_node(self.context)
+        info = {'foo': 'bar'}
+        mock_vendor.return_value = (return_value, is_async)
+        response = self.post_json('/nodes/%s/vendor_passthru/test' % node.uuid,
+                                  info)
+        mock_vendor.assert_called_once_with(
+                mock.ANY, node.uuid, 'test', 'POST', info, 'test-topic')
+        self.assertEqual(expected_return_value, response.body)
+        self.assertEqual(expected_status, response.status_code)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'vendor_passthru')
+    def test_vendor_passthru_async(self, mock_vendor):
+        self._test_vendor_passthru_ok(mock_vendor)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'vendor_passthru')
+    def test_vendor_passthru_sync(self, mock_vendor):
+        return_value = {'cat': 'meow'}
+        self._test_vendor_passthru_ok(mock_vendor, return_value=return_value,
+                                      is_async=False)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'vendor_passthru')
+    def test_vendor_passthru_put(self, mocked_vendor_passthru):
+        node = obj_utils.create_test_node(self.context)
+        return_value = (None, 'async')
+        mocked_vendor_passthru.return_value = return_value
+        response = self.put_json(
+            '/nodes/%s/vendor_passthru/do_test' % node.uuid,
+            {'test_key': 'test_value'})
+        self.assertEqual(202, response.status_int)
+        self.assertEqual(return_value[0], response.json)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'vendor_passthru')
+    def test_vendor_passthru_get(self, mocked_vendor_passthru):
+        node = obj_utils.create_test_node(self.context)
+        return_value = ('foo', 'sync')
+        mocked_vendor_passthru.return_value = return_value
+        response = self.get_json(
+            '/nodes/%s/vendor_passthru/do_test' % node.uuid)
+        self.assertEqual(return_value[0], response)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'vendor_passthru')
+    def test_vendor_passthru_delete(self, mock_vendor_passthru):
+        node = obj_utils.create_test_node(self.context)
+        return_value = (None, 'async')
+        mock_vendor_passthru.return_value = return_value
+        response = self.delete(
+            '/nodes/%s/vendor_passthru/do_test' % node.uuid)
+        self.assertEqual(202, response.status_int)
+        self.assertEqual(return_value[0], response.json)
 
     def test_vendor_passthru_no_such_method(self):
         node = obj_utils.create_test_node(self.context)
@@ -832,7 +892,7 @@ class TestPost(base.FunctionalTest):
             response = self.post_json('/nodes/%s/vendor_passthru/test' % uuid,
                                       info, expect_errors=True)
             mock_vendor.assert_called_once_with(
-                    mock.ANY, uuid, 'test', info, 'test-topic')
+                    mock.ANY, uuid, 'test', 'POST', info, 'test-topic')
             self.assertEqual(400, response.status_code)
 
     def test_vendor_passthru_without_method(self):
@@ -908,8 +968,29 @@ class TestPost(base.FunctionalTest):
         self.assertEqual(400, response.status_int)
         self.assertTrue(response.json['error_message'])
 
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_node_vendor_passthru_methods')
+    def test_vendor_passthru_methods(self, get_methods_mock):
+        return_value = {'foo': 'bar'}
+        get_methods_mock.return_value = return_value
+        node = obj_utils.create_test_node(self.context)
+        path = '/nodes/%s/vendor_passthru/methods' % node.uuid
 
-class TestDelete(base.FunctionalTest):
+        data = self.get_json(path)
+        self.assertEqual(return_value, data)
+        get_methods_mock.assert_called_once_with(mock.ANY, node.uuid,
+                                                  topic=mock.ANY)
+
+        # Now let's test the cache: Reset the mock
+        get_methods_mock.reset_mock()
+
+        # Call it again
+        data = self.get_json(path)
+        self.assertEqual(return_value, data)
+        # Assert RPC method wasn't called this time
+        self.assertFalse(get_methods_mock.called)
+
+
+class TestDelete(api_base.FunctionalTest):
 
     def setUp(self):
         super(TestDelete, self).setUp()
@@ -954,8 +1035,23 @@ class TestDelete(base.FunctionalTest):
         self.assertEqual(409, response.status_int)
         mock_dn.assert_called_once_with(mock.ANY, node.uuid, 'test-topic')
 
+    @mock.patch.object(objects.Node, 'get_by_uuid')
+    @mock.patch.object(rpcapi.ConductorAPI, 'update_node')
+    def test_delete_node_maintenance_mode(self, mock_update, mock_get):
+        node = obj_utils.create_test_node(self.context, maintenance=True,
+                                          maintenance_reason='blah')
+        mock_get.return_value = node
+        response = self.delete('/nodes/%s/maintenance' % node.uuid)
+        self.assertEqual(202, response.status_int)
+        self.assertEqual('', response.body)
+        self.assertEqual(False, node.maintenance)
+        self.assertEqual(None, node.maintenance_reason)
+        mock_get.assert_called_once_with(mock.ANY, node.uuid)
+        mock_update.assert_called_once_with(mock.ANY, mock.ANY,
+                                            topic='test-topic')
 
-class TestPut(base.FunctionalTest):
+
+class TestPut(api_base.FunctionalTest):
 
     def setUp(self):
         super(TestPut, self).setUp()
@@ -1027,7 +1123,7 @@ class TestPut(base.FunctionalTest):
         self.assertEqual(400, ret.status_code)
 
     def test_provision_already_in_progress(self):
-        node = obj_utils.create_test_node(self.context, id=1,
+        node = obj_utils.create_test_node(self.context,
                                           uuid=utils.generate_uuid(),
                                           target_provision_state=states.ACTIVE)
         ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
@@ -1037,7 +1133,7 @@ class TestPut(base.FunctionalTest):
 
     def test_provision_with_tear_down_in_progress_deploywait(self):
         node = obj_utils.create_test_node(
-                self.context, id=1, uuid=utils.generate_uuid(),
+                self.context, uuid=utils.generate_uuid(),
                 provision_state=states.DEPLOYWAIT,
                 target_provision_state=states.DEPLOYDONE)
         ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
@@ -1054,7 +1150,7 @@ class TestPut(base.FunctionalTest):
 
     def test_provision_already_in_state(self):
         node = obj_utils.create_test_node(
-                self.context, id=1, uuid=utils.generate_uuid(),
+                self.context, uuid=utils.generate_uuid(),
                 target_provision_state=states.NOSTATE,
                 provision_state=states.ACTIVE)
         ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
@@ -1063,8 +1159,8 @@ class TestPut(base.FunctionalTest):
         self.assertEqual(400, ret.status_code)
 
     def test_set_console_mode_enabled(self):
-        with mock.patch.object(rpcapi.ConductorAPI, 'set_console_mode') \
-                as mock_scm:
+        with mock.patch.object(rpcapi.ConductorAPI,
+                               'set_console_mode') as mock_scm:
             ret = self.put_json('/nodes/%s/states/console' % self.node.uuid,
                                 {'enabled': "true"})
             self.assertEqual(202, ret.status_code)
@@ -1078,8 +1174,8 @@ class TestPut(base.FunctionalTest):
                              expected_location)
 
     def test_set_console_mode_disabled(self):
-        with mock.patch.object(rpcapi.ConductorAPI, 'set_console_mode') \
-                as mock_scm:
+        with mock.patch.object(rpcapi.ConductorAPI,
+                               'set_console_mode') as mock_scm:
             ret = self.put_json('/nodes/%s/states/console' % self.node.uuid,
                                 {'enabled': "false"})
             self.assertEqual(202, ret.status_code)
@@ -1093,8 +1189,8 @@ class TestPut(base.FunctionalTest):
                              expected_location)
 
     def test_set_console_mode_bad_request(self):
-        with mock.patch.object(rpcapi.ConductorAPI, 'set_console_mode') \
-                as mock_scm:
+        with mock.patch.object(rpcapi.ConductorAPI,
+                               'set_console_mode') as mock_scm:
             ret = self.put_json('/nodes/%s/states/console' % self.node.uuid,
                                 {'enabled': "invalid-value"},
                                 expect_errors=True)
@@ -1103,8 +1199,8 @@ class TestPut(base.FunctionalTest):
             assert not mock_scm.called
 
     def test_set_console_mode_bad_request_missing_parameter(self):
-        with mock.patch.object(rpcapi.ConductorAPI, 'set_console_mode') \
-                as mock_scm:
+        with mock.patch.object(rpcapi.ConductorAPI,
+                               'set_console_mode') as mock_scm:
             ret = self.put_json('/nodes/%s/states/console' % self.node.uuid,
                                 {}, expect_errors=True)
             self.assertEqual(400, ret.status_code)
@@ -1112,8 +1208,8 @@ class TestPut(base.FunctionalTest):
             assert not mock_scm.called
 
     def test_set_console_mode_console_not_supported(self):
-        with mock.patch.object(rpcapi.ConductorAPI, 'set_console_mode') \
-                as mock_scm:
+        with mock.patch.object(rpcapi.ConductorAPI,
+                               'set_console_mode') as mock_scm:
             mock_scm.side_effect = exception.UnsupportedDriverExtension(
                                    extension='console', driver='test-driver')
             ret = self.put_json('/nodes/%s/states/console' % self.node.uuid,
@@ -1124,7 +1220,7 @@ class TestPut(base.FunctionalTest):
 
     def test_provision_node_in_maintenance_fail(self):
         with mock.patch.object(rpcapi.ConductorAPI, 'do_node_deploy') as dnd:
-            node = obj_utils.create_test_node(self.context, id=1,
+            node = obj_utils.create_test_node(self.context,
                                               uuid=utils.generate_uuid(),
                                               maintenance=True)
             dnd.side_effect = exception.NodeInMaintenance(op='provisioning',
@@ -1180,3 +1276,31 @@ class TestPut(base.FunctionalTest):
                             expect_errors=True)
         self.assertEqual('application/json', ret.content_type)
         self.assertEqual(400, ret.status_code)
+
+    def _test_set_node_maintenance_mode(self, mock_update, mock_get, reason):
+        request_body = {}
+        if reason:
+            request_body['reason'] = reason
+
+        self.node.maintenance = False
+        mock_get.return_value = self.node
+        ret = self.put_json('/nodes/%s/maintenance' % self.node.uuid,
+                            request_body)
+        self.assertEqual(202, ret.status_code)
+        self.assertEqual('', ret.body)
+        self.assertEqual(True, self.node.maintenance)
+        self.assertEqual(reason, self.node.maintenance_reason)
+        mock_get.assert_called_once_with(mock.ANY, self.node.uuid)
+        mock_update.assert_called_once_with(mock.ANY, mock.ANY,
+                                            topic='test-topic')
+
+    @mock.patch.object(objects.Node, 'get_by_uuid')
+    @mock.patch.object(rpcapi.ConductorAPI, 'update_node')
+    def test_set_node_maintenance_mode(self, mock_update, mock_get):
+        self._test_set_node_maintenance_mode(mock_update, mock_get,
+                                             'fake_reason')
+
+    @mock.patch.object(objects.Node, 'get_by_uuid')
+    @mock.patch.object(rpcapi.ConductorAPI, 'update_node')
+    def test_set_node_maintenance_mode_no_reason(self, mock_update, mock_get):
+        self._test_set_node_maintenance_mode(mock_update, mock_get, None)

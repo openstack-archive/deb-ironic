@@ -18,7 +18,6 @@
 
 import pecan
 from pecan import rest
-
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
 
@@ -31,13 +30,13 @@ class Version(base.APIBase):
     """An API version representation."""
 
     id = wtypes.text
-    "The ID of the version, also acts as the release number"
+    """The ID of the version, also acts as the release number"""
 
     links = [link.Link]
-    "A Link that point to a specific version of the API"
+    """A Link that point to a specific version of the API"""
 
-    @classmethod
-    def convert(self, id):
+    @staticmethod
+    def convert(id):
         version = Version()
         version.id = id
         version.links = [link.Link.make_link('self', pecan.request.host_url,
@@ -48,19 +47,19 @@ class Version(base.APIBase):
 class Root(base.APIBase):
 
     name = wtypes.text
-    "The name of the API"
+    """The name of the API"""
 
     description = wtypes.text
-    "Some information about this API"
+    """Some information about this API"""
 
     versions = [Version]
-    "Links to all the versions available in this API"
+    """Links to all the versions available in this API"""
 
     default_version = Version
-    "A link to the default version of the API"
+    """A link to the default version of the API"""
 
-    @classmethod
-    def convert(self):
+    @staticmethod
+    def convert():
         root = Root()
         root.name = "OpenStack Ironic API"
         root.description = ("Ironic is an OpenStack project which aims to "
@@ -73,10 +72,10 @@ class Root(base.APIBase):
 class RootController(rest.RestController):
 
     _versions = ['v1']
-    "All supported API versions"
+    """All supported API versions"""
 
     _default_version = 'v1'
-    "The default API version"
+    """The default API version"""
 
     v1 = v1.Controller()
 

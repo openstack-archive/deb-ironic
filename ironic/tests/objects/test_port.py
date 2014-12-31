@@ -17,7 +17,6 @@ import mock
 from testtools.matchers import HasLength
 
 from ironic.common import exception
-from ironic.db import api as db_api
 from ironic import objects
 from ironic.tests.db import base
 from ironic.tests.db import utils
@@ -28,7 +27,6 @@ class TestPortObject(base.DbTestCase):
     def setUp(self):
         super(TestPortObject, self).setUp()
         self.fake_port = utils.get_test_port()
-        self.dbapi = db_api.get_instance()
 
     def test_get_by_id(self):
         port_id = self.fake_port['id']
@@ -89,8 +87,8 @@ class TestPortObject(base.DbTestCase):
                    utils.get_test_port(address="c3:54:00:cf:2d:40")]
         expected = [mock.call(uuid), mock.call(uuid)]
         with mock.patch.object(self.dbapi, 'get_port_by_uuid',
-                               side_effect=returns, autospec=True) \
-                as mock_get_port:
+                               side_effect=returns,
+                               autospec=True) as mock_get_port:
             p = objects.Port.get_by_uuid(self.context, uuid)
             self.assertEqual("52:54:00:cf:2d:31", p.address)
             p.refresh()

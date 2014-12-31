@@ -10,21 +10,26 @@ an OpenStack project.
 
 .. seealso::
 
-    https://wiki.openstack.org/wiki/GerritWorkflow
+    http://docs.openstack.org/infra/manual/developers.html#development-workflow
 
 Install prerequisites::
 
     # Ubuntu/Debian:
-    sudo apt-get install python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev
+    sudo apt-get install python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev gettext
 
     # Fedora/RHEL:
-    sudo yum install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel
+    sudo yum install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool
 
+    # openSUSE/SLE 12:
+    sudo zypper install git git-review libffi-devel libmysqlclient-devel libopenssl-devel libxml2-devel libxslt-devel postgresql-devel python-devel python-nose python-pip gettext-runtime
+
+    # All distros:
     sudo easy_install nose
     sudo pip install virtualenv setuptools-git flake8 tox testrepository
 
-    # openSUSE/SLE 12:
-    sudo zypper install git git-review libffi-devel libmysqlclient-devel libopenssl-devel libxml2-devel libxslt-devel postgresql-devel python-devel python-flake8 python-nose python-pip python-setuptools-git python-testrepository python-tox python-virtualenv
+If using RHEL and yum reports “No package python-pip available” and “No
+package git-review available”, use the EPEL software repository. Instructions
+can be found at `<http://fedoraproject.org/wiki/EPEL/FAQ#howtouse>`_.
 
 You may need to explicitly upgrade virtualenv if you've installed the one
 from your OS distribution and it is too old (tox will complain). You can
@@ -56,8 +61,8 @@ All unit tests should be run using tox. To run Ironic's entire test suite::
 
 To run a specific test, use a positional argument for the unit tests::
 
-    # run a specific test for both Python 2.6 and 2.7
-    tox -epy26,py27 -- test_conductor
+    # run a specific test for Python 2.7
+    tox -epy27 -- test_conductor
 
 You may pass options to the test programs using positional arguments::
 
@@ -235,7 +240,7 @@ station.  Deploying Ironic with DevStack requires a machine running Ubuntu
 
 .. seealso::
 
-    https://devstack.org
+    http://docs.openstack.org/developer/devstack/
 
 Devstack will no longer create the user 'stack' with the desired
 permissions, but does provide a script to perform the task::
@@ -251,7 +256,7 @@ Switch to the stack user and clone DevStack::
 
 Create devstack/localrc with minimal settings required to enable Ironic.
 Note that Ironic under devstack can only support running *either* the PXE
-or the agent driver, not both.::
+or the agent driver, not both. The default is the PXE driver.::
 
     cd devstack
     cat >localrc <<END
@@ -305,14 +310,28 @@ or the agent driver, not both.::
 
     END
 
-If running with the agent driver::
+If running with the agent driver (instead of PXE driver), add these additional
+settings to localrc::
 
     cat >>localrc <<END
-    enable_service s-proxy s-object s-container s-account
+    # Agent driver requires swift with tempurls
+    # Enable swift services
+    enable_service s-proxy
+    enable_service s-object
+    enable_service s-container
+    enable_service s-account
+
+    # Enable tempurls and set credentials
+    SWIFT_HASH=password
+    SWIFT_TEMPURL_KEY=password
     SWIFT_ENABLE_TEMPURLS=True
+
+    # Enable agent driver
     IRONIC_ENABLED_DRIVERS=fake,agent_ssh,agent_ipmitool
-    IRONIC_BUILD_DEPLOY_RAMDISK=False
     IRONIC_DEPLOY_DRIVER=agent_ssh
+
+    # To build your own IPA ramdisk from source, set this to True
+    IRONIC_BUILD_DEPLOY_RAMDISK=False
 
     END
 
@@ -412,7 +431,7 @@ commands to build the documentation set::
     source .tox/venv/bin/activate
 
     # build the docs
-    python setup.py build_sphinx
+    tox -egendocs
 
 Now use your browser to open the top-level index.html located at::
 

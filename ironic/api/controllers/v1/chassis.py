@@ -14,10 +14,10 @@
 #    under the License.
 
 import datetime
-import six
 
 import pecan
 from pecan import rest
+import six
 import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
@@ -45,19 +45,19 @@ class Chassis(base.APIBase):
     """
 
     uuid = types.uuid
-    "The UUID of the chassis"
+    """The UUID of the chassis"""
 
     description = wtypes.text
-    "The description of the chassis"
+    """The description of the chassis"""
 
     extra = {wtypes.text: types.MultiType(wtypes.text, six.integer_types)}
-    "The metadata of the chassis"
+    """The metadata of the chassis"""
 
     links = wsme.wsattr([link.Link], readonly=True)
-    "A list containing a self link and associated chassis links"
+    """A list containing a self link and associated chassis links"""
 
     nodes = wsme.wsattr([link.Link], readonly=True)
-    "Links to the collection of nodes contained in this chassis"
+    """Links to the collection of nodes contained in this chassis"""
 
     def __init__(self, **kwargs):
         self.fields = []
@@ -66,10 +66,10 @@ class Chassis(base.APIBase):
             if not hasattr(self, field):
                 continue
             self.fields.append(field)
-            setattr(self, field, kwargs.get(field))
+            setattr(self, field, kwargs.get(field, wtypes.Unset))
 
-    @classmethod
-    def _convert_with_links(cls, chassis, url, expand=True):
+    @staticmethod
+    def _convert_with_links(chassis, url, expand=True):
         if not expand:
             chassis.unset_fields_except(['uuid', 'description'])
         else:
@@ -103,7 +103,8 @@ class Chassis(base.APIBase):
     def sample(cls, expand=True):
         time = datetime.datetime(2000, 1, 1, 12, 0, 0)
         sample = cls(uuid='eaaca217-e7d8-47b4-bb41-3f99f20eed89', extra={},
-                     description='Sample chassis', created_at=time)
+                     description='Sample chassis', created_at=time,
+                     updated_at=time)
         return cls._convert_with_links(sample, 'http://localhost:6385',
                                        expand)
 
@@ -112,14 +113,13 @@ class ChassisCollection(collection.Collection):
     """API representation of a collection of chassis."""
 
     chassis = [Chassis]
-    "A list containing chassis objects"
+    """A list containing chassis objects"""
 
     def __init__(self, **kwargs):
         self._type = 'chassis'
 
-    @classmethod
-    def convert_with_links(cls, chassis, limit, url=None,
-                           expand=False, **kwargs):
+    @staticmethod
+    def convert_with_links(chassis, limit, url=None, expand=False, **kwargs):
         collection = ChassisCollection()
         collection.chassis = [Chassis.convert_with_links(ch, expand)
                               for ch in chassis]
@@ -138,7 +138,7 @@ class ChassisController(rest.RestController):
     """REST controller for Chassis."""
 
     nodes = node.NodesController()
-    "Expose nodes as a sub-element of chassis"
+    """Expose nodes as a sub-element of chassis"""
 
     # Set the flag to indicate that the requests to this resource are
     # coming from a top-level resource
@@ -243,6 +243,8 @@ class ChassisController(rest.RestController):
             except AttributeError:
                 # Ignore fields that aren't exposed in the API
                 continue
+            if patch_val == wtypes.Unset:
+                patch_val = None
             if rpc_chassis[field] != patch_val:
                 rpc_chassis[field] = patch_val
 

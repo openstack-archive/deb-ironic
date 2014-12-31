@@ -19,26 +19,16 @@ import six
 
 from ironic.common import exception
 from ironic.common import utils as ironic_utils
-from ironic.db import api as dbapi
-
 from ironic.tests.db import base
 from ironic.tests.db import utils
 
 
 class DbChassisTestCase(base.DbTestCase):
 
-    def setUp(self):
-        super(DbChassisTestCase, self).setUp()
-        self.dbapi = dbapi.get_instance()
-
     def _create_test_chassis(self, **kwargs):
         ch = utils.get_test_chassis(**kwargs)
         self.dbapi.create_chassis(ch)
         return ch
-
-    def _create_test_node(self, **kwargs):
-        node = utils.get_test_node(**kwargs)
-        return self.dbapi.create_node(node)
 
     def test_get_chassis_list(self):
         uuids = []
@@ -95,7 +85,7 @@ class DbChassisTestCase(base.DbTestCase):
 
     def test_destroy_chassis_with_nodes(self):
         ch = self._create_test_chassis()
-        self._create_test_node(chassis_id=ch['id'])
+        utils.create_test_node(chassis_id=ch['id'])
 
         self.assertRaises(exception.ChassisNotEmpty,
                           self.dbapi.destroy_chassis, ch['id'])

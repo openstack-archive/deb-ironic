@@ -31,15 +31,6 @@ from ironic.common import states
 from ironic.drivers import base
 
 
-def _raise_unsupported_error(method=None):
-    if method:
-        raise exception.InvalidParameterValue(_(
-            "Unsupported method (%s) passed through to vendor extension.")
-            % method)
-    raise exception.MissingParameterValue(_(
-        "Method not specified when calling vendor extension."))
-
-
 class FakePower(base.PowerInterface):
     """Example implementation of a simple power interface."""
 
@@ -63,8 +54,10 @@ class FakePower(base.PowerInterface):
 
 
 class FakeDeploy(base.DeployInterface):
-    """Example imlementation of a deploy interface that uses a
-       separate power interface.
+    """Class for a fake deployment driver.
+
+    Example imlementation of a deploy interface that uses a
+    separate power interface.
     """
 
     def get_properties(self):
@@ -103,18 +96,11 @@ class FakeVendorA(base.VendorInterface):
             if not bar:
                 raise exception.MissingParameterValue(_(
                     "Parameter 'bar' not passed to method 'first_method'."))
-            return
-        _raise_unsupported_error(method)
 
-    def _private_method(self, task, bar):
+    @base.passthru(['POST'],
+                   description=_("Test if the value of bar is baz"))
+    def first_method(self, task, http_method, bar):
         return True if bar == 'baz' else False
-
-    def vendor_passthru(self, task, **kwargs):
-        method = kwargs.get('method')
-        if method == 'first_method':
-            bar = kwargs.get('bar')
-            return self._private_method(task, bar)
-        _raise_unsupported_error(method)
 
 
 class FakeVendorB(base.VendorInterface):
@@ -126,23 +112,21 @@ class FakeVendorB(base.VendorInterface):
 
     def validate(self, task, **kwargs):
         method = kwargs.get('method')
-        if method == 'second_method':
+        if method in ('second_method', 'third_method_sync'):
             bar = kwargs.get('bar')
             if not bar:
                 raise exception.MissingParameterValue(_(
-                    "Parameter 'bar' not passed to method 'second_method'."))
-            return
-        _raise_unsupported_error(method)
+                    "Parameter 'bar' not passed to method '%s'.") % method)
 
-    def _private_method(self, task, bar):
+    @base.passthru(['POST'],
+                   description=_("Test if the value of bar is kazoo"))
+    def second_method(self, task, http_method, bar):
         return True if bar == 'kazoo' else False
 
-    def vendor_passthru(self, task, **kwargs):
-        method = kwargs.get('method')
-        if method == 'second_method':
-            bar = kwargs.get('bar')
-            return self._private_method(task, bar)
-        _raise_unsupported_error(method)
+    @base.passthru(['POST'], async=False,
+                   description=_("Test if the value of bar is meow"))
+    def third_method_sync(self, task, http_method, bar):
+        return True if bar == 'meow' else False
 
 
 class FakeConsole(base.ConsoleInterface):

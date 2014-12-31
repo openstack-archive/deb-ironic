@@ -35,16 +35,16 @@ class Link(base.APIBase):
     """A link representation."""
 
     href = wtypes.text
-    "The url of a link."
+    """The url of a link."""
 
     rel = wtypes.text
-    "The name of a link."
+    """The name of a link."""
 
     type = wtypes.text
-    "Indicates the type of document/link."
+    """Indicates the type of document/link."""
 
-    @classmethod
-    def make_link(cls, rel_name, url, resource, resource_args,
+    @staticmethod
+    def make_link(rel_name, url, resource, resource_args,
                   bookmark=False, type=wtypes.Unset):
         href = build_url(resource, resource_args,
                          bookmark=bookmark, base_url=url)

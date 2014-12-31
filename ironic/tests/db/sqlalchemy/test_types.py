@@ -15,18 +15,12 @@
 from oslo.db import exception as db_exc
 
 from ironic.common import utils as ironic_utils
-from ironic.db import api as dbapi
 import ironic.db.sqlalchemy.api as sa_api
 from ironic.db.sqlalchemy import models
-
 from ironic.tests.db import base
 
 
 class SqlAlchemyCustomTypesTestCase(base.DbTestCase):
-
-    def setUp(self):
-        super(SqlAlchemyCustomTypesTestCase, self).setUp()
-        self.dbapi = dbapi.get_instance()
 
     # NOTE(max_lobur): Since it's not straightforward to check this in
     #                  isolation these tests use existing db models.
@@ -60,8 +54,10 @@ class SqlAlchemyCustomTypesTestCase(base.DbTestCase):
                                        'drivers': None,
                                        'id': cdr1_id})
         # Get conductor manually to test SA types in isolation from UOM.
-        cdr1 = sa_api.model_query(models.Conductor).filter_by(id=cdr1_id)\
-            .one()
+        cdr1 = (sa_api
+                .model_query(models.Conductor)
+                .filter_by(id=cdr1_id)
+                .one())
         self.assertEqual([], cdr1.drivers)
 
         # Create conductor with drivers specified.
@@ -71,8 +67,10 @@ class SqlAlchemyCustomTypesTestCase(base.DbTestCase):
                                        'drivers': drivers,
                                        'id': cdr2_id})
         # Get conductor manually to test SA types in isolation from UOM.
-        cdr2 = sa_api.model_query(models.Conductor).filter_by(id=cdr2_id)\
-            .one()
+        cdr2 = (sa_api
+                .model_query(models.Conductor)
+                .filter_by(id=cdr2_id)
+                .one())
         self.assertEqual(drivers, cdr2.drivers)
 
     def test_JSONEncodedList_type_check(self):

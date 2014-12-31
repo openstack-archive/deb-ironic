@@ -31,6 +31,7 @@ import uuid
 import netaddr
 from oslo.config import cfg
 from oslo.utils import excutils
+from oslo_concurrency import processutils
 import paramiko
 import six
 
@@ -39,7 +40,6 @@ from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LW
 from ironic.openstack.common import log as logging
-from ironic.openstack.common import processutils
 
 utils_opts = [
     cfg.StrOpt('rootwrap_config',
@@ -335,7 +335,9 @@ def hash_file(file_like_object):
 
 @contextlib.contextmanager
 def temporary_mutation(obj, **kwargs):
-    """Temporarily set the attr on a particular object to a given value then
+    """Temporarily change object attribute.
+
+    Temporarily set the attr on a particular object to a given value then
     revert when finished.
 
     One use of this is to temporarily set the read_deleted flag on a context
@@ -407,7 +409,7 @@ def mkfs(fs, path, label=None):
         args = ['mkswap']
     else:
         args = ['mkfs', '-t', fs]
-    #add -F to force no interactive execute on non-block device.
+    # add -F to force no interactive execute on non-block device.
     if fs in ('ext3', 'ext4'):
         args.extend(['-F'])
     if label:

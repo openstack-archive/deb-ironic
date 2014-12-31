@@ -27,6 +27,7 @@ from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic import objects
 from ironic.tests import base as tests_base
+from ironic.tests.db import base as tests_db_base
 from ironic.tests.objects import utils as obj_utils
 
 
@@ -35,14 +36,13 @@ from ironic.tests.objects import utils as obj_utils
 @mock.patch.object(objects.Node, 'reserve')
 @mock.patch.object(driver_factory, 'get_driver')
 @mock.patch.object(objects.Port, 'list_by_node_id')
-class TaskManagerTestCase(tests_base.TestCase):
+class TaskManagerTestCase(tests_db_base.DbTestCase):
     def setUp(self):
         super(TaskManagerTestCase, self).setUp()
         self.host = 'test-host'
         self.config(host=self.host)
         self.config(node_locked_retry_attempts=1, group='conductor')
         self.config(node_locked_retry_interval=0, group='conductor')
-        self.context = mock.sentinel.context
         self.node = obj_utils.create_test_node(self.context)
 
     def test_excl_lock(self, get_ports_mock, get_driver_mock,
@@ -87,7 +87,6 @@ class TaskManagerTestCase(tests_base.TestCase):
                                  reserve_mock, release_mock,
                                  node_get_mock):
         node2 = obj_utils.create_test_node(self.context,
-                                           id=2,
                                            uuid=utils.generate_uuid(),
                                            driver='fake')
 
@@ -301,6 +300,7 @@ class TaskManagerTestCase(tests_base.TestCase):
         thread_mock = mock.Mock(spec_set=['link', 'cancel'])
         spawn_mock = mock.Mock(return_value=thread_mock)
         task_release_mock = mock.Mock()
+        reserve_mock.return_value = self.node
 
         with task_manager.TaskManager(self.context, 'node-id') as task:
             task.spawn_after(spawn_mock, 1, 2, foo='bar', cat='meow')
@@ -322,6 +322,7 @@ class TaskManagerTestCase(tests_base.TestCase):
                                                  node_get_mock):
         spawn_mock = mock.Mock()
         task_release_mock = mock.Mock()
+        reserve_mock.return_value = self.node
 
         def _test_it():
             with task_manager.TaskManager(self.context, 'node-id') as task:
@@ -338,6 +339,7 @@ class TaskManagerTestCase(tests_base.TestCase):
                                      node_get_mock):
         spawn_mock = mock.Mock(side_effect=exception.IronicException('foo'))
         task_release_mock = mock.Mock()
+        reserve_mock.return_value = self.node
 
         def _test_it():
             with task_manager.TaskManager(self.context, 'node-id') as task:
@@ -357,13 +359,13 @@ class TaskManagerTestCase(tests_base.TestCase):
         spawn_mock = mock.Mock(return_value=thread_mock)
         task_release_mock = mock.Mock()
         thr_release_mock = mock.Mock(spec_set=[])
+        reserve_mock.return_value = self.node
 
         def _test_it():
             with task_manager.TaskManager(self.context, 'node-id') as task:
                 task.spawn_after(spawn_mock, 1, 2, foo='bar', cat='meow')
                 task._thread_release_resources = thr_release_mock
                 task.release_resources = task_release_mock
-
         self.assertRaises(exception.IronicException, _test_it)
 
         spawn_mock.assert_called_once_with(1, 2, foo='bar', cat='meow')
@@ -378,6 +380,7 @@ class TaskManagerTestCase(tests_base.TestCase):
         spawn_mock = mock.Mock(side_effect=expected_exception)
         task_release_mock = mock.Mock()
         on_error_handler = mock.Mock()
+        reserve_mock.return_value = self.node
 
         def _test_it():
             with task_manager.TaskManager(self.context, 'node-id') as task:
@@ -401,6 +404,7 @@ class TaskManagerTestCase(tests_base.TestCase):
         # Raise an exception within the on_error handler
         on_error_handler = mock.Mock(side_effect=Exception('unexpected'))
         on_error_handler.__name__ = 'foo_method'
+        reserve_mock.return_value = self.node
 
         def _test_it():
             with task_manager.TaskManager(self.context, 'node-id') as task:

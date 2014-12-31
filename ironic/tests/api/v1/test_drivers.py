@@ -14,6 +14,7 @@
 #    under the License.
 
 import json
+
 import mock
 from testtools.matchers import HasLength
 
@@ -73,17 +74,57 @@ class TestListDrivers(base.FunctionalTest):
         self.assertEqual(404, response.status_int)
 
     @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
-    def test_driver_vendor_passthru_ok(self, mocked_driver_vendor_passthru):
+    def test_driver_vendor_passthru_sync(self, mocked_driver_vendor_passthru):
         self.register_fake_conductors()
-        mocked_driver_vendor_passthru.return_value = {
+        mocked_driver_vendor_passthru.return_value = ({
             'return_key': 'return_value',
-        }
+        }, False)
         response = self.post_json(
             '/drivers/%s/vendor_passthru/do_test' % self.d1,
             {'test_key': 'test_value'})
         self.assertEqual(200, response.status_int)
-        self.assertEqual(mocked_driver_vendor_passthru.return_value,
+        self.assertEqual(mocked_driver_vendor_passthru.return_value[0],
                          response.json)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
+    def test_driver_vendor_passthru_async(self, mocked_driver_vendor_passthru):
+        self.register_fake_conductors()
+        mocked_driver_vendor_passthru.return_value = (None, True)
+        response = self.post_json(
+            '/drivers/%s/vendor_passthru/do_test' % self.d1,
+            {'test_key': 'test_value'})
+        self.assertEqual(202, response.status_int)
+        self.assertIsNone(mocked_driver_vendor_passthru.return_value[0])
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
+    def test_driver_vendor_passthru_put(self, mocked_driver_vendor_passthru):
+        self.register_fake_conductors()
+        return_value = (None, 'async')
+        mocked_driver_vendor_passthru.return_value = return_value
+        response = self.put_json(
+            '/drivers/%s/vendor_passthru/do_test' % self.d1,
+            {'test_key': 'test_value'})
+        self.assertEqual(202, response.status_int)
+        self.assertEqual(return_value[0], response.json)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
+    def test_driver_vendor_passthru_get(self, mocked_driver_vendor_passthru):
+        self.register_fake_conductors()
+        return_value = ('foo', 'sync')
+        mocked_driver_vendor_passthru.return_value = return_value
+        response = self.get_json(
+            '/drivers/%s/vendor_passthru/do_test' % self.d1)
+        self.assertEqual(return_value[0], response)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
+    def test_driver_vendor_passthru_delete(self, mock_driver_vendor_passthru):
+        self.register_fake_conductors()
+        return_value = (None, 'async')
+        mock_driver_vendor_passthru.return_value = return_value
+        response = self.delete(
+            '/drivers/%s/vendor_passthru/do_test' % self.d1)
+        self.assertEqual(202, response.status_int)
+        self.assertEqual(return_value[0], response.json)
 
     def test_driver_vendor_passthru_driver_not_found(self):
         # tests when given driver is not found
@@ -105,6 +146,28 @@ class TestListDrivers(base.FunctionalTest):
         error = json.loads(response.json['error_message'])
         self.assertEqual('Missing argument: "method"',
                          error['faultstring'])
+
+    @mock.patch.object(rpcapi.ConductorAPI,
+                       'get_driver_vendor_passthru_methods')
+    def test_driver_vendor_passthru_methods(self, get_methods_mock):
+        self.register_fake_conductors()
+        return_value = {'foo': 'bar'}
+        get_methods_mock.return_value = return_value
+        path = '/drivers/%s/vendor_passthru/methods' % self.d1
+
+        data = self.get_json(path)
+        self.assertEqual(return_value, data)
+        get_methods_mock.assert_called_once_with(mock.ANY, self.d1,
+                                                  topic=mock.ANY)
+
+        # Now let's test the cache: Reset the mock
+        get_methods_mock.reset_mock()
+
+        # Call it again
+        data = self.get_json(path)
+        self.assertEqual(return_value, data)
+        # Assert RPC method wasn't called this time
+        self.assertFalse(get_methods_mock.called)
 
 
 @mock.patch.object(rpcapi.ConductorAPI, 'get_driver_properties')

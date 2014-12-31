@@ -138,7 +138,7 @@ def _get_pxe_ip_address_path(ip_address):
 
 
 def get_deploy_kr_info(node_uuid, driver_info):
-    """Get uuid and tftp path for deploy kernel and ramdisk.
+    """Get href and tftp path for deploy kernel and ramdisk.
 
     Note: driver_info should be validated outside of this method.
     """
@@ -147,7 +147,7 @@ def get_deploy_kr_info(node_uuid, driver_info):
     for label in ('deploy_kernel', 'deploy_ramdisk'):
         # the values for these keys will look like "glance://image-uuid"
         image_info[label] = (
-            str(driver_info[label]).split('/')[-1],
+            str(driver_info[label]),
             os.path.join(root_dir, node_uuid, label)
         )
     return image_info
@@ -233,11 +233,19 @@ def dhcp_options_for_instance(task):
     if CONF.pxe.ipxe_enabled:
         script_name = os.path.basename(CONF.pxe.ipxe_boot_script)
         ipxe_script_url = '/'.join([CONF.pxe.http_url, script_name])
+        dhcp_provider_name = dhcp_factory.CONF.dhcp.dhcp_provider
         # if the request comes from dumb firmware send them the iPXE
-        # boot image. !175 == non-iPXE.
-        # http://ipxe.org/howto/dhcpd#ipxe-specific_options
-        dhcp_opts.append({'opt_name': '!175,bootfile-name',
-                          'opt_value': CONF.pxe.pxe_bootfile_name})
+        # boot image.
+        if dhcp_provider_name == 'neutron':
+            # Neutron use dnsmasq as default DHCP agent, add extra config
+            # to neutron "dhcp-match=set:ipxe,175" and use below option
+            dhcp_opts.append({'opt_name': 'tag:!ipxe,bootfile-name',
+                              'opt_value': CONF.pxe.pxe_bootfile_name})
+        else:
+            # !175 == non-iPXE.
+            # http://ipxe.org/howto/dhcpd#ipxe-specific_options
+            dhcp_opts.append({'opt_name': '!175,bootfile-name',
+                              'opt_value': CONF.pxe.pxe_bootfile_name})
         # If the request comes from iPXE, direct it to boot from the
         # iPXE script
         dhcp_opts.append({'opt_name': 'bootfile-name',

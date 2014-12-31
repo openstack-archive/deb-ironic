@@ -21,16 +21,14 @@ import os
 import sys
 import time
 
-import sendfile
-
 from glanceclient import client
+from oslo.config import cfg
+import sendfile
 import six.moves.urllib.parse as urlparse
 
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _LE
-
-from oslo.config import cfg
 
 
 LOG = logging.getLogger(__name__)
@@ -63,7 +61,8 @@ def check_image_service(func):
     """Creates a glance client if doesn't exists and calls the function."""
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        """wrapper around methods calls
+        """Wrapper around methods calls.
+
         :param image_href: href that describes the location of an image
         """
 
@@ -98,6 +97,7 @@ class BaseImageService(object):
 
     def call(self, method, *args, **kwargs):
         """Call a glance client method.
+
         If we get a connection error,
         retry the request according to CONF.glance_num_retries.
 
@@ -205,8 +205,8 @@ class BaseImageService(object):
         (image_id, self.glance_host,
          self.glance_port, use_ssl) = service_utils.parse_image_ref(image_id)
 
-        if self.version == 2 \
-                and 'file' in CONF.glance.allowed_direct_url_schemes:
+        if (self.version == 2 and
+                'file' in CONF.glance.allowed_direct_url_schemes):
 
             location = self._get_location(image_id)
             url = urlparse.urlparse(location)
@@ -234,7 +234,7 @@ class BaseImageService(object):
         """
         sent_service_image_meta = service_utils.translate_to_glance(image_meta)
 
-        #TODO(ghe): Allow copy-from or location headers Bug #1199532
+        # TODO(ghe): Allow copy-from or location headers Bug #1199532
 
         if data:
             sent_service_image_meta['data'] = data
@@ -265,7 +265,7 @@ class BaseImageService(object):
             if data:
                 image_meta['data'] = data
 
-        #NOTE(bcwaldon): id is not an editable field, but it is likely to be
+        # NOTE(bcwaldon): id is not an editable field, but it is likely to be
         # passed in by calling code. Let's be nice and ignore it.
         image_meta.pop('id', None)
 

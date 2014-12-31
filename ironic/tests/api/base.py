@@ -27,14 +27,15 @@ import pecan
 import pecan.testing
 from six.moves.urllib import parse as urlparse
 
-from ironic.db import api as dbapi
 from ironic.tests.db import base
 
 PATH_PREFIX = '/v1'
 
 
 class FunctionalTest(base.DbTestCase):
-    """Used for functional tests of Pecan controllers where you need to
+    """Pecan controller functional testing class.
+
+    Used for functional tests of Pecan controllers where you need to
     test your literal application and its integration with the
     framework.
     """
@@ -48,7 +49,6 @@ class FunctionalTest(base.DbTestCase):
         cfg.CONF.set_override("admin_user", "admin",
                               group='keystone_authtoken')
         self.app = self._make_app()
-        self.dbapi = dbapi.get_instance()
 
         def reset_pecan():
             pecan.set_config({}, overwrite=True)

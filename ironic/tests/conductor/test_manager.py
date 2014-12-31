@@ -21,6 +21,7 @@
 import eventlet
 import mock
 from oslo.config import cfg
+from oslo.db import exception as db_exception
 from oslo import messaging
 
 from ironic.common import boot_devices
@@ -145,7 +146,6 @@ class _ServiceSetUpMixin(object):
         self.config(node_locked_retry_attempts=1, group='conductor')
         self.config(node_locked_retry_interval=0, group='conductor')
         self.service = manager.ConductorManager(self.hostname, 'test-topic')
-        self.dbapi = dbapi.get_instance()
         mgr_utils.mock_the_extension_manager()
         self.driver = driver_factory.get_driver("fake")
 
@@ -225,11 +225,24 @@ class KeepAliveTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         # avoid wasting time at the event.wait()
         CONF.set_override('heartbeat_interval', 0, 'conductor')
         with mock.patch.object(self.dbapi, 'touch_conductor') as mock_touch:
-            with mock.patch.object(self.service._keepalive_evt, 'is_set') as \
-                    mock_is_set:
+            with mock.patch.object(self.service._keepalive_evt,
+                                   'is_set') as mock_is_set:
                 mock_is_set.side_effect = [False, True]
                 self.service._conductor_service_record_keepalive()
             mock_touch.assert_called_once_with(self.hostname)
+
+    def test__conductor_service_record_keepalive_failed_db_conn(self):
+        self._start_service()
+        # avoid wasting time at the event.wait()
+        CONF.set_override('heartbeat_interval', 0, 'conductor')
+        with mock.patch.object(self.dbapi, 'touch_conductor') as mock_touch:
+            mock_touch.side_effect = [None, db_exception.DBConnectionError(),
+                                      None]
+            with mock.patch.object(self.service._keepalive_evt,
+                                   'is_set') as mock_is_set:
+                mock_is_set.side_effect = [False, False, False, True]
+                self.service._conductor_service_record_keepalive()
+            self.assertEqual(3, mock_touch.call_count)
 
 
 @_mock_record_keepalive
@@ -244,8 +257,8 @@ class ChangeNodePowerStateTestCase(_ServiceSetUpMixin,
                                           power_state=states.POWER_OFF)
         self._start_service()
 
-        with mock.patch.object(self.driver.power, 'get_power_state') \
-                as get_power_mock:
+        with mock.patch.object(self.driver.power,
+                               'get_power_state') as get_power_mock:
             get_power_mock.return_value = states.POWER_OFF
 
             self.service.change_node_power_state(self.context,
@@ -299,8 +312,8 @@ class ChangeNodePowerStateTestCase(_ServiceSetUpMixin,
                                           power_state=initial_state)
         self._start_service()
 
-        with mock.patch.object(self.service, '_spawn_worker') \
-                as spawn_mock:
+        with mock.patch.object(self.service,
+                               '_spawn_worker') as spawn_mock:
             spawn_mock.side_effect = exception.NoFreeConductorWorker()
 
             exc = self.assertRaises(messaging.rpc.ExpectedException,
@@ -329,12 +342,12 @@ class ChangeNodePowerStateTestCase(_ServiceSetUpMixin,
                                           power_state=initial_state)
         self._start_service()
 
-        with mock.patch.object(self.driver.power, 'get_power_state') \
-                as get_power_mock:
+        with mock.patch.object(self.driver.power,
+                               'get_power_state') as get_power_mock:
             get_power_mock.return_value = states.POWER_OFF
 
-            with mock.patch.object(self.driver.power, 'set_power_state') \
-                    as set_power_mock:
+            with mock.patch.object(self.driver.power,
+                                   'set_power_state') as set_power_mock:
                 new_state = states.POWER_ON
                 set_power_mock.side_effect = exception.PowerStateFailure(
                     pstate=new_state
@@ -363,8 +376,8 @@ class ChangeNodePowerStateTestCase(_ServiceSetUpMixin,
                                           power_state=initial_state)
         self._start_service()
 
-        with mock.patch.object(self.driver.power, 'validate') \
-                as validate_mock:
+        with mock.patch.object(self.driver.power,
+                               'validate') as validate_mock:
             validate_mock.side_effect = exception.InvalidParameterValue(
                 'wrong power driver info')
 
@@ -393,6 +406,17 @@ class UpdateNodeTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         node.extra = {'test': 'two'}
         res = self.service.update_node(self.context, node)
         self.assertEqual({'test': 'two'}, res['extra'])
+
+    def test_update_node_clears_maintenance_reason(self):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          maintenance=True,
+                                          maintenance_reason='reason')
+
+        # check that ManagerService.update_node actually updates the node
+        node.maintenance = False
+        res = self.service.update_node(self.context, node)
+        self.assertFalse(res['maintenance'])
+        self.assertIsNone(res['maintenance_reason'])
 
     def test_update_node_already_locked(self):
         node = obj_utils.create_test_node(self.context, driver='fake',
@@ -471,15 +495,62 @@ class UpdateNodeTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
 @_mock_record_keepalive
 class VendorPassthruTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
-    def test_vendor_passthru_success(self):
+
+    @mock.patch.object(task_manager.TaskManager, 'spawn_after')
+    def test_vendor_passthru_async(self, mock_spawn):
         node = obj_utils.create_test_node(self.context, driver='fake')
         info = {'bar': 'baz'}
         self._start_service()
 
-        self.service.vendor_passthru(
-            self.context, node.uuid, 'first_method', info)
+        ret, is_async = self.service.vendor_passthru(self.context, node.uuid,
+                                                     'first_method', 'POST',
+                                                     info)
         # Waiting to make sure the below assertions are valid.
         self.service._worker_pool.waitall()
+
+        # Assert spawn_after was called
+        self.assertTrue(mock_spawn.called)
+        self.assertIsNone(ret)
+        self.assertTrue(is_async)
+
+        node.refresh()
+        self.assertIsNone(node.last_error)
+        # Verify reservation has been cleared.
+        self.assertIsNone(node.reservation)
+
+    @mock.patch.object(task_manager.TaskManager, 'spawn_after')
+    def test_vendor_passthru_sync(self, mock_spawn):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        info = {'bar': 'meow'}
+        self._start_service()
+
+        ret, is_async = self.service.vendor_passthru(self.context, node.uuid,
+                                                     'third_method_sync',
+                                                     'POST', info)
+        # Waiting to make sure the below assertions are valid.
+        self.service._worker_pool.waitall()
+
+        # Assert no workers were used
+        self.assertFalse(mock_spawn.called)
+        self.assertTrue(ret)
+        self.assertFalse(is_async)
+
+        node.refresh()
+        self.assertIsNone(node.last_error)
+        # Verify reservation has been cleared.
+        self.assertIsNone(node.reservation)
+
+    def test_vendor_passthru_http_method_not_supported(self):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        self._start_service()
+
+        # GET not supported by first_method
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.vendor_passthru,
+                                self.context, node.uuid,
+                                'first_method', 'GET', {})
+        # Compare true exception hidden by @messaging.expected_exceptions
+        self.assertEqual(exception.InvalidParameterValue, exc.exc_info[0])
 
         node.refresh()
         self.assertIsNone(node.last_error)
@@ -495,7 +566,8 @@ class VendorPassthruTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         exc = self.assertRaises(messaging.rpc.ExpectedException,
                                 self.service.vendor_passthru,
-                                self.context, node.uuid, 'first_method', info)
+                                self.context, node.uuid, 'first_method',
+                                'POST', info)
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.NodeLocked, exc.exc_info[0])
 
@@ -511,10 +583,10 @@ class VendorPassthruTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         exc = self.assertRaises(messaging.rpc.ExpectedException,
                                 self.service.vendor_passthru,
-                                self.context,
-                                node.uuid, 'unsupported_method', info)
+                                self.context, node.uuid,
+                                'unsupported_method', 'POST', info)
         # Compare true exception hidden by @messaging.expected_exceptions
-        self.assertEqual(exception.UnsupportedDriverExtension,
+        self.assertEqual(exception.InvalidParameterValue,
                          exc.exc_info[0])
 
         node.refresh()
@@ -529,7 +601,8 @@ class VendorPassthruTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         exc = self.assertRaises(messaging.rpc.ExpectedException,
                                 self.service.vendor_passthru,
-                                self.context, node.uuid, 'first_method', info)
+                                self.context, node.uuid,
+                                'first_method', 'POST', info)
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.MissingParameterValue, exc.exc_info[0])
 
@@ -546,8 +619,8 @@ class VendorPassthruTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         exc = self.assertRaises(messaging.rpc.ExpectedException,
                                 self.service.vendor_passthru,
-                                self.context,
-                                node.uuid, 'whatever_method', info)
+                                self.context, node.uuid,
+                                'whatever_method', 'POST', info)
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.UnsupportedDriverExtension,
                          exc.exc_info[0])
@@ -561,14 +634,14 @@ class VendorPassthruTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         info = {'bar': 'baz'}
         self._start_service()
 
-        with mock.patch.object(self.service, '_spawn_worker') \
-                as spawn_mock:
+        with mock.patch.object(self.service,
+                               '_spawn_worker') as spawn_mock:
             spawn_mock.side_effect = exception.NoFreeConductorWorker()
 
             exc = self.assertRaises(messaging.rpc.ExpectedException,
                                     self.service.vendor_passthru,
-                                    self.context,
-                                    node.uuid, 'first_method', info)
+                                    self.context, node.uuid,
+                                    'first_method', 'POST', info)
             # Compare true exception hidden by @messaging.expected_exceptions
             self.assertEqual(exception.NoFreeConductorWorker, exc.exc_info[0])
 
@@ -580,20 +653,119 @@ class VendorPassthruTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
             # Verify reservation has been cleared.
             self.assertIsNone(node.reservation)
 
-    def test_driver_vendor_passthru_success(self):
+    @mock.patch.object(task_manager, 'acquire')
+    def test_vendor_passthru_backwards_compat(self, acquire_mock):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        vendor_passthru_ref = mock.Mock()
+        self._start_service()
+
+        driver = mock.Mock()
+        driver.vendor.vendor_routes = {}
+        driver.vendor.vendor_passthru = vendor_passthru_ref
+
+        task = mock.Mock()
+        task.node = node
+        task.driver = driver
+
+        acquire_mock.return_value.__enter__.return_value = task
+
+        response = self.service.vendor_passthru(
+            self.context, node.uuid, 'test_method', 'POST', {'bar': 'baz'})
+
+        self.assertEqual((None, True), response)
+        task.spawn_after.assert_called_once_with(mock.ANY, vendor_passthru_ref,
+            task, bar='baz', method='test_method')
+
+    def test_get_node_vendor_passthru_methods(self):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        fake_routes = {'test_method': {'async': True,
+                                       'description': 'foo',
+                                       'http_methods': ['POST'],
+                                       'func': None}}
+        self.driver.vendor.vendor_routes = fake_routes
+        self._start_service()
+
+        data = self.service.get_node_vendor_passthru_methods(self.context,
+                                                         node.uuid)
+        # The function reference should not be returned
+        del fake_routes['test_method']['func']
+        self.assertEqual(fake_routes, data)
+
+    def test_get_node_vendor_passthru_methods_not_supported(self):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        self.driver.vendor = None
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.get_node_vendor_passthru_methods,
+                                self.context, node.uuid)
+        # Compare true exception hidden by @messaging.expected_exceptions
+        self.assertEqual(exception.UnsupportedDriverExtension,
+                         exc.exc_info[0])
+
+    @mock.patch.object(manager.ConductorManager, '_spawn_worker')
+    def test_driver_vendor_passthru_sync(self, mock_spawn):
         expected = {'foo': 'bar'}
-        self.driver.vendor = vendor = mock.Mock()
-        vendor.driver_vendor_passthru.return_value = expected
+        self.driver.vendor = mock.Mock(spec=drivers_base.VendorInterface)
+        test_method = mock.MagicMock(return_value=expected)
+        self.driver.vendor.driver_routes = {'test_method':
+                                           {'func': test_method,
+                                            'async': False,
+                                            'http_methods': ['POST']}}
         self.service.init_host()
-        got = self.service.driver_vendor_passthru(self.context,
-                                                  'fake',
-                                                  'test_method',
-                                                  {'test': 'arg'})
+        # init_host() called _spawn_worker because of the heartbeat
+        mock_spawn.reset_mock()
+
+        vendor_args = {'test': 'arg'}
+        got, is_async = self.service.driver_vendor_passthru(self.context,
+                            'fake', 'test_method', 'POST', vendor_args)
+
+        # Assert that the vendor interface has no custom
+        # driver_vendor_passthru()
+        self.assertFalse(hasattr(self.driver.vendor, 'driver_vendor_passthru'))
         self.assertEqual(expected, got)
-        vendor.driver_vendor_passthru.assert_called_once_with(
-            mock.ANY,
-            method='test_method',
-            test='arg')
+        self.assertFalse(is_async)
+        test_method.assert_called_once_with(self.context, **vendor_args)
+        # No worker was spawned
+        self.assertFalse(mock_spawn.called)
+
+    @mock.patch.object(manager.ConductorManager, '_spawn_worker')
+    def test_driver_vendor_passthru_async(self, mock_spawn):
+        self.driver.vendor = mock.Mock(spec=drivers_base.VendorInterface)
+        test_method = mock.MagicMock()
+        self.driver.vendor.driver_routes = {'test_sync_method':
+                                           {'func': test_method,
+                                            'async': True,
+                                            'http_methods': ['POST']}}
+        self.service.init_host()
+        # init_host() called _spawn_worker because of the heartbeat
+        mock_spawn.reset_mock()
+
+        vendor_args = {'test': 'arg'}
+        got, is_async = self.service.driver_vendor_passthru(self.context,
+                            'fake', 'test_sync_method', 'POST', vendor_args)
+
+        # Assert that the vendor interface has no custom
+        # driver_vendor_passthru()
+        self.assertFalse(hasattr(self.driver.vendor, 'driver_vendor_passthru'))
+        self.assertIsNone(got)
+        self.assertTrue(is_async)
+        mock_spawn.assert_called_once_with(test_method, self.context,
+                                           **vendor_args)
+
+    def test_driver_vendor_passthru_http_method_not_supported(self):
+        self.driver.vendor = mock.Mock(spec=drivers_base.VendorInterface)
+        self.driver.vendor.driver_routes = {'test_method':
+                                           {'func': mock.MagicMock(),
+                                            'async': True,
+                                            'http_methods': ['POST']}}
+        self.service.init_host()
+        # GET not supported by test_method
+        exc = self.assertRaises(messaging.ExpectedException,
+                                self.service.driver_vendor_passthru,
+                                self.context, 'fake', 'test_method',
+                                'GET', {})
+        # Compare true exception hidden by @messaging.expected_exceptions
+        self.assertEqual(exception.InvalidParameterValue,
+                         exc.exc_info[0])
 
     def test_driver_vendor_passthru_vendor_interface_not_supported(self):
         # Test for when no vendor interface is set at all
@@ -601,36 +773,90 @@ class VendorPassthruTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         self.service.init_host()
         exc = self.assertRaises(messaging.ExpectedException,
                                 self.service.driver_vendor_passthru,
-                                self.context,
-                                'fake',
-                                'test_method',
-                                {})
+                                self.context, 'fake', 'test_method',
+                                'POST', {})
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.UnsupportedDriverExtension,
                          exc.exc_info[0])
 
-    def test_driver_vendor_passthru_not_supported(self):
+    def test_driver_vendor_passthru_method_not_supported(self):
         # Test for when the vendor interface is set, but hasn't passed a
         # driver_passthru_mapping to MixinVendorInterface
         self.service.init_host()
         exc = self.assertRaises(messaging.ExpectedException,
                                 self.service.driver_vendor_passthru,
-                                self.context,
-                                'fake',
-                                'test_method',
-                                {})
+                                self.context, 'fake', 'test_method',
+                                'POST', {})
         # Compare true exception hidden by @messaging.expected_exceptions
-        self.assertEqual(exception.UnsupportedDriverExtension,
+        self.assertEqual(exception.InvalidParameterValue,
                          exc.exc_info[0])
 
     def test_driver_vendor_passthru_driver_not_found(self):
         self.service.init_host()
         self.assertRaises(messaging.ExpectedException,
                           self.service.driver_vendor_passthru,
-                          self.context,
-                          'does_not_exist',
-                          'test_method',
-                          {})
+                          self.context, 'does_not_exist', 'test_method',
+                          'POST', {})
+
+    def test_driver_vendor_passthru_backwards_compat(self):
+        expected = {'foo': 'bar'}
+        driver_vendor_passthru_ref = mock.Mock(return_value=expected)
+
+        self.driver.vendor = mock.Mock(spec=drivers_base.VendorInterface)
+        self.driver.vendor.driver_routes = {}
+        self.driver.vendor.driver_vendor_passthru = driver_vendor_passthru_ref
+
+        self.service.init_host()
+
+        vendor_args = {'test': 'arg'}
+        response = self.service.driver_vendor_passthru(self.context,
+                       'fake', 'test_method', 'POST', vendor_args)
+
+        self.assertEqual((expected, False), response)
+        driver_vendor_passthru_ref.assert_called_once_with(
+                self.context, test='arg', method='test_method')
+
+    def test_get_driver_vendor_passthru_methods(self):
+        self.driver.vendor = mock.Mock(spec=drivers_base.VendorInterface)
+        fake_routes = {'test_method': {'async': True,
+                                       'description': 'foo',
+                                       'http_methods': ['POST'],
+                                       'func': None}}
+        self.driver.vendor.driver_routes = fake_routes
+        self.service.init_host()
+
+        data = self.service.get_driver_vendor_passthru_methods(self.context,
+                                                               'fake')
+        # The function reference should not be returned
+        del fake_routes['test_method']['func']
+        self.assertEqual(fake_routes, data)
+
+    def test_get_driver_vendor_passthru_methods_not_supported(self):
+        self.service.init_host()
+        self.driver.vendor = None
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                              self.service.get_driver_vendor_passthru_methods,
+                              self.context, 'fake')
+        # Compare true exception hidden by @messaging.expected_exceptions
+        self.assertEqual(exception.UnsupportedDriverExtension,
+                         exc.exc_info[0])
+
+    @mock.patch.object(drivers_base.VendorInterface, 'driver_validate')
+    def test_driver_vendor_passthru_validation_failed(self, validate_mock):
+        validate_mock.side_effect = exception.MissingParameterValue('error')
+        test_method = mock.Mock()
+        self.driver.vendor.driver_routes = {'test_method':
+                                           {'func': test_method,
+                                            'async': False,
+                                            'http_methods': ['POST']}}
+        self.service.init_host()
+        exc = self.assertRaises(messaging.ExpectedException,
+                                self.service.driver_vendor_passthru,
+                                self.context, 'fake', 'test_method',
+                                'POST', {})
+        self.assertEqual(exception.MissingParameterValue,
+                         exc.exc_info[0])
+        self.assertFalse(test_method.called)
 
 
 @_mock_record_keepalive
@@ -663,8 +889,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
 
-    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.validate')
-    def test_do_node_deploy_validate_fail(self, mock_validate):
+    def _test_do_node_deploy_validate_fail(self, mock_validate):
         # InvalidParameterValue should be re-raised as InstanceDeployFailure
         mock_validate.side_effect = exception.InvalidParameterValue('error')
         node = obj_utils.create_test_node(self.context, driver='fake')
@@ -678,12 +903,20 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
 
+    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.validate')
+    def test_do_node_deploy_validate_fail(self, mock_validate):
+        self._test_do_node_deploy_validate_fail(mock_validate)
+
+    @mock.patch('ironic.drivers.modules.fake.FakePower.validate')
+    def test_do_node_deploy_power_validate_fail(self, mock_validate):
+        self._test_do_node_deploy_validate_fail(mock_validate)
+
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy')
     def test__do_node_deploy_driver_raises_error(self, mock_deploy):
         # test when driver.deploy.deploy raises an exception
         mock_deploy.side_effect = exception.InstanceDeployFailure('test')
         node = obj_utils.create_test_node(self.context, driver='fake',
-                                          provision_state=states.NOSTATE)
+                                          provision_state=states.DEPLOYING)
         task = task_manager.TaskManager(self.context, node.uuid)
 
         self.assertRaises(exception.InstanceDeployFailure,
@@ -700,7 +933,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         # test when driver.deploy.deploy returns DEPLOYDONE
         mock_deploy.return_value = states.DEPLOYDONE
         node = obj_utils.create_test_node(self.context, driver='fake',
-                                          provision_state=states.NOSTATE)
+                                          provision_state=states.DEPLOYING)
         task = task_manager.TaskManager(self.context, node.uuid)
 
         self.service._do_node_deploy(task)
@@ -870,7 +1103,7 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
     def test_do_node_tear_down_ok(self, mock_tear_down):
         # test when driver.deploy.tear_down returns DELETED
         node = obj_utils.create_test_node(self.context, driver='fake',
-                                          provision_state=states.ACTIVE,
+                                          provision_state=states.DELETING,
                                           instance_info={'foo': 'bar'})
 
         task = task_manager.TaskManager(self.context, node.uuid)
@@ -884,22 +1117,12 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         self.assertEqual({}, node.instance_info)
         mock_tear_down.assert_called_once_with(mock.ANY)
 
-    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.tear_down')
-    def test_do_node_tear_down_partial_ok(self, mock_tear_down):
-        # test when driver.deploy.tear_down doesn't return DELETED
-        node = obj_utils.create_test_node(self.context, driver='fake',
-                                          provision_state=states.ACTIVE,
-                                          instance_info={'foo': 'bar'})
-
-        self._start_service()
-        task = task_manager.TaskManager(self.context, node.uuid)
-        mock_tear_down.return_value = states.DELETING
-        self.service._do_node_tear_down(task)
-        node.refresh()
-        self.assertEqual(states.DELETING, node.provision_state)
-        self.assertIsNone(node.last_error)
-        self.assertEqual({}, node.instance_info)
-        mock_tear_down.assert_called_once_with(mock.ANY)
+    # NOTE(deva): partial tear-down was broken. A node left in a state of
+    #             DELETING could not have tear_down called on it a second time
+    #             Thus, I have removed the unit test, which faultily asserted
+    #             only that a node could be left in a state of incomplete
+    #             deletion -- not that such a node's deletion could later be
+    #             completed.
 
     @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
     def test_do_node_tear_down_worker_pool_full(self, mock_spawn):
@@ -964,8 +1187,9 @@ class MiscTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
     def test_validate_driver_interfaces_validation_fail(self):
         node = obj_utils.create_test_node(self.context, driver='fake')
-        with mock.patch('ironic.drivers.modules.fake.FakeDeploy.validate') \
-                as deploy:
+        with mock.patch(
+                 'ironic.drivers.modules.fake.FakeDeploy.validate'
+             ) as deploy:
             reason = 'fake reason'
             deploy.side_effect = exception.InvalidParameterValue(reason)
             ret = self.service.validate_driver_interfaces(self.context,
@@ -973,50 +1197,14 @@ class MiscTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
             self.assertFalse(ret['deploy']['result'])
             self.assertEqual(reason, ret['deploy']['reason'])
 
-    def test_maintenance_mode_on(self):
-        node = obj_utils.create_test_node(self.context, driver='fake')
-        self.service.change_node_maintenance_mode(self.context, node.uuid,
-                                                  True)
-        node.refresh()
-        self.assertTrue(node.maintenance)
-
-    def test_maintenance_mode_off(self):
-        node = obj_utils.create_test_node(self.context, driver='fake',
-                                          maintenance=True)
-        self.service.change_node_maintenance_mode(self.context, node.uuid,
-                                                  False)
-        node.refresh()
-        self.assertFalse(node.maintenance)
-
-    def test_maintenance_mode_on_failed(self):
-        node = obj_utils.create_test_node(self.context, driver='fake',
-                                          maintenance=True)
-        exc = self.assertRaises(messaging.rpc.ExpectedException,
-                                self.service.change_node_maintenance_mode,
-                                self.context, node.uuid, True)
-        # Compare true exception hidden by @messaging.expected_exceptions
-        self.assertEqual(exception.NodeMaintenanceFailure, exc.exc_info[0])
-        node.refresh()
-        self.assertTrue(node.maintenance)
-
-    def test_maintenance_mode_off_failed(self):
-        node = obj_utils.create_test_node(self.context, driver='fake')
-        exc = self.assertRaises(messaging.rpc.ExpectedException,
-                                self.service.change_node_maintenance_mode,
-                                self.context, node.uuid, False)
-        # Compare true exception hidden by @messaging.expected_exceptions
-        self.assertEqual(exception.NodeMaintenanceFailure, exc.exc_info[0])
-        node.refresh()
-        self.assertFalse(node.maintenance)
-
 
 @_mock_record_keepalive
 class ConsoleTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
     def test_set_console_mode_worker_pool_full(self):
         node = obj_utils.create_test_node(self.context, driver='fake')
         self._start_service()
-        with mock.patch.object(self.service, '_spawn_worker') \
-                as spawn_mock:
+        with mock.patch.object(self.service,
+                               '_spawn_worker') as spawn_mock:
             spawn_mock.side_effect = exception.NoFreeConductorWorker()
 
             exc = self.assertRaises(messaging.rpc.ExpectedException,
@@ -1075,8 +1263,8 @@ class ConsoleTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
                                           last_error=None,
                                           console_enabled=False)
         self._start_service()
-        with mock.patch.object(self.driver.console, 'start_console') \
-                as mock_sc:
+        with mock.patch.object(self.driver.console,
+                               'start_console') as mock_sc:
             mock_sc.side_effect = exception.IronicException('test-error')
             self.service.set_console_mode(self.context, node.uuid, True)
             self.service._worker_pool.waitall()
@@ -1089,8 +1277,8 @@ class ConsoleTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
                                           last_error=None,
                                           console_enabled=True)
         self._start_service()
-        with mock.patch.object(self.driver.console, 'stop_console') \
-                as mock_sc:
+        with mock.patch.object(self.driver.console,
+                               'stop_console') as mock_sc:
             mock_sc.side_effect = exception.IronicException('test-error')
             self.service.set_console_mode(self.context, node.uuid, False)
             self.service._worker_pool.waitall()
@@ -1102,8 +1290,8 @@ class ConsoleTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         node = obj_utils.create_test_node(self.context, driver='fake',
                                           console_enabled=True)
         self._start_service()
-        with mock.patch.object(self.driver.console, 'start_console') \
-                as mock_sc:
+        with mock.patch.object(self.driver.console,
+                               'start_console') as mock_sc:
             self.service.set_console_mode(self.context, node.uuid, True)
             self.service._worker_pool.waitall()
             self.assertFalse(mock_sc.called)
@@ -1112,8 +1300,8 @@ class ConsoleTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         node = obj_utils.create_test_node(self.context, driver='fake',
                                           console_enabled=False)
         self._start_service()
-        with mock.patch.object(self.driver.console, 'stop_console') \
-                as mock_sc:
+        with mock.patch.object(self.driver.console,
+                               'stop_console') as mock_sc:
             self.service.set_console_mode(self.context, node.uuid, False)
             self.service._worker_pool.waitall()
             self.assertFalse(mock_sc.called)
@@ -1225,19 +1413,21 @@ class DestroyNodeTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 @_mock_record_keepalive
 class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
     def test_update_port(self):
-        obj_utils.create_test_node(self.context, driver='fake')
+        node = obj_utils.create_test_node(self.context, driver='fake')
 
-        port = obj_utils.create_test_port(self.context, extra={'foo': 'bar'})
+        port = obj_utils.create_test_port(self.context,
+                                          node_id=node.id,
+                                          extra={'foo': 'bar'})
         new_extra = {'foo': 'baz'}
         port.extra = new_extra
         res = self.service.update_port(self.context, port)
         self.assertEqual(new_extra, res.extra)
 
     def test_update_port_node_locked(self):
-        obj_utils.create_test_node(self.context, driver='fake',
+        node = obj_utils.create_test_node(self.context, driver='fake',
                                    reservation='fake-reserv')
 
-        port = obj_utils.create_test_port(self.context)
+        port = obj_utils.create_test_port(self.context, node_id=node.id)
         port.extra = {'foo': 'baz'}
         exc = self.assertRaises(messaging.rpc.ExpectedException,
                                 self.service.update_port,
@@ -1247,8 +1437,9 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.update_port_address')
     def test_update_port_address(self, mac_update_mock):
-        obj_utils.create_test_node(self.context, driver='fake')
+        node = obj_utils.create_test_node(self.context, driver='fake')
         port = obj_utils.create_test_port(self.context,
+                                          node_id=node.id,
                                           extra={'vif_port_id': 'fake-id'})
         new_address = '11:22:33:44:55:bb'
         port.address = new_address
@@ -1259,8 +1450,9 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.update_port_address')
     def test_update_port_address_fail(self, mac_update_mock):
-        obj_utils.create_test_node(self.context, driver='fake')
+        node = obj_utils.create_test_node(self.context, driver='fake')
         port = obj_utils.create_test_port(self.context,
+                                          node_id=node.id,
                                           extra={'vif_port_id': 'fake-id'})
         old_address = port.address
         port.address = '11:22:33:44:55:bb'
@@ -1276,8 +1468,8 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.update_port_address')
     def test_update_port_address_no_vif_id(self, mac_update_mock):
-        obj_utils.create_test_node(self.context, driver='fake')
-        port = obj_utils.create_test_port(self.context)
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        port = obj_utils.create_test_port(self.context, node_id=node.id)
 
         new_address = '11:22:33:44:55:bb'
         port.address = new_address
@@ -1364,8 +1556,8 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
     def test_set_boot_device(self):
         node = obj_utils.create_test_node(self.context, driver='fake')
         with mock.patch.object(self.driver.management, 'validate') as mock_val:
-            with mock.patch.object(self.driver.management, 'set_boot_device') \
-                    as mock_sbd:
+            with mock.patch.object(self.driver.management,
+                                   'set_boot_device') as mock_sbd:
                 self.service.set_boot_device(self.context, node.uuid,
                                              boot_devices.PXE)
                 mock_val.assert_called_once_with(mock.ANY)
@@ -1617,6 +1809,7 @@ class ManagerDoSyncPowerStateTestCase(tests_db_base.DbTestCase):
         self.assertEqual(1,
                          self.service.power_state_sync_count[self.node.uuid])
         self.assertTrue(self.node.maintenance)
+        self.assertIsNotNone(self.node.maintenance_reason)
 
     def test_max_retries_exceeded2(self, node_power_action):
         self.config(force_power_state_during_sync=True, group='conductor')
@@ -1684,7 +1877,6 @@ class ManagerSyncPowerStatesTestCase(_CommonMixIn, tests_db_base.DbTestCase):
     def setUp(self):
         super(ManagerSyncPowerStatesTestCase, self).setUp()
         self.service = manager.ConductorManager('hostname', 'test-topic')
-        self.dbapi = dbapi.get_instance()
         self.service.dbapi = self.dbapi
         self.node = self._create_node()
         self.filters = {'reserved': False, 'maintenance': False}
@@ -1929,14 +2121,14 @@ class ManagerSyncPowerStatesTestCase(_CommonMixIn, tests_db_base.DbTestCase):
 
         get_nodeinfo_mock.assert_called_once_with(
                 columns=self.columns, filters=self.filters)
-        mapped_calls = [mock.call(n.uuid, n.driver) for n in nodes]
+        mapped_calls = [mock.call(x.uuid, x.driver) for x in nodes]
         self.assertEqual(mapped_calls, mapped_mock.call_args_list)
-        get_node_calls = [mock.call(self.context, n.id)
-                for n in nodes[:1] + nodes[2:]]
+        get_node_calls = [mock.call(self.context, x.id)
+                for x in nodes[:1] + nodes[2:]]
         self.assertEqual(get_node_calls,
                          get_node_mock.call_args_list)
-        acquire_calls = [mock.call(self.context, n.id)
-                for n in nodes[:1] + nodes[6:]]
+        acquire_calls = [mock.call(self.context, x.id)
+                for x in nodes[:1] + nodes[6:]]
         self.assertEqual(acquire_calls, acquire_mock.call_args_list)
         sync_calls = [mock.call(tasks[0]), mock.call(tasks[5])]
         self.assertEqual(sync_calls, sync_mock.call_args_list)
@@ -1951,7 +2143,6 @@ class ManagerCheckDeployTimeoutsTestCase(_CommonMixIn,
         super(ManagerCheckDeployTimeoutsTestCase, self).setUp()
         self.config(deploy_callback_timeout=300, group='conductor')
         self.service = manager.ConductorManager('hostname', 'test-topic')
-        self.dbapi = dbapi.get_instance()
         self.service.dbapi = self.dbapi
 
         self.node = self._create_node(provision_state=states.DEPLOYWAIT)
@@ -2158,9 +2349,8 @@ class ManagerCheckDeployTimeoutsTestCase(_CommonMixIn,
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.update_port_address')
     def test_update_port_duplicate_mac(self, get_nodeinfo_mock, mapped_mock,
             acquire_mock, mac_update_mock, mock_up):
-        ndict = utils.get_test_node(driver='fake')
-        self.dbapi.create_node(ndict)
-        port = obj_utils.create_test_port(self.context)
+        node = utils.create_test_node(driver='fake')
+        port = obj_utils.create_test_port(self.context, node_id=node.id)
         mock_up.side_effect = exception.MACAlreadyExists(mac=port.address)
         exc = self.assertRaises(messaging.rpc.ExpectedException,
                                 self.service.update_port,
@@ -2216,7 +2406,7 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
     def test_driver_properties_fake_seamicro(self):
         expected = ['seamicro_api_endpoint', 'seamicro_password',
                     'seamicro_server_id', 'seamicro_username',
-                    'seamicro_api_version']
+                    'seamicro_api_version', 'seamicro_terminal_port']
         self._check_driver_properties("fake_seamicro", expected)
 
     def test_driver_properties_fake_snmp(self):
@@ -2251,7 +2441,7 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
         expected = ['pxe_deploy_kernel', 'pxe_deploy_ramdisk',
                    'seamicro_api_endpoint', 'seamicro_password',
                    'seamicro_server_id', 'seamicro_username',
-                   'seamicro_api_version']
+                   'seamicro_api_version', 'seamicro_terminal_port']
         self._check_driver_properties("pxe_seamicro", expected)
 
     def test_driver_properties_pxe_snmp(self):
@@ -2297,7 +2487,6 @@ class ManagerSyncLocalStateTestCase(_CommonMixIn, tests_db_base.DbTestCase):
     def setUp(self):
         super(ManagerSyncLocalStateTestCase, self).setUp()
 
-        self.dbapi = dbapi.get_instance()
         self.service = manager.ConductorManager('hostname', 'test-topic')
 
         self.service.conductor = mock.Mock()
@@ -2370,14 +2559,16 @@ class ManagerSyncLocalStateTestCase(_CommonMixIn, tests_db_base.DbTestCase):
                             acquire_mock, get_authtoken_mock):
         get_ctx_mock.return_value = self.context
         mapped_mock.return_value = True
-        acquire_mock.side_effect = \
-            self._get_acquire_side_effect([self.task] * 3)
-        self.task.spawn_after.side_effect = \
-            [None, exception.NoFreeConductorWorker('error')]
+        acquire_mock.side_effect = self._get_acquire_side_effect(
+                                       [self.task] * 3)
+        self.task.spawn_after.side_effect = [
+            None,
+            exception.NoFreeConductorWorker('error')
+        ]
 
         # 3 nodes to be checked
-        get_nodeinfo_mock.return_value = \
-            self._get_nodeinfo_list_response([self.node] * 3)
+        get_nodeinfo_mock.return_value = self._get_nodeinfo_list_response(
+                                             [self.node] * 3)
 
         self.service._sync_local_state(self.context)
 
@@ -2412,8 +2603,8 @@ class ManagerSyncLocalStateTestCase(_CommonMixIn, tests_db_base.DbTestCase):
         self.task.spawn_after.side_effect = [None, None]
 
         # 3 nodes to be checked
-        get_nodeinfo_mock.return_value = \
-            self._get_nodeinfo_list_response([self.node] * 3)
+        get_nodeinfo_mock.return_value = self._get_nodeinfo_list_response(
+                                             [self.node] * 3)
 
         self.service._sync_local_state(self.context)
 
@@ -2442,13 +2633,13 @@ class ManagerSyncLocalStateTestCase(_CommonMixIn, tests_db_base.DbTestCase):
         self.config(periodic_max_workers=1, group='conductor')
         get_ctx_mock.return_value = self.context
         mapped_mock.return_value = True
-        acquire_mock.side_effect = \
-            self._get_acquire_side_effect([self.task] * 3)
+        acquire_mock.side_effect = self._get_acquire_side_effect(
+                                       [self.task] * 3)
         self.task.spawn_after.side_effect = [None] * 3
 
         # 3 nodes to be checked
-        get_nodeinfo_mock.return_value = \
-            self._get_nodeinfo_list_response([self.node] * 3)
+        get_nodeinfo_mock.return_value = self._get_nodeinfo_list_response(
+                                             [self.node] * 3)
 
         self.service._sync_local_state(self.context)
 

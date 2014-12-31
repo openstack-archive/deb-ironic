@@ -19,13 +19,14 @@
 
 """Test class for IPMITool driver module."""
 
-import mock
 import os
 import stat
 import tempfile
 import time
 
+import mock
 from oslo.config import cfg
+from oslo_concurrency import processutils
 
 from ironic.common import boot_devices
 from ironic.common import driver_factory
@@ -33,10 +34,8 @@ from ironic.common import exception
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
-from ironic.db import api as db_api
 from ironic.drivers.modules import console_utils
 from ironic.drivers.modules import ipmitool as ipmi
-from ironic.openstack.common import processutils
 from ironic.tests import base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
@@ -854,7 +853,6 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IPMIToolDriverTestCase, self).setUp()
-        self.dbapi = db_api.get_instance()
         mgr_utils.mock_the_extension_manager(driver="fake_ipmitool")
         self.driver = driver_factory.get_driver("fake_ipmitool")
 
@@ -962,7 +960,8 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
         with task_manager.acquire(self.context,
                                   self.node['uuid']) as task:
-            self.driver.vendor._send_raw_bytes(task, '0x00 0x01')
+            self.driver.vendor.send_raw(task, http_method='POST',
+                                        raw_bytes='0x00 0x01')
 
         mock_exec.assert_called_once_with(self.info, 'raw 0x00 0x01')
 
@@ -973,9 +972,10 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context,
                                   self.node['uuid']) as task:
             self.assertRaises(exception.IPMIFailure,
-                              self.driver.vendor._send_raw_bytes,
+                              self.driver.vendor.send_raw,
                               task,
-                              '0x00 0x01')
+                              http_method='POST',
+                              raw_bytes='0x00 0x01')
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
     def test__bmc_reset_ok(self, mock_exec):
@@ -983,7 +983,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
         with task_manager.acquire(self.context,
                                   self.node['uuid']) as task:
-            self.driver.vendor._bmc_reset(task)
+            self.driver.vendor.bmc_reset(task, 'POST')
 
         mock_exec.assert_called_once_with(self.info, 'bmc reset warm')
 
@@ -993,7 +993,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
         with task_manager.acquire(self.context,
                                   self.node['uuid']) as task:
-            self.driver.vendor._bmc_reset(task, warm=False)
+            self.driver.vendor.bmc_reset(task, 'POST', warm=False)
 
         mock_exec.assert_called_once_with(self.info, 'bmc reset cold')
 
@@ -1004,14 +1004,14 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context,
                                   self.node['uuid']) as task:
             self.assertRaises(exception.IPMIFailure,
-                              self.driver.vendor._bmc_reset,
-                              task)
+                              self.driver.vendor.bmc_reset,
+                              task, 'POST')
 
     @mock.patch.object(ipmi, '_power_off', autospec=False)
     @mock.patch.object(ipmi, '_power_on', autospec=False)
     def test_reboot_ok(self, mock_on, mock_off):
         manager = mock.MagicMock()
-        #NOTE(rloo): if autospec is True, then manager.mock_calls is empty
+        # NOTE(rloo): if autospec is True, then manager.mock_calls is empty
         mock_on.return_value = states.POWER_ON
         manager.attach_mock(mock_off, 'power_off')
         manager.attach_mock(mock_on, 'power_on')
@@ -1028,7 +1028,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
     @mock.patch.object(ipmi, '_power_on', autospec=False)
     def test_reboot_fail(self, mock_on, mock_off):
         manager = mock.MagicMock()
-        #NOTE(rloo): if autospec is True, then manager.mock_calls is empty
+        # NOTE(rloo): if autospec is True, then manager.mock_calls is empty
         mock_on.return_value = states.ERROR
         manager.attach_mock(mock_off, 'power_off')
         manager.attach_mock(mock_on, 'power_on')
@@ -1044,14 +1044,6 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
         self.assertEqual(manager.mock_calls, expected)
 
     @mock.patch.object(ipmi, '_parse_driver_info')
-    def test_vendor_passthru_validate_method_notmatch(self, info_mock):
-        with task_manager.acquire(self.context, self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.driver.vendor.validate,
-                              task, method='fake_method')
-            self.assertFalse(info_mock.called)
-
-    @mock.patch.object(ipmi, '_parse_driver_info')
     def test_vendor_passthru_validate__parse_driver_info_fail(self, info_mock):
         info_mock.side_effect = exception.InvalidParameterValue("bad")
         with task_manager.acquire(self.context, self.node['uuid']) as task:
@@ -1064,22 +1056,23 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node['uuid']) as task:
             self.driver.vendor.validate(task,
                                         method='send_raw',
+                                        http_method='POST',
                                         raw_bytes='0x00 0x01')
 
     def test_vendor_passthru_validate__send_raw_bytes_fail(self):
         with task_manager.acquire(self.context, self.node['uuid']) as task:
-            self.assertRaises(exception.InvalidParameterValue,
+            self.assertRaises(exception.MissingParameterValue,
                               self.driver.vendor.validate,
                               task, method='send_raw')
 
-    @mock.patch.object(ipmi.VendorPassthru, '_send_raw_bytes')
+    @mock.patch.object(ipmi.VendorPassthru, 'send_raw')
     def test_vendor_passthru_call_send_raw_bytes(self, raw_bytes_mock):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.driver.vendor.vendor_passthru(task,
-                                               method='send_raw',
-                                               raw_bytes='0x00 0x01')
-            raw_bytes_mock.assert_called_once_with(task, '0x00 0x01')
+            self.driver.vendor.send_raw(task, http_method='POST',
+                                        raw_bytes='0x00 0x01')
+            raw_bytes_mock.assert_called_once_with(task, http_method='POST',
+                                                   raw_bytes='0x00 0x01')
 
     def test_vendor_passthru_validate__bmc_reset_good(self):
         with task_manager.acquire(self.context, self.node['uuid']) as task:
@@ -1098,31 +1091,34 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                         method='bmc_reset',
                                         warm=False)
 
-    @mock.patch.object(ipmi.VendorPassthru, '_bmc_reset')
-    def test_vendor_passthru_call_bmc_reset(self, bmc_mock):
-        with task_manager.acquire(self.context, self.node['uuid'],
-                                  shared=False) as task:
-            self.driver.vendor.vendor_passthru(task,
-                                               method='bmc_reset')
-            bmc_mock.assert_called_once_with(task, warm=True)
-
-    @mock.patch.object(ipmi.VendorPassthru, '_bmc_reset')
+    @mock.patch.object(ipmi.VendorPassthru, 'bmc_reset')
     def test_vendor_passthru_call_bmc_reset_warm(self, bmc_mock):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.driver.vendor.vendor_passthru(task,
-                                               method='bmc_reset',
-                                               warm=True)
-            bmc_mock.assert_called_once_with(task, warm=True)
+            self.driver.vendor.bmc_reset(task, 'POST', warm=True)
+            bmc_mock.assert_called_once_with(task, 'POST', warm=True)
 
-    @mock.patch.object(ipmi.VendorPassthru, '_bmc_reset')
+    @mock.patch.object(ipmi.VendorPassthru, 'bmc_reset')
     def test_vendor_passthru_call_bmc_reset_cold(self, bmc_mock):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.driver.vendor.vendor_passthru(task,
-                                               method='bmc_reset',
-                                               warm=False)
-            bmc_mock.assert_called_once_with(task, warm=False)
+            self.driver.vendor.bmc_reset(task, 'POST', warm=False)
+            bmc_mock.assert_called_once_with(task, 'POST', warm=False)
+
+    def test_vendor_passthru_vendor_routes(self):
+        expected = ['send_raw', 'bmc_reset']
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            vendor_routes = task.driver.vendor.vendor_routes
+            self.assertIsInstance(vendor_routes, dict)
+            self.assertEqual(sorted(expected), sorted(vendor_routes))
+
+    def test_vendor_passthru_driver_routes(self):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            driver_routes = task.driver.vendor.driver_routes
+            self.assertIsInstance(driver_routes, dict)
+            self.assertEqual({}, driver_routes)
 
     @mock.patch.object(console_utils, 'start_shellinabox_console',
                        autospec=True)
@@ -1209,7 +1205,9 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.driver.management.set_boot_device(task, boot_devices.PXE)
 
-        mock_exec.assert_called_once_with(self.info, "chassis bootdev pxe")
+        mock_calls = [mock.call(self.info, "raw 0x00 0x08 0x03 0x08"),
+                      mock.call(self.info, "chassis bootdev pxe")]
+        mock_exec.assert_has_calls(mock_calls)
 
     def test_management_interface_set_boot_device_bad_device(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
@@ -1314,7 +1312,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
 
     def test_management_interface_validate_fail(self):
         # Missing IPMI driver_info information
-        node = obj_utils.create_test_node(self.context, id=2,
+        node = obj_utils.create_test_node(self.context,
                                           uuid=utils.generate_uuid(),
                                           driver='fake_ipmitool')
         with task_manager.acquire(self.context, node.uuid) as task:
@@ -1387,8 +1385,8 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                      'Negative Hysteresis': '375.000',
                                      'Sensor ID': 'FAN MOD 1A RPM (0x30)',
                                      'Nominal Reading': '5325.000'
-                                  },
-                                  'FAN MOD 1B RPM (0x31)': {
+                                 },
+                                 'FAN MOD 1B RPM (0x31)': {
                                      'Status': 'ok',
                                      'Sensor Reading': '8550 (+/- 75) RPM',
                                      'Entity ID': '7.1 (System Board)',
@@ -1400,10 +1398,10 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                      'Negative Hysteresis': '375.000',
                                      'Sensor ID': 'FAN MOD 1B RPM (0x31)',
                                      'Nominal Reading': '7800.000'
-                                  }
-                               },
-                               'Temperature': {
-                                  'Temp (0x1)': {
+                                 }
+                             },
+                             'Temperature': {
+                                 'Temp (0x1)': {
                                      'Status': 'ok',
                                      'Sensor Reading': '-58 (+/- 1) degrees C',
                                      'Entity ID': '3.1 (Processor)',
@@ -1416,8 +1414,8 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                      'Upper critical': '90.000',
                                      'Sensor ID': 'Temp (0x1)',
                                      'Nominal Reading': '50.000'
-                                  },
-                                  'Temp (0x2)': {
+                                 },
+                                 'Temp (0x2)': {
                                      'Status': 'ok',
                                      'Sensor Reading': '50 (+/- 1) degrees C',
                                      'Entity ID': '3.2 (Processor)',
@@ -1430,9 +1428,9 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                      'Upper critical': '90.000',
                                      'Sensor ID': 'Temp (0x2)',
                                      'Nominal Reading': '50.000'
-                                  }
-                               }
-                            }
+                                 }
+                             }
+                          }
         ret = ipmi._parse_ipmi_sensors_data(self.node, fake_sensors_data)
 
         self.assertEqual(expected_return, ret)
@@ -1491,9 +1489,9 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                      'Sensor ID': 'FAN MOD 1A RPM (0x30)',
                                      'Nominal Reading': '5325.000'
                                   }
-                               },
-                               'Temperature': {
-                                  'Temp (0x2)': {
+                             },
+                             'Temperature': {
+                                 'Temp (0x2)': {
                                      'Status': 'ok',
                                      'Sensor Reading': '50 (+/- 1) degrees C',
                                      'Entity ID': '3.2 (Processor)',
@@ -1506,9 +1504,9 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                      'Upper critical': '90.000',
                                      'Sensor ID': 'Temp (0x2)',
                                      'Nominal Reading': '50.000'
-                                  }
-                               }
-                            }
+                                 }
+                             }
+                          }
         ret = ipmi._parse_ipmi_sensors_data(self.node, fake_sensors_data)
 
         self.assertEqual(expected_return, ret)

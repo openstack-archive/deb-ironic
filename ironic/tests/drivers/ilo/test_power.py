@@ -19,10 +19,11 @@ import mock
 from oslo.config import cfg
 from oslo.utils import importutils
 
+from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common import states
 from ironic.conductor import task_manager
-from ironic.db import api as dbapi
+from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules.ilo import common as ilo_common
 from ironic.drivers.modules.ilo import deploy as ilo_deploy
 from ironic.drivers.modules.ilo import power as ilo_power
@@ -45,12 +46,10 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
         super(IloPowerInternalMethodsTestCase, self).setUp()
         driver_info = INFO_DICT
         mgr_utils.mock_the_extension_manager(driver="fake_ilo")
-        n = db_utils.get_test_node(
+        self.node = db_utils.create_test_node(
             driver='fake_ilo',
             driver_info=driver_info,
             instance_uuid='instance_uuid_123')
-        self.dbapi = dbapi.get_instance()
-        self.node = self.dbapi.create_node(n)
         CONF.set_override('power_retry', 2, 'ilo')
         CONF.set_override('power_wait', 0, 'ilo')
 
@@ -145,7 +144,7 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
         ilo_mock_object.get_host_power_status.assert_called_with()
         ilo_mock_object.set_host_power.assert_called_once_with('ON')
 
-    @mock.patch.object(ilo_common, 'set_boot_device')
+    @mock.patch.object(manager_utils, 'node_set_boot_device')
     @mock.patch.object(ilo_common, 'setup_vmedia_for_boot')
     def test__attach_boot_iso(self, setup_vmedia_mock, set_boot_device_mock,
                               power_ilo_client_mock, common_ilo_client_mock):
@@ -154,7 +153,8 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
             task.node.instance_info['ilo_boot_iso'] = 'boot-iso'
             ilo_power._attach_boot_iso(task)
             setup_vmedia_mock.assert_called_once_with(task, 'boot-iso')
-            set_boot_device_mock.assert_called_once_with(task.node, 'CDROM')
+            set_boot_device_mock.assert_called_once_with(task,
+                                 boot_devices.CDROM)
 
 
 class IloPowerTestCase(db_base.DbTestCase):
@@ -163,7 +163,6 @@ class IloPowerTestCase(db_base.DbTestCase):
         super(IloPowerTestCase, self).setUp()
         driver_info = INFO_DICT
         mgr_utils.mock_the_extension_manager(driver="fake_ilo")
-        self.dbapi = dbapi.get_instance()
         self.node = obj_utils.create_test_node(self.context,
                                                driver='fake_ilo',
                                                driver_info=driver_info)

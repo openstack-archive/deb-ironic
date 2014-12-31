@@ -28,10 +28,10 @@ models.
 """
 
 import abc
-import six
 
 from oslo.config import cfg
 from oslo.utils import importutils
+import six
 
 from ironic.common import exception
 from ironic.common.i18n import _
@@ -75,15 +75,18 @@ REQUIRED_PROPERTIES = {
     'snmp_outlet': _("PDU power outlet index (1-based).  Required."),
 }
 OPTIONAL_PROPERTIES = {
-    'snmp_version': _("SNMP protocol version: %(v1)s, %(v2c)s, %(v3)s  "
-                      "(optional, default %(v1)s)")
-                    % {"v1": SNMP_V1, "v2c": SNMP_V2C, "v3": SNMP_V3},
-    'snmp_port': _("SNMP port, default %(port)d") % {"port": SNMP_PORT},
-    'snmp_community': _("SNMP community.  Required for versions %(v1)s, "
-                        "%(v2c)s")
-                      % {"v1": SNMP_V1, "v2c": SNMP_V2C},
-    'snmp_security': _("SNMP security name.  Required for version %(v3)s")
-                      % {"v3": SNMP_V3},
+    'snmp_version':
+        _("SNMP protocol version: %(v1)s, %(v2c)s, %(v3)s  "
+          "(optional, default %(v1)s)")
+        % {"v1": SNMP_V1, "v2c": SNMP_V2C, "v3": SNMP_V3},
+    'snmp_port':
+        _("SNMP port, default %(port)d") % {"port": SNMP_PORT},
+    'snmp_community':
+        _("SNMP community.  Required for versions %(v1)s, %(v2c)s")
+        % {"v1": SNMP_V1, "v2c": SNMP_V2C},
+    'snmp_security':
+        _("SNMP security name.  Required for version %(v3)s")
+        % {"v3": SNMP_V3},
 }
 COMMON_PROPERTIES = REQUIRED_PROPERTIES.copy()
 COMMON_PROPERTIES.update(OPTIONAL_PROPERTIES)
@@ -220,8 +223,7 @@ class SNMPDriverBase(object):
 
     @abc.abstractmethod
     def _snmp_power_state(self):
-        """Perform the SNMP request required to retrieve the current power
-        state.
+        """Perform the SNMP request required to get the current power state.
 
         :raises: SNMPFailure if an SNMP request fails.
         :returns: power state. One of :class:`ironic.common.states`.
@@ -376,6 +378,26 @@ class SNMPDriverSimple(SNMPDriverBase):
         self.client.set(self.oid, value)
 
 
+class SNMPDriverAten(SNMPDriverSimple):
+    """SNMP driver class for Aten PDU devices.
+
+    SNMP objects for Aten PDU:
+    1.3.6.1.4.1.21317.1.3.2.2.2.2 Outlet Power
+    Values: 1=Off, 2=On, 3=Pending, 4=Reset
+    """
+    oid_device = (21317, 1, 3, 2, 2, 2, 2)
+    value_power_on = 2
+    value_power_off = 1
+
+    def _snmp_oid(self):
+        """Return the OID of the power state object.
+
+        :returns: Power state object OID as a tuple of integers.
+        """
+        outlet = int(self.snmp_info['outlet'])
+        return self.oid_enterprise + self.oid_device + (outlet, 0,)
+
+
 class SNMPDriverAPC(SNMPDriverSimple):
     """SNMP driver class for APC PDU devices.
 
@@ -501,6 +523,7 @@ class SNMPDriverEatonPower(SNMPDriverBase):
 # A dictionary of supported drivers keyed by snmp_driver attribute
 DRIVER_CLASSES = {
         'apc': SNMPDriverAPC,
+        'aten': SNMPDriverAten,
         'cyberpower': SNMPDriverCyberPower,
         'eatonpower': SNMPDriverEatonPower,
         'teltronix': SNMPDriverTeltronix
@@ -508,7 +531,9 @@ DRIVER_CLASSES = {
 
 
 def _parse_driver_info(node):
-    """Return a dictionary of validated driver information, usable for
+    """Parse a node's driver_info values.
+
+    Return a dictionary of validated driver information, usable for
     SNMPDriver object creation.
 
     :param node: An Ironic node object.
@@ -520,8 +545,8 @@ def _parse_driver_info(node):
     missing_info = [key for key in REQUIRED_PROPERTIES if not info.get(key)]
     if missing_info:
         raise exception.MissingParameterValue(_(
-            "SNMP driver requires the following to be set: %s.")
-            % missing_info)
+            "SNMP driver requires the following parameters to be set in "
+            "node's driver_info: %s.") % missing_info)
 
     snmp_info = {}
 

@@ -21,7 +21,6 @@ from oslo.config import cfg
 
 from ironic.common import pxe_utils
 from ironic.conductor import task_manager
-from ironic.db import api as dbapi
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.objects import utils as object_utils
@@ -34,7 +33,6 @@ class TestPXEUtils(db_base.DbTestCase):
     def setUp(self):
         super(TestPXEUtils, self).setUp()
         mgr_utils.mock_the_extension_manager(driver="fake")
-        self.dbapi = dbapi.get_instance()
         self.pxe_options = {
             'deployment_key': '0123456789ABCDEFGHIJKLMNOPQRSTUV',
             'ari_path': u'/tftpboot/1be26c0b-03f2-4d2e-ae87-c02d7f33c123/'
@@ -224,9 +222,9 @@ class TestPXEUtils(db_base.DbTestCase):
         }
 
         expected = {
-            'deploy_kernel': ('deploy-kernel',
+            'deploy_kernel': ('glance://deploy-kernel',
                               expected_dir + '/fake-node/deploy_kernel'),
-            'deploy_ramdisk': ('deploy-ramdisk',
+            'deploy_ramdisk': ('glance://deploy-ramdisk',
                                expected_dir + '/fake-node/deploy_ramdisk'),
         }
 
@@ -260,8 +258,23 @@ class TestPXEUtils(db_base.DbTestCase):
         self.config(http_url='http://192.0.3.2:1234', group='pxe')
         self.config(ipxe_boot_script='/test/boot.ipxe', group='pxe')
 
+        self.config(dhcp_provider='isc', group='dhcp')
         expected_boot_script_url = 'http://192.0.3.2:1234/boot.ipxe'
         expected_info = [{'opt_name': '!175,bootfile-name',
+                          'opt_value': 'fake-bootfile'},
+                         {'opt_name': 'server-ip-address',
+                          'opt_value': '192.0.2.1'},
+                         {'opt_name': 'tftp-server',
+                          'opt_value': '192.0.2.1'},
+                         {'opt_name': 'bootfile-name',
+                          'opt_value': expected_boot_script_url}]
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertEqual(sorted(expected_info),
+                             sorted(pxe_utils.dhcp_options_for_instance(task)))
+
+        self.config(dhcp_provider='neutron', group='dhcp')
+        expected_boot_script_url = 'http://192.0.3.2:1234/boot.ipxe'
+        expected_info = [{'opt_name': 'tag:!ipxe,bootfile-name',
                           'opt_value': 'fake-bootfile'},
                          {'opt_name': 'server-ip-address',
                           'opt_value': '192.0.2.1'},

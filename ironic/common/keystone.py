@@ -38,10 +38,10 @@ def _is_apiv3(auth_url, auth_version):
     return auth_version == 'v3.0' or '/v3' in parse.urlparse(auth_url).path
 
 
-def _get_ksclient():
+def _get_ksclient(token=None):
     auth_url = CONF.keystone_authtoken.auth_uri
     if not auth_url:
-        raise exception.CatalogFailure(_('Keystone API endpoint is missing'))
+        raise exception.KeystoneFailure(_('Keystone API endpoint is missing'))
 
     auth_version = CONF.keystone_authtoken.auth_version
     api_v3 = _is_apiv3(auth_url, auth_version)
@@ -53,16 +53,18 @@ def _get_ksclient():
 
     auth_url = get_keystone_url(auth_url, auth_version)
     try:
-        return client.Client(username=CONF.keystone_authtoken.admin_user,
+        if token:
+            return client.Client(token=token, auth_url=auth_url)
+        else:
+            return client.Client(username=CONF.keystone_authtoken.admin_user,
                          password=CONF.keystone_authtoken.admin_password,
                          tenant_name=CONF.keystone_authtoken.admin_tenant_name,
                          auth_url=auth_url)
     except ksexception.Unauthorized:
-        raise exception.CatalogUnauthorized
+        raise exception.KeystoneUnauthorized()
     except ksexception.AuthorizationFailure as err:
-        raise exception.CatalogFailure(_('Could not perform authorization '
-                                         'process for service catalog: %s')
-                                          % err)
+        raise exception.KeystoneFailure(_('Could not authorize in Keystone:'
+                                          ' %s') % err)
 
 
 def get_keystone_url(auth_url, auth_version):
@@ -96,7 +98,8 @@ def get_service_url(service_type='baremetal', endpoint_type='internal'):
     ksclient = _get_ksclient()
 
     if not ksclient.has_service_catalog():
-        raise exception.CatalogFailure(_('No keystone service catalog loaded'))
+        raise exception.KeystoneFailure(_('No Keystone service catalog '
+                                          'loaded'))
 
     try:
         endpoint = ksclient.service_catalog.url_for(service_type=service_type,
@@ -112,3 +115,13 @@ def get_admin_auth_token():
     """Get an admin auth_token from the Keystone."""
     ksclient = _get_ksclient()
     return ksclient.auth_token
+
+
+def token_expires_soon(token, duration=None):
+    """Determines if token expiration is about to occur.
+
+    :param duration: time interval in seconds
+    :returns: boolean : true if expiration is within the given duration
+    """
+    ksclient = _get_ksclient(token=token)
+    return ksclient.auth_ref.will_expire_soon(stale_duration=duration)

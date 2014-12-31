@@ -16,7 +16,6 @@
 from ironic.common import network
 from ironic.common import utils
 from ironic.conductor import task_manager
-from ironic.db import api as dbapi
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
@@ -28,12 +27,7 @@ class TestNetwork(db_base.DbTestCase):
     def setUp(self):
         super(TestNetwork, self).setUp()
         mgr_utils.mock_the_extension_manager(driver='fake')
-        self.dbapi = dbapi.get_instance()
         self.node = object_utils.create_test_node(self.context)
-
-    def _create_test_port(self, **kwargs):
-        p = db_utils.get_test_port(**kwargs)
-        return self.dbapi.create_port(p)
 
     def test_get_node_vif_ids_no_ports(self):
         expected = {}
@@ -42,8 +36,7 @@ class TestNetwork(db_base.DbTestCase):
         self.assertEqual(expected, result)
 
     def test_get_node_vif_ids_one_port(self):
-        port1 = self._create_test_port(node_id=self.node.id,
-                                       id=6,
+        port1 = db_utils.create_test_port(node_id=self.node.id,
                                        address='aa:bb:cc',
                                        uuid=utils.generate_uuid(),
                                        extra={'vif_port_id': 'test-vif-A'},
@@ -54,14 +47,12 @@ class TestNetwork(db_base.DbTestCase):
         self.assertEqual(expected, result)
 
     def test_get_node_vif_ids_two_ports(self):
-        port1 = self._create_test_port(node_id=self.node.id,
-                                       id=6,
+        port1 = db_utils.create_test_port(node_id=self.node.id,
                                        address='aa:bb:cc',
                                        uuid=utils.generate_uuid(),
                                        extra={'vif_port_id': 'test-vif-A'},
                                        driver='fake')
-        port2 = self._create_test_port(node_id=self.node.id,
-                                       id=7,
+        port2 = db_utils.create_test_port(node_id=self.node.id,
                                        address='dd:ee:ff',
                                        uuid=utils.generate_uuid(),
                                        extra={'vif_port_id': 'test-vif-B'},

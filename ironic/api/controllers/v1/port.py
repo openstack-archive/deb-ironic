@@ -72,24 +72,24 @@ class Port(base.APIBase):
             self._node_uuid = wtypes.Unset
 
     uuid = types.uuid
-    "Unique UUID for this port"
+    """Unique UUID for this port"""
 
     address = wsme.wsattr(types.macaddress, mandatory=True)
-    "MAC Address for this port"
+    """MAC Address for this port"""
 
     extra = {wtypes.text: types.MultiType(wtypes.text, six.integer_types)}
-    "This port's meta data"
+    """This port's meta data"""
 
     node_uuid = wsme.wsproperty(types.uuid, _get_node_uuid, _set_node_uuid,
                                 mandatory=True)
-    "The UUID of the node this port belongs to"
+    """The UUID of the node this port belongs to"""
 
     links = wsme.wsattr([link.Link], readonly=True)
-    "A list containing a self link and associated port links"
+    """A list containing a self link and associated port links"""
 
     def __init__(self, **kwargs):
         self.fields = []
-        fields = list(objects.Port.fields.keys())
+        fields = list(objects.Port.fields)
         # NOTE(lucasagomes): node_uuid is not part of objects.Port.fields
         #                    because it's an API-only attribute
         fields.append('node_uuid')
@@ -98,35 +98,38 @@ class Port(base.APIBase):
             if not hasattr(self, field):
                 continue
             self.fields.append(field)
-            setattr(self, field, kwargs.get(field))
+            setattr(self, field, kwargs.get(field, wtypes.Unset))
 
         # NOTE(lucasagomes): node_id is an attribute created on-the-fly
         # by _set_node_uuid(), it needs to be present in the fields so
         # that as_dict() will contain node_id field when converting it
         # before saving it in the database.
         self.fields.append('node_id')
-        setattr(self, 'node_uuid', kwargs.get('node_id'))
+        setattr(self, 'node_uuid', kwargs.get('node_id', wtypes.Unset))
 
-    @classmethod
-    def convert_with_links(cls, rpc_port, expand=True):
-        port = Port(**rpc_port.as_dict())
+    @staticmethod
+    def _convert_with_links(port, url, expand=True):
         if not expand:
             port.unset_fields_except(['uuid', 'address'])
 
         # never expose the node_id attribute
         port.node_id = wtypes.Unset
 
-        port.links = [link.Link.make_link('self', pecan.request.host_url,
+        port.links = [link.Link.make_link('self', url,
                                           'ports', port.uuid),
-                      link.Link.make_link('bookmark',
-                                          pecan.request.host_url,
+                      link.Link.make_link('bookmark', url,
                                           'ports', port.uuid,
                                           bookmark=True)
                      ]
         return port
 
     @classmethod
-    def sample(cls):
+    def convert_with_links(cls, rpc_port, expand=True):
+        port = Port(**rpc_port.as_dict())
+        return cls._convert_with_links(port, pecan.request.host_url, expand)
+
+    @classmethod
+    def sample(cls, expand=True):
         sample = cls(uuid='27e3153e-d5bf-4b7e-b517-fb518e17f34c',
                      address='fe:54:00:77:07:d9',
                      extra={'foo': 'bar'},
@@ -135,21 +138,20 @@ class Port(base.APIBase):
         # NOTE(lucasagomes): node_uuid getter() method look at the
         # _node_uuid variable
         sample._node_uuid = '7ae81bb3-dec3-4289-8d6c-da80bd8001ae'
-        return sample
+        return cls._convert_with_links(sample, 'http://localhost:6385', expand)
 
 
 class PortCollection(collection.Collection):
     """API representation of a collection of ports."""
 
     ports = [Port]
-    "A list containing ports objects"
+    """A list containing ports objects"""
 
     def __init__(self, **kwargs):
         self._type = 'ports'
 
-    @classmethod
-    def convert_with_links(cls, rpc_ports, limit, url=None,
-                           expand=False, **kwargs):
+    @staticmethod
+    def convert_with_links(rpc_ports, limit, url=None, expand=False, **kwargs):
         collection = PortCollection()
         collection.ports = [Port.convert_with_links(p, expand)
                             for p in rpc_ports]
@@ -159,7 +161,7 @@ class PortCollection(collection.Collection):
     @classmethod
     def sample(cls):
         sample = cls()
-        sample.ports = [Port.sample()]
+        sample.ports = [Port.sample(expand=False)]
         return sample
 
 
@@ -326,6 +328,8 @@ class PortsController(rest.RestController):
             except AttributeError:
                 # Ignore fields that aren't exposed in the API
                 continue
+            if patch_val == wtypes.Unset:
+                patch_val = None
             if rpc_port[field] != patch_val:
                 rpc_port[field] = patch_val
 

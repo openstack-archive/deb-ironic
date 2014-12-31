@@ -23,6 +23,7 @@ import tempfile
 import time
 
 from oslo.config import cfg
+from oslo_concurrency import lockutils
 
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
@@ -31,7 +32,6 @@ from ironic.common.i18n import _LW
 from ironic.common import images
 from ironic.common import utils
 from ironic.openstack.common import fileutils
-from ironic.openstack.common import lockutils
 from ironic.openstack.common import log as logging
 
 
@@ -72,30 +72,33 @@ class ImageCache(object):
         if master_dir is not None:
             fileutils.ensure_tree(master_dir)
 
-    def fetch_image(self, uuid, dest_path, ctx=None):
-        """Fetch image with given uuid to the destination path.
+    def fetch_image(self, href, dest_path, ctx=None, force_raw=True):
+        """Fetch image by given href to the destination path.
 
         Does nothing if destination path exists.
         Only creates a link if master image for this UUID is already in cache.
         Otherwise downloads an image and also stores it in cache.
 
-        :param uuid: image UUID or href to fetch
+        :param href: image UUID or href to fetch
         :param dest_path: destination file path
         :param ctx: context
+        :param force_raw: boolean value, whether to convert the image to raw
+                          format
         """
         img_download_lock_name = 'download-image'
         if self.master_dir is None:
-            #NOTE(ghe): We don't share images between instances/hosts
+            # NOTE(ghe): We don't share images between instances/hosts
             if not CONF.parallel_image_downloads:
                 with lockutils.lock(img_download_lock_name, 'ironic-'):
-                    _fetch_to_raw(ctx, uuid, dest_path, self._image_service)
+                    _fetch(ctx, href, dest_path, self._image_service,
+                           force_raw)
             else:
-                _fetch_to_raw(ctx, uuid, dest_path, self._image_service)
+                _fetch(ctx, href, dest_path, self._image_service, force_raw)
             return
 
-        #TODO(ghe): have hard links and counts the same behaviour in all fs
+        # TODO(ghe): have hard links and counts the same behaviour in all fs
 
-        master_file_name = service_utils.parse_image_ref(uuid)[0]
+        master_file_name = service_utils.parse_image_ref(href)[0]
         master_path = os.path.join(self.master_dir, master_file_name)
 
         if CONF.parallel_image_downloads:
@@ -106,7 +109,7 @@ class ImageCache(object):
             if os.path.exists(dest_path):
                 LOG.debug("Destination %(dest)s already exists for "
                             "image %(uuid)s" %
-                          {'uuid': uuid,
+                          {'uuid': href,
                            'dest': dest_path})
                 return
 
@@ -117,32 +120,38 @@ class ImageCache(object):
             except OSError:
                 LOG.info(_LI("Master cache miss for image %(uuid)s, "
                              "starting download"),
-                         {'uuid': uuid})
+                         {'uuid': href})
             else:
                 LOG.debug("Master cache hit for image %(uuid)s",
-                          {'uuid': uuid})
+                          {'uuid': href})
                 return
 
-            self._download_image(uuid, master_path, dest_path, ctx=ctx)
+            self._download_image(
+                href, master_path, dest_path, ctx=ctx, force_raw=force_raw)
 
         # NOTE(dtantsur): we increased cache size - time to clean up
         self.clean_up()
 
-    def _download_image(self, uuid, master_path, dest_path, ctx=None):
-        """Download image from Glance and store at a given path.
+    def _download_image(self, href, master_path, dest_path, ctx=None,
+                        force_raw=True):
+        """Download image by href and store at a given path.
+
         This method should be called with uuid-specific lock taken.
 
-        :param uuid: image UUID or href to fetch
+        :param href: image UUID or href to fetch
         :param master_path: destination master path
         :param dest_path: destination file path
         :param ctx: context
+        :param force_raw: boolean value, whether to convert the image to raw
+                          format
         """
-        #TODO(ghe): timeout and retry for downloads
-        #TODO(ghe): logging when image cannot be created
+        # TODO(ghe): timeout and retry for downloads
+        # TODO(ghe): logging when image cannot be created
         tmp_dir = tempfile.mkdtemp(dir=self.master_dir)
-        tmp_path = os.path.join(tmp_dir, uuid)
+        tmp_path = os.path.join(tmp_dir, href.split('/')[-1])
+
         try:
-            _fetch_to_raw(ctx, uuid, tmp_path, self._image_service)
+            _fetch(ctx, href, tmp_path, self._image_service, force_raw)
             # NOTE(dtantsur): no need for global lock here - master_path
             # will have link count >1 at any moment, so won't be cleaned up
             os.link(tmp_path, master_path)
@@ -217,6 +226,7 @@ class ImageCache(object):
 
     def _clean_up_ensure_cache_size(self, listing, amount):
         """Clean up stage 2: try to ensure cache size < threshold.
+
         Try to delete the oldest files until conditions is satisfied
         or no more files are eligable for delition.
 
@@ -281,14 +291,20 @@ def _free_disk_space_for(path):
     return stat.f_frsize * stat.f_bavail
 
 
-def _fetch_to_raw(context, image_href, path, image_service=None):
+def _fetch(context, image_href, path, image_service=None, force_raw=False):
     """Fetch image and convert to raw format if needed."""
     path_tmp = "%s.part" % path
-    images.fetch(context, image_href, path_tmp, image_service)
-    required_space = images.converted_size(path_tmp)
-    directory = os.path.dirname(path_tmp)
-    _clean_up_caches(directory, required_space)
-    images.image_to_raw(image_href, path, path_tmp)
+    images.fetch(context, image_href, path_tmp, image_service,
+                 force_raw=False)
+    # Notes(yjiang5): If glance can provide the virtual size information,
+    # then we can firstly clean cach and then invoke images.fetch().
+    if force_raw:
+        required_space = images.converted_size(path_tmp)
+        directory = os.path.dirname(path_tmp)
+        _clean_up_caches(directory, required_space)
+        images.image_to_raw(image_href, path, path_tmp)
+    else:
+        os.rename(path_tmp, path)
 
 
 def _clean_up_caches(directory, amount):

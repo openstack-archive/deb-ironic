@@ -71,7 +71,7 @@ CONSOLE_PROPERTIES = {
 
 _BOOT_DEVICES_MAP = {
     boot_devices.DISK: 'hd',
-    boot_devices.PXE: 'net',
+    boot_devices.PXE: 'network',
     boot_devices.CDROM: 'cdrom',
     boot_devices.BIOS: 'setup',
 }
@@ -79,6 +79,7 @@ _BOOT_DEVICES_MAP = {
 
 def _parse_driver_info(node):
     """Gets the bmc access info for the given node.
+
     :raises: MissingParameterValue when required ipmi credentials
             are missing.
     :raises: InvalidParameterValue when the IPMI terminal port is not an
@@ -89,9 +90,8 @@ def _parse_driver_info(node):
     missing_info = [key for key in REQUIRED_PROPERTIES if not info.get(key)]
     if missing_info:
         raise exception.MissingParameterValue(_(
-            "The following IPMI credentials are not supplied"
-            " to IPMI driver: %s."
-             ) % missing_info)
+            "Missing the following IPMI credentials in node's"
+            " driver_info: %s.") % missing_info)
 
     bmc_info = {}
     bmc_info['address'] = info.get('ipmi_address')
@@ -492,7 +492,8 @@ class NativeIPMIShellinaboxConsole(base.ConsoleInterface):
         driver_info = _parse_driver_info(task.node)
         if not driver_info['port']:
             raise exception.MissingParameterValue(_(
-                "IPMI terminal port not supplied to the IPMI driver."))
+                "Missing 'ipmi_terminal_port' parameter in node's"
+                " driver_info."))
 
     def start_console(self, task):
         """Start a remote console for the node.
@@ -510,14 +511,14 @@ class NativeIPMIShellinaboxConsole(base.ConsoleInterface):
         pw_file = console_utils.make_persistent_password_file(
                 path, driver_info['password'])
 
-        console_cmd = "/:%(uid)s:%(gid)s:HOME:pyghmicons %(bmc)s" \
-                      " %(user)s" \
-                      " %(passwd_file)s" \
-                      % {'uid': os.getuid(),
-                         'gid': os.getgid(),
-                         'bmc': driver_info['address'],
-                         'user': driver_info['username'],
-                         'passwd_file': pw_file}
+        console_cmd = ("/:%(uid)s:%(gid)s:HOME:pyghmicons %(bmc)s"
+                       " %(user)s"
+                       " %(passwd_file)s"
+                       % {'uid': os.getuid(),
+                          'gid': os.getgid(),
+                          'bmc': driver_info['address'],
+                          'user': driver_info['username'],
+                          'passwd_file': pw_file})
         try:
             console_utils.start_shellinabox_console(driver_info['uuid'],
                                                     driver_info['port'],

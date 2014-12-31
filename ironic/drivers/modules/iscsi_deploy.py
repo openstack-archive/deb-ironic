@@ -26,7 +26,6 @@ from ironic.common import image_service as service
 from ironic.common import keystone
 from ironic.common import states
 from ironic.common import utils
-from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
 from ironic.drivers import utils as driver_utils
@@ -116,7 +115,8 @@ def parse_instance_info(node):
     i_info['image_source'] = info.get('image_source')
     i_info['root_gb'] = info.get('root_gb')
 
-    error_msg = _("Cannot validate iSCSI deploy")
+    error_msg = _("Cannot validate iSCSI deploy. Some parameters were missing"
+                  " in node's instance_info")
     deploy_utils.check_for_missing_params(i_info, error_msg)
 
     # Internal use only
@@ -186,7 +186,8 @@ def cache_instance_image(ctx, node):
     LOG.debug("Fetching image %(ami)s for node %(uuid)s",
               {'ami': uuid, 'uuid': node.uuid})
 
-    deploy_utils.fetch_images(ctx, InstanceImageCache(), [(uuid, image_path)])
+    deploy_utils.fetch_images(ctx, InstanceImageCache(), [(uuid, image_path)],
+                              CONF.force_raw_images)
 
     return (uuid, image_path)
 
@@ -202,8 +203,7 @@ def destroy_images(node_uuid):
 
 
 def get_deploy_info(node, **kwargs):
-    """Returns the information required for doing iSCSI deploy in a
-    dictionary.
+    """Returns the information required for doing iSCSI deploy in a dictionary.
 
     :param node: ironic node object
     :param kwargs: the keyword args passed from the conductor node.
@@ -242,35 +242,6 @@ def get_deploy_info(node, **kwargs):
     return params
 
 
-def set_failed_state(task, msg):
-    """Sets the deploy status as failed with relevant messages.
-
-    This method sets the deployment as fail with the given message.
-    It sets node's provision_state to DEPLOYFAIL and updates last_error
-    with the given error message. It also powers off the baremetal node.
-
-    :param task: a TaskManager instance containing the node to act on.
-    :param msg: the message to set in last_error of the node.
-    """
-    node = task.node
-    node.provision_state = states.DEPLOYFAIL
-    node.target_provision_state = states.NOSTATE
-    node.save()
-    try:
-        manager_utils.node_power_action(task, states.POWER_OFF)
-    except Exception:
-        msg2 = (_('Node %s failed to power off while handling deploy '
-                 'failure. This may be a serious condition. Node '
-                 'should be removed from Ironic or put in maintenance '
-                 'mode until the problem is resolved.') % node.uuid)
-        LOG.exception(msg2)
-    finally:
-        # NOTE(deva): node_power_action() erases node.last_error
-        #             so we need to set it again here.
-        node.last_error = msg
-        node.save()
-
-
 def continue_deploy(task, **kwargs):
     """Resume a deployment upon getting POST data from deploy ramdisk.
 
@@ -292,7 +263,7 @@ def continue_deploy(task, **kwargs):
     if ramdisk_error:
         LOG.error(_LE('Error returned from deploy ramdisk: %s'),
                   ramdisk_error)
-        set_failed_state(task, _('Failure in deploy ramdisk.'))
+        deploy_utils.set_failed_state(task, _('Failure in deploy ramdisk.'))
         destroy_images(node.uuid)
         return
 
@@ -306,7 +277,8 @@ def continue_deploy(task, **kwargs):
         LOG.error(_LE('Deploy failed for instance %(instance)s. '
                       'Error: %(error)s'),
                   {'instance': node.instance_uuid, 'error': e})
-        set_failed_state(task, _('Failed to continue iSCSI deployment.'))
+        deploy_utils.set_failed_state(task, _('Failed to continue '
+                                              'iSCSI deployment.'))
 
     destroy_images(node.uuid)
     return root_uuid
@@ -391,19 +363,22 @@ def validate(task):
     file or from keystone.
 
     :param task: a TaskManager instance containing the node to act on.
-    :raises: InvalidParameterValue if no ports are enrolled for the given node.
+    :raises: InvalidParameterValue if the URL of the Ironic API service is not
+             configured in config file and is not accessible via Keystone
+             catalog.
+    :raises: MissingParameterValue if no ports are enrolled for the given node.
     """
     node = task.node
     if not driver_utils.get_node_mac_addresses(task):
-        raise exception.InvalidParameterValue(_("Node %s does not have "
+        raise exception.MissingParameterValue(_("Node %s does not have "
                             "any port associated with it.") % node.uuid)
 
     try:
         # TODO(lucasagomes): Validate the format of the URL
         CONF.conductor.api_url or keystone.get_service_url()
-    except (exception.CatalogFailure,
+    except (exception.KeystoneFailure,
             exception.CatalogNotFound,
-            exception.CatalogUnauthorized):
+            exception.KeystoneUnauthorized) as e:
         raise exception.InvalidParameterValue(_(
             "Couldn't get the URL of the Ironic API service from the "
-            "configuration file or keystone catalog."))
+            "configuration file or keystone catalog. Keystone error: %s") % e)

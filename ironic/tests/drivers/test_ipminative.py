@@ -20,7 +20,6 @@ Test class for Native IPMI power driver module.
 """
 
 import mock
-
 from oslo.config import cfg
 from pyghmi import exceptions as pyghmi_exception
 
@@ -30,7 +29,6 @@ from ironic.common import exception
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
-from ironic.db import api as db_api
 from ironic.drivers.modules import console_utils
 from ironic.drivers.modules import ipminative
 from ironic.tests.conductor import utils as mgr_utils
@@ -51,7 +49,6 @@ class IPMINativePrivateMethodTestCase(db_base.DbTestCase):
         self.node = obj_utils.create_test_node(self.context,
                                                driver='fake_ipminative',
                                                driver_info=INFO_DICT)
-        self.dbapi = db_api.get_instance()
         self.info = ipminative._parse_driver_info(self.node)
 
     def test__parse_driver_info(self):
@@ -209,8 +206,7 @@ class IPMINativePrivateMethodTestCase(db_base.DbTestCase):
 
 
 class IPMINativeDriverTestCase(db_base.DbTestCase):
-    """Test cases for ipminative.NativeIPMIPower class functions.
-    """
+    """Test cases for ipminative.NativeIPMIPower class functions."""
 
     def setUp(self):
         super(IPMINativeDriverTestCase, self).setUp()
@@ -220,7 +216,6 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
         self.node = obj_utils.create_test_node(self.context,
                                                driver='fake_ipminative',
                                                driver_info=INFO_DICT)
-        self.dbapi = db_api.get_instance()
         self.info = ipminative._parse_driver_info(self.node)
 
     def test_get_properties(self):
@@ -303,8 +298,8 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:
             self.driver.management.set_boot_device(task, boot_devices.PXE)
-        # PXE is converted to 'net' internally by ipminative
-        ipmicmd.set_bootdev.assert_called_once_with('net', persist=False)
+        # PXE is converted to 'network' internally by ipminative
+        ipmicmd.set_bootdev.assert_called_once_with('network', persist=False)
 
     def test_set_boot_device_bad_device(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
@@ -392,7 +387,7 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
 
     def test_management_interface_validate_fail(self):
         # Missing IPMI driver_info information
-        node = obj_utils.create_test_node(self.context, id=2,
+        node = obj_utils.create_test_node(self.context,
                                           uuid=utils.generate_uuid(),
                                           driver='fake_ipminative')
         with task_manager.acquire(self.context, node.uuid) as task:

@@ -68,10 +68,9 @@ def node_power_action(task, new_state):
             curr_state = task.driver.power.get_power_state(task)
         except Exception as e:
             with excutils.save_and_reraise_exception():
-                node['last_error'] = \
-                    _("Failed to change power state to '%(target)s'. "
-                      "Error: %(error)s") % {
-                      'target': new_state, 'error': e}
+                node['last_error'] = _(
+                    "Failed to change power state to '%(target)s'. "
+                    "Error: %(error)s") % {'target': new_state, 'error': e}
                 node['target_power_state'] = states.NOSTATE
                 node.save()
 
@@ -114,10 +113,9 @@ def node_power_action(task, new_state):
             task.driver.power.reboot(task)
     except Exception as e:
         with excutils.save_and_reraise_exception():
-            node['last_error'] = \
-                _("Failed to change power state to '%(target)s'. "
-                  "Error: %(error)s") % {
-                    'target': target_state, 'error': e}
+            node['last_error'] = _(
+                "Failed to change power state to '%(target)s'. "
+                "Error: %(error)s") % {'target': target_state, 'error': e}
     else:
         # success!
         node['power_state'] = target_state
@@ -136,8 +134,7 @@ def cleanup_after_timeout(task):
     :param task: a TaskManager instance.
     """
     node = task.node
-    node.provision_state = states.DEPLOYFAIL
-    node.target_provision_state = states.NOSTATE
+    task.process_event('fail')
     msg = (_('Timeout reached while waiting for callback for node %s')
              % node.uuid)
     node.last_error = msg

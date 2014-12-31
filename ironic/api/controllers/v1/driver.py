@@ -15,7 +15,6 @@
 
 import pecan
 from pecan import rest
-
 import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
@@ -36,21 +35,31 @@ from ironic.common.i18n import _
 # service should be restarted.
 _DRIVER_PROPERTIES = {}
 
+# Vendor information for drivers:
+#   key = driver name;
+#   value = dictionary of vendor methods of that driver:
+#             key = method name.
+#             value = dictionary with the metadata of that method.
+# NOTE(lucasagomes). This is cached for the lifetime of the API
+# service. If one or more conductor services are restarted with new driver
+# versions, the API service should be restarted.
+_VENDOR_METHODS = {}
+
 
 class Driver(base.APIBase):
     """API representation of a driver."""
 
     name = wtypes.text
-    "The name of the driver"
+    """The name of the driver"""
 
     hosts = [wtypes.text]
-    "A list of active conductors that support this driver"
+    """A list of active conductors that support this driver"""
 
     links = wsme.wsattr([link.Link], readonly=True)
-    "A list containing self and bookmark links"
+    """A list containing self and bookmark links"""
 
-    @classmethod
-    def convert_with_links(cls, name, hosts):
+    @staticmethod
+    def convert_with_links(name, hosts):
         driver = Driver()
         driver.name = name
         driver.hosts = hosts
@@ -76,10 +85,10 @@ class DriverList(base.APIBase):
     """API representation of a list of drivers."""
 
     drivers = [Driver]
-    "A list containing drivers objects"
+    """A list containing drivers objects"""
 
-    @classmethod
-    def convert_with_links(cls, drivers):
+    @staticmethod
+    def convert_with_links(drivers):
         collection = DriverList()
         collection.drivers = [
             Driver.convert_with_links(dname, list(drivers[dname]))
@@ -101,10 +110,31 @@ class DriverPassthruController(rest.RestController):
     driver, no introspection will be made in the message body.
     """
 
+    _custom_actions = {
+        'methods': ['GET']
+    }
+
+    @wsme_pecan.wsexpose(wtypes.text, wtypes.text)
+    def methods(self, driver_name):
+        """Retrieve information about vendor methods of the given driver.
+
+        :param driver_name: name of the driver.
+        :returns: dictionary with <vendor method name>:<method metadata>
+                  entries.
+        :raises: DriverNotFound if the driver name is invalid or the
+                 driver cannot be loaded.
+        """
+        if driver_name not in _VENDOR_METHODS:
+            topic = pecan.request.rpcapi.get_topic_for_driver(driver_name)
+            ret = pecan.request.rpcapi.get_driver_vendor_passthru_methods(
+                        pecan.request.context, driver_name, topic=topic)
+            _VENDOR_METHODS[driver_name] = ret
+
+        return _VENDOR_METHODS[driver_name]
+
     @wsme_pecan.wsexpose(wtypes.text, wtypes.text, wtypes.text,
-                         body=wtypes.text,
-                         status_code=200)
-    def post(self, driver_name, method, data):
+                         body=wtypes.text)
+    def _default(self, driver_name, method, data=None):
         """Call a driver API extension.
 
         :param driver_name: name of the driver to call.
@@ -115,9 +145,16 @@ class DriverPassthruController(rest.RestController):
         if not method:
             raise wsme.exc.ClientSideError(_("Method not specified"))
 
+        if data is None:
+            data = {}
+
+        http_method = pecan.request.method.upper()
         topic = pecan.request.rpcapi.get_topic_for_driver(driver_name)
-        return pecan.request.rpcapi.driver_vendor_passthru(
-                pecan.request.context, driver_name, method, data, topic=topic)
+        ret, is_async = pecan.request.rpcapi.driver_vendor_passthru(
+                            pecan.request.context, driver_name, method,
+                            http_method, data, topic=topic)
+        status_code = 202 if is_async else 200
+        return wsme.api.Response(ret, status_code=status_code)
 
 
 class DriversController(rest.RestController):
@@ -131,8 +168,7 @@ class DriversController(rest.RestController):
 
     @wsme_pecan.wsexpose(DriverList)
     def get_all(self):
-        """Retrieve a list of drivers.
-        """
+        """Retrieve a list of drivers."""
         # FIXME(deva): formatting of the auto-generated REST API docs
         #              will break from a single-line doc string.
         #              This is a result of a bug in sphinxcontrib-pecanwsme
@@ -142,8 +178,7 @@ class DriversController(rest.RestController):
 
     @wsme_pecan.wsexpose(Driver, wtypes.text)
     def get_one(self, driver_name):
-        """Retrieve a single driver.
-        """
+        """Retrieve a single driver."""
         # NOTE(russell_h): There is no way to make this more efficient than
         # retrieving a list of drivers using the current sqlalchemy schema, but
         # this path must be exposed for Pecan to route any paths we might

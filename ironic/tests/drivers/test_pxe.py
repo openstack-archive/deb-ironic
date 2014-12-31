@@ -17,12 +17,13 @@
 
 """Test class for PXE driver."""
 
-import fixtures
-import mock
 import os
 import tempfile
 
+import fixtures
+import mock
 from oslo.config import cfg
+from oslo.serialization import jsonutils as json
 
 from ironic.common import dhcp_factory
 from ironic.common import exception
@@ -33,12 +34,10 @@ from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
-from ironic.db import api as dbapi
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import iscsi_deploy
 from ironic.drivers.modules import pxe
 from ironic.openstack.common import fileutils
-from ironic.openstack.common import jsonutils as json
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
@@ -51,10 +50,6 @@ DRV_INFO_DICT = db_utils.get_test_pxe_driver_info()
 
 
 class PXEValidateParametersTestCase(db_base.DbTestCase):
-
-    def setUp(self):
-        super(PXEValidateParametersTestCase, self).setUp()
-        self.dbapi = dbapi.get_instance()
 
     def test__parse_deploy_info(self):
         # make sure we get back the expected things
@@ -107,7 +102,6 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
               'driver_info': DRV_INFO_DICT,
         }
         mgr_utils.mock_the_extension_manager(driver="fake_pxe")
-        self.dbapi = dbapi.get_instance()
         self.node = obj_utils.create_test_node(self.context, **n)
 
     @mock.patch.object(base_image_service.BaseImageService, '_show')
@@ -126,12 +120,12 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
                                        self.node.uuid,
                                        'kernel')),
                          'deploy_ramdisk':
-                         ('deploy_ramdisk_uuid',
+                         (DRV_INFO_DICT['pxe_deploy_ramdisk'],
                            os.path.join(CONF.pxe.tftp_root,
                                         self.node.uuid,
                                         'deploy_ramdisk')),
                          'deploy_kernel':
-                         ('deploy_kernel_uuid',
+                         (DRV_INFO_DICT['pxe_deploy_kernel'],
                           os.path.join(CONF.pxe.tftp_root,
                                        self.node.uuid,
                                        'deploy_kernel'))}
@@ -151,17 +145,23 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
         self.assertEqual('instance_ramdisk_uuid',
                          self.node.instance_info.get('ramdisk'))
 
-    @mock.patch.object(utils, 'random_alnum')
+    @mock.patch.object(iscsi_deploy, 'build_deploy_ramdisk_options')
     @mock.patch.object(pxe_utils, '_build_pxe_config')
-    def _test_build_pxe_config_options(self, build_pxe_mock, random_alnum_mock,
+    def _test_build_pxe_config_options(self, build_pxe_mock, deploy_opts_mock,
                                         ipxe_enabled=False):
         self.config(pxe_append_params='test_param', group='pxe')
         # NOTE: right '/' should be removed from url string
         self.config(api_url='http://192.168.122.184:6385/', group='conductor')
         self.config(disk_devices='sda', group='pxe')
 
-        fake_key = '0123456789ABCDEFGHIJKLMNOPQRSTUV'
-        random_alnum_mock.return_value = fake_key
+        fake_deploy_opts = {'iscsi_target_iqn': 'fake-iqn',
+                            'deployment_id': 'fake-deploy-id',
+                            'deployment_key': 'fake-deploy-key',
+                            'disk': 'fake-disk',
+                            'ironic_api_url': 'fake-api-url'}
+
+        deploy_opts_mock.return_value = fake_deploy_opts
+
         tftp_server = CONF.pxe.tftp_server
 
         if ipxe_enabled:
@@ -188,19 +188,15 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
             root_dir = CONF.pxe.tftp_root
 
         expected_options = {
-            'deployment_key': '0123456789ABCDEFGHIJKLMNOPQRSTUV',
             'ari_path': ramdisk,
-            'iscsi_target_iqn': u'iqn-1be26c0b-03f2-4d2e-ae87-c02d7f33'
-                                    u'c123',
             'deployment_ari_path': deploy_ramdisk,
             'pxe_append_params': 'test_param',
             'aki_path': kernel,
-            'deployment_id': u'1be26c0b-03f2-4d2e-ae87-c02d7f33c123',
-            'ironic_api_url': 'http://192.168.122.184:6385',
             'deployment_aki_path': deploy_kernel,
-            'disk': 'sda',
             'tftp_server': tftp_server
         }
+
+        expected_options.update(fake_deploy_opts)
 
         image_info = {'deploy_kernel': ('deploy_kernel',
                                         os.path.join(root_dir,
@@ -223,13 +219,6 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
                                                 image_info,
                                                 self.context)
         self.assertEqual(expected_options, options)
-
-        random_alnum_mock.assert_called_once_with(32)
-
-        # test that deploy_key saved
-        db_node = self.dbapi.get_node_by_uuid(self.node.uuid)
-        db_key = db_node.instance_info.get('deploy_key')
-        self.assertEqual(fake_key, db_key)
 
     def test__build_pxe_config_options(self):
         self._test_build_pxe_config_options(ipxe_enabled=False)
@@ -259,7 +248,8 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
         mock_fetch_image.assert_called_once_with(None,
                                                  mock.ANY,
                                                  [('deploy_kernel',
-                                                   image_path)])
+                                                   image_path)],
+                                                 True)
 
     @mock.patch.object(pxe, 'TFTPImageCache', lambda: None)
     @mock.patch.object(fileutils, 'ensure_tree')
@@ -272,7 +262,7 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
         pxe._cache_ramdisk_kernel(self.context, self.node, fake_pxe_info)
         mock_ensure_tree.assert_called_with(expected_path)
         mock_fetch_image.assert_called_once_with(self.context, mock.ANY,
-                                                 fake_pxe_info.values())
+                                                 fake_pxe_info.values(), True)
 
     @mock.patch.object(pxe, 'TFTPImageCache', lambda: None)
     @mock.patch.object(fileutils, 'ensure_tree')
@@ -286,7 +276,8 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
         pxe._cache_ramdisk_kernel(self.context, self.node, fake_pxe_info)
         mock_ensure_tree.assert_called_with(expected_path)
         mock_fetch_image.assert_called_once_with(self.context, mock.ANY,
-                                                 fake_pxe_info.values())
+                                                 fake_pxe_info.values(),
+                                                 True)
 
 
 class PXEDriverTestCase(db_base.DbTestCase):
@@ -305,7 +296,6 @@ class PXEDriverTestCase(db_base.DbTestCase):
                                                driver='fake_pxe',
                                                instance_info=instance_info,
                                                driver_info=DRV_INFO_DICT)
-        self.dbapi = dbapi.get_instance()
         self.port = obj_utils.create_test_port(self.context,
                                                node_id=self.node.id)
         self.config(group='conductor', api_url='http://127.0.0.1:1234/')
@@ -366,12 +356,12 @@ class PXEDriverTestCase(db_base.DbTestCase):
     def test_validate_fail_no_port(self):
         new_node = obj_utils.create_test_node(
                 self.context,
-                id=321, uuid='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+                uuid='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
                 driver='fake_pxe', instance_info=INST_INFO_DICT,
                 driver_info=DRV_INFO_DICT)
         with task_manager.acquire(self.context, new_node.uuid,
                                   shared=True) as task:
-            self.assertRaises(exception.InvalidParameterValue,
+            self.assertRaises(exception.MissingParameterValue,
                               task.driver.deploy.validate, task)
 
     @mock.patch.object(base_image_service.BaseImageService, '_show')
@@ -381,7 +371,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
         mock_glance.return_value = {'properties': {'kernel_id': 'fake-kernel',
                                                    'ramdisk_id': 'fake-initr'}}
         # not present in the keystone catalog
-        mock_ks.side_effect = exception.CatalogFailure
+        mock_ks.side_effect = exception.KeystoneFailure
 
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
@@ -406,7 +396,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
     @mock.patch.object(keystone, 'get_service_url')
     def test_validate_fail_no_api_url(self, mock_ks):
         # not present in the keystone catalog
-        mock_ks.side_effect = exception.CatalogFailure
+        mock_ks.side_effect = exception.KeystoneFailure
         # not present in the config file
         self.config(group='conductor', api_url=None)
 
@@ -489,6 +479,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
             mock_cache_r_k.assert_called_once_with(self.context,
                                                    task.node, None)
 
+    @mock.patch.object(keystone, 'token_expires_soon')
     @mock.patch.object(deploy_utils, 'get_image_mb')
     @mock.patch.object(iscsi_deploy, '_get_image_file_path')
     @mock.patch.object(iscsi_deploy, 'cache_instance_image')
@@ -497,10 +488,12 @@ class PXEDriverTestCase(db_base.DbTestCase):
     @mock.patch.object(manager_utils, 'node_set_boot_device')
     def test_deploy(self, mock_node_set_boot, mock_node_power_action,
                     mock_update_dhcp, mock_cache_instance_image,
-                    mock_get_image_file_path, mock_get_image_mb):
+                    mock_get_image_file_path, mock_get_image_mb, mock_expire):
         fake_img_path = '/test/path/test.img'
         mock_get_image_file_path.return_value = fake_img_path
         mock_get_image_mb.return_value = 1
+        mock_expire.return_value = False
+        self.config(deploy_callback_timeout=600, group='conductor')
 
         with task_manager.acquire(self.context,
                                   self.node.uuid, shared=False) as task:
@@ -512,6 +505,7 @@ class PXEDriverTestCase(db_base.DbTestCase):
             mock_get_image_file_path.assert_called_once_with(task.node.uuid)
             mock_get_image_mb.assert_called_once_with(fake_img_path)
             mock_update_dhcp.assert_called_once_with(task, dhcp_opts)
+            mock_expire.assert_called_once_with(self.context.auth_token, 600)
             mock_node_set_boot.assert_called_once_with(task, 'pxe',
                                                        persistent=True)
             mock_node_power_action.assert_called_once_with(task, states.REBOOT)
@@ -520,6 +514,35 @@ class PXEDriverTestCase(db_base.DbTestCase):
             t_path = pxe._get_token_file_path(self.node.uuid)
             token = open(t_path, 'r').read()
             self.assertEqual(self.context.auth_token, token)
+
+    @mock.patch.object(keystone, 'get_admin_auth_token')
+    @mock.patch.object(keystone, 'token_expires_soon')
+    @mock.patch.object(deploy_utils, 'get_image_mb')
+    @mock.patch.object(iscsi_deploy, '_get_image_file_path')
+    @mock.patch.object(iscsi_deploy, 'cache_instance_image')
+    @mock.patch.object(dhcp_factory.DHCPFactory, 'update_dhcp')
+    @mock.patch.object(manager_utils, 'node_power_action')
+    @mock.patch.object(manager_utils, 'node_set_boot_device')
+    def test_deploy_token_near_expiration(self, mock_node_set_boot,
+                    mock_node_power_action, mock_update_dhcp,
+                    mock_cache_instance_image, mock_get_image_file_path,
+                    mock_get_image_mb, mock_expire, mock_admin_token):
+        mock_get_image_mb.return_value = 1
+        mock_expire.return_value = True
+        new_token = 'new_admin_token'
+        mock_admin_token.return_value = new_token
+        self.config(deploy_callback_timeout=600, group='conductor')
+
+        with task_manager.acquire(self.context,
+                                  self.node.uuid, shared=False) as task:
+            task.driver.deploy.deploy(task)
+
+            mock_expire.assert_called_once_with(self.context.auth_token, 600)
+            mock_admin_token.assert_called_once_with()
+            # ensure token file created with new token
+            t_path = pxe._get_token_file_path(self.node.uuid)
+            token = open(t_path, 'r').read()
+            self.assertEqual(new_token, token)
 
     @mock.patch.object(deploy_utils, 'get_image_mb')
     @mock.patch.object(iscsi_deploy, '_get_image_file_path')
@@ -578,9 +601,9 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 fake_deploy))
 
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            task.driver.vendor.vendor_passthru(
-                    task, method='pass_deploy_info', address='123456',
-                    iqn='aaa-bbb', key='fake-56789')
+            task.driver.vendor._continue_deploy(
+                    task, address='123456', iqn='aaa-bbb', key='fake-56789')
+
         self.node.refresh()
         self.assertEqual(states.ACTIVE, self.node.provision_state)
         self.assertEqual(states.POWER_ON, self.node.power_state)
@@ -608,9 +631,9 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 fake_deploy))
 
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            task.driver.vendor.vendor_passthru(
-                    task, method='pass_deploy_info', address='123456',
-                    iqn='aaa-bbb', key='fake-56789')
+            task.driver.vendor._continue_deploy(
+                    task, address='123456', iqn='aaa-bbb', key='fake-56789')
+
         self.node.refresh()
         self.assertEqual(states.DEPLOYFAIL, self.node.provision_state)
         self.assertEqual(states.POWER_OFF, self.node.power_state)
@@ -634,10 +657,10 @@ class PXEDriverTestCase(db_base.DbTestCase):
                 fake_deploy))
 
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            task.driver.vendor.vendor_passthru(
-                    task, method='pass_deploy_info', address='123456',
-                    iqn='aaa-bbb', key='fake-56789',
-                    error='test ramdisk error')
+            task.driver.vendor._continue_deploy(
+                    task, address='123456', iqn='aaa-bbb',
+                    key='fake-56789', error='test ramdisk error')
+
         self.node.refresh()
         self.assertEqual(states.DEPLOYFAIL, self.node.provision_state)
         self.assertEqual(states.POWER_OFF, self.node.power_state)
@@ -648,28 +671,43 @@ class PXEDriverTestCase(db_base.DbTestCase):
 
     def test_continue_deploy_invalid(self):
         self.node.power_state = states.POWER_ON
-        self.node.provision_state = 'FAKE'
+        self.node.provision_state = states.NOSTATE
         self.node.save()
 
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            task.driver.vendor.vendor_passthru(
-                    task, method='pass_deploy_info', address='123456',
-                    iqn='aaa-bbb', key='fake-56789',
-                    error='test ramdisk error')
+            task.driver.vendor._continue_deploy(
+                    task, address='123456', iqn='aaa-bbb',
+                    key='fake-56789', error='test ramdisk error')
+
         self.node.refresh()
-        self.assertEqual('FAKE', self.node.provision_state)
+        self.assertEqual(states.NOSTATE, self.node.provision_state)
         self.assertEqual(states.POWER_ON, self.node.power_state)
 
     def test_lock_elevated(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            with mock.patch.object(task.driver.vendor, '_continue_deploy') \
-                    as _continue_deploy_mock:
-                task.driver.vendor.vendor_passthru(task,
-                    method='pass_deploy_info', address='123456', iqn='aaa-bbb',
-                    key='fake-56789')
+            with mock.patch.object(task.driver.vendor,
+                                   '_continue_deploy') as _cont_deploy_mock:
+                task.driver.vendor._continue_deploy(
+                    task, address='123456', iqn='aaa-bbb', key='fake-56789')
+
                 # lock elevated w/o exception
-                self.assertEqual(1, _continue_deploy_mock.call_count,
+                self.assertEqual(1, _cont_deploy_mock.call_count,
                             "_continue_deploy was not called once.")
+
+    def test_vendor_routes(self):
+        expected = ['pass_deploy_info']
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            vendor_routes = task.driver.vendor.vendor_routes
+            self.assertIsInstance(vendor_routes, dict)
+            self.assertEqual(expected, list(vendor_routes))
+
+    def test_driver_routes(self):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            driver_routes = task.driver.vendor.driver_routes
+            self.assertIsInstance(driver_routes, dict)
+            self.assertEqual({}, driver_routes)
 
 
 @mock.patch.object(utils, 'unlink_without_raise')
@@ -732,7 +770,6 @@ class CleanUpFullFlowTestCase(db_base.DbTestCase):
                                                driver='fake_pxe',
                                                instance_info=instance_info,
                                                driver_info=DRV_INFO_DICT)
-        self.dbapi = dbapi.get_instance()
         self.port = obj_utils.create_test_port(self.context,
                                                node_id=self.node.id)
 

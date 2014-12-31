@@ -33,6 +33,7 @@ from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
 from ironic.drivers.modules import agent_client
+from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
 from ironic import objects
 from ironic.openstack.common import fileutils
@@ -113,34 +114,6 @@ def _get_tftp_image_info(node):
     return pxe_utils.get_deploy_kr_info(node.uuid, node.driver_info)
 
 
-def _set_failed_state(task, msg):
-    """Set a node's error state and provision state to signal Nova.
-
-    When deploy steps aren't called by explicitly the conductor, but are
-    the result of callbacks, we need to set the node's state explicitly.
-    This tells Nova to change the instance's status so the user can see
-    their deploy/tear down had an issue and makes debugging/deleting Nova
-    instances easier.
-    """
-    node = task.node
-    node.provision_state = states.DEPLOYFAIL
-    node.target_provision_state = states.NOSTATE
-    node.save()
-    try:
-        manager_utils.node_power_action(task, states.POWER_OFF)
-    except Exception:
-        msg = (_('Node %s failed to power off while handling deploy '
-                 'failure. This may be a serious condition. Node '
-                 'should be removed from Ironic or put in maintenance '
-                 'mode until the problem is resolved.') % node.uuid)
-        LOG.error(msg)
-    finally:
-        # NOTE(deva): node_power_action() erases node.last_error
-        #             so we need to set it again here.
-        node.last_error = msg
-        node.save()
-
-
 @image_cache.cleanup(priority=25)
 class AgentTFTPImageCache(image_cache.ImageCache):
     def __init__(self, image_service=None):
@@ -153,37 +126,13 @@ class AgentTFTPImageCache(image_cache.ImageCache):
             image_service=image_service)
 
 
-# copied from pxe driver - should be refactored per LP1350594
-def _fetch_images(ctx, cache, images_info):
-    """Check for available disk space and fetch images using ImageCache.
-
-    :param ctx: context
-    :param cache: ImageCache instance to use for fetching
-    :param images_info: list of tuples (image uuid, destination path)
-    :raises: InstanceDeployFailure if unable to find enough disk space
-    """
-
-    try:
-        image_cache.clean_up_caches(ctx, cache.master_dir, images_info)
-    except exception.InsufficientDiskSpace as e:
-        raise exception.InstanceDeployFailure(reason=e)
-
-    # NOTE(dtantsur): This code can suffer from race condition,
-    # if disk space is used between the check and actual download.
-    # This is probably unavoidable, as we can't control other
-    # (probably unrelated) processes
-    for uuid, path in images_info:
-        cache.fetch_image(uuid, path, ctx=ctx)
-
-
-# copied from pxe driver - should be refactored per LP1350594
 def _cache_tftp_images(ctx, node, pxe_info):
     """Fetch the necessary kernels and ramdisks for the instance."""
     fileutils.ensure_tree(
         os.path.join(CONF.pxe.tftp_root, node.uuid))
     LOG.debug("Fetching kernel and ramdisk for node %s",
               node.uuid)
-    _fetch_images(ctx, AgentTFTPImageCache(), pxe_info.values())
+    deploy_utils.fetch_images(ctx, AgentTFTPImageCache(), pxe_info.values())
 
 
 def build_instance_info_for_deploy(task):
@@ -204,6 +153,8 @@ def build_instance_info_for_deploy(task):
 
     instance_info['image_url'] = swift_temp_url
     instance_info['image_checksum'] = image_info['checksum']
+    instance_info['image_disk_format'] = image_info['disk_format']
+    instance_info['image_container_format'] = image_info['container_format']
     return instance_info
 
 
@@ -220,19 +171,24 @@ class AgentDeploy(base.DeployInterface):
     def validate(self, task):
         """Validate the driver-specific Node deployment info.
 
-        This method validates whether the 'instance_info' property of the
-        supplied node contains the required information for this driver to
-        deploy images to the node.
+        This method validates whether the properties of the supplied node
+        contain the required information for this driver to deploy images to
+        the node.
 
         :param task: a TaskManager instance
-        :raises: InvalidParameterValue
+        :raises: MissingParameterValue
         """
-        try:
-            _get_tftp_image_info(task.node)
-        except KeyError:
-            raise exception.InvalidParameterValue(_(
-                    'Node %s failed to validate deploy image info') %
-                    task.node.uuid)
+        node = task.node
+        params = {}
+        params['driver_info.deploy_kernel'] = node.driver_info.get(
+                                                              'deploy_kernel')
+        params['driver_info.deploy_ramdisk'] = node.driver_info.get(
+                                                              'deploy_ramdisk')
+        params['instance_info.image_source'] = node.instance_info.get(
+                                                               'image_source')
+        error_msg = _('Node %s failed to validate deploy image info. Some '
+                      'parameters were missing') % node.uuid
+        deploy_utils.check_for_missing_params(params, error_msg)
 
     @task_manager.require_exclusive_lock
     def deploy(self, task):
@@ -326,13 +282,8 @@ class AgentDeploy(base.DeployInterface):
 
 
 class AgentVendorInterface(base.VendorInterface):
+
     def __init__(self):
-        self.vendor_routes = {
-            'heartbeat': self._heartbeat
-        }
-        self.driver_routes = {
-            'lookup': self._lookup,
-        }
         self.supported_payload_versions = ['2']
         self._client = _get_client()
 
@@ -354,53 +305,33 @@ class AgentVendorInterface(base.VendorInterface):
         """
         pass
 
-    def driver_vendor_passthru(self, task, method, **kwargs):
-        """A node that does not know its UUID should POST to this method.
-        Given method, route the command to the appropriate private function.
+    def driver_validate(self, method, **kwargs):
+        """Validate the driver deployment info.
+
+        :param method: method to be validated.
         """
-        if method not in self.driver_routes:
-            raise exception.InvalidParameterValue(_('No handler for method %s')
-                                                  % method)
-        func = self.driver_routes[method]
-        return func(task, **kwargs)
+        version = kwargs.get('version')
 
-    def vendor_passthru(self, task, **kwargs):
-        """A node that knows its UUID should heartbeat to this passthru.
+        if not version:
+            raise exception.MissingParameterValue(_('Missing parameter '
+                                                    'version'))
+        if version not in self.supported_payload_versions:
+            raise exception.InvalidParameterValue(_('Unknown lookup '
+                                                    'payload version: %s')
+                                                    % version)
 
-        It will get its node object back, with what Ironic thinks its provision
-        state is and the target provision state is.
-        """
-        method = kwargs['method']  # Existence checked in mixin
-        if method not in self.vendor_routes:
-            raise exception.InvalidParameterValue(_('No handler for method '
-                                                    '%s') % method)
-        func = self.vendor_routes[method]
-        try:
-            return func(task, **kwargs)
-        except exception.IronicException as e:
-            with excutils.save_and_reraise_exception():
-                # log this because even though the exception is being
-                # reraised, it won't be handled if it is an async. call.
-                LOG.exception(_LE('vendor_passthru failed with method %s'),
-                              method)
-        except Exception as e:
-            # catch-all in case something bubbles up here
-            # log this because even though the exception is being
-            # reraised, it won't be handled if it is an async. call.
-            LOG.exception(_LE('vendor_passthru failed with method %s'), method)
-            raise exception.VendorPassthruException(message=e)
-
-    def _heartbeat(self, task, **kwargs):
+    @base.passthru(['POST'])
+    def heartbeat(self, task, **kwargs):
         """Method for agent to periodically check in.
 
         The agent should be sending its agent_url (so Ironic can talk back)
-        as a kwarg.
+        as a kwarg. kwargs should have the following format::
 
-        kwargs should have the following format:
-        {
-            'agent_url': 'http://AGENT_HOST:AGENT_PORT'
-        }
-                AGENT_PORT defaults to 9999.
+         {
+             'agent_url': 'http://AGENT_HOST:AGENT_PORT'
+         }
+
+        AGENT_PORT defaults to 9999.
         """
         node = task.node
         driver_info = node.driver_info
@@ -409,15 +340,19 @@ class AgentVendorInterface(base.VendorInterface):
             {'node': node.uuid,
              'heartbeat': driver_info.get('agent_last_heartbeat')})
         driver_info['agent_last_heartbeat'] = int(_time())
-        # FIXME(rloo): This could raise KeyError exception if 'agent_url'
-        #              wasn't specified. Instead, raise MissingParameterValue.
-        driver_info['agent_url'] = kwargs['agent_url']
+        try:
+            driver_info['agent_url'] = kwargs['agent_url']
+        except KeyError:
+            raise exception.MissingParameterValue(_('For heartbeat operation, '
+                                                    '"agent_url" must be '
+                                                    'specified.'))
 
         node.driver_info = driver_info
         node.save()
 
         # Async call backs don't set error state on their own
         # TODO(jimrollenhagen) improve error messages here
+        msg = _('Failed checking if deploy is done.')
         try:
             if node.provision_state == states.DEPLOYWAIT:
                 msg = _('Node failed to get image for deploy.')
@@ -430,7 +365,7 @@ class AgentVendorInterface(base.VendorInterface):
             LOG.exception(_LE('Async exception for %(node)s: %(msg)s'),
                           {'node': node,
                            'msg': msg})
-            _set_failed_state(task, msg)
+            deploy_utils.set_failed_state(task, msg)
 
     def _deploy_is_done(self, node):
         return self._client.deploy_is_done(node)
@@ -442,9 +377,16 @@ class AgentVendorInterface(base.VendorInterface):
         LOG.debug('Continuing deploy for %s', node.uuid)
 
         image_info = {
-            'id': image_source,
+            'id': image_source.split('/')[-1],
             'urls': [node.instance_info['image_url']],
             'checksum': node.instance_info['image_checksum'],
+            # NOTE(comstud): Older versions of ironic do not set
+            # 'disk_format' nor 'container_format', so we use .get()
+            # to maintain backwards compatibility in case code was
+            # upgraded in the middle of a build request.
+            'disk_format': node.instance_info.get('image_disk_format'),
+            'container_format': node.instance_info.get(
+                'image_container_format')
         }
 
         # Tell the client to download and write the image with the given args
@@ -473,7 +415,7 @@ class AgentVendorInterface(base.VendorInterface):
             msg = _('node %(node)s command status errored: %(error)s') % (
                    {'node': node.uuid, 'error': error})
             LOG.error(msg)
-            _set_failed_state(task, msg)
+            deploy_utils.set_failed_state(task, msg)
             return
 
         LOG.debug('Rebooting node %s to disk', node.uuid)
@@ -485,32 +427,35 @@ class AgentVendorInterface(base.VendorInterface):
         node.target_provision_state = states.NOSTATE
         node.save()
 
-    def _lookup(self, context, **kwargs):
-        """Method to be called the first time a ramdisk agent checks in. This
+    @base.driver_passthru(['POST'], async=False)
+    def lookup(self, context, **kwargs):
+        """Find a matching node for the agent.
+
+        Method to be called the first time a ramdisk agent checks in. This
         can be because this is a node just entering decom or a node that
         rebooted for some reason. We will use the mac addresses listed in the
         kwargs to find the matching node, then return the node object to the
-        agent. The agent can that use that UUID to use the normal vendor
+        agent. The agent can that use that UUID to use the node vendor
         passthru method.
 
         Currently, we don't handle the instance where the agent doesn't have
         a matching node (i.e. a brand new, never been in Ironic node).
 
-        kwargs should have the following format:
-        {
-            "version": "2"
-            "inventory": {
-                "interfaces": [
-                    {
-                        "name": "eth0",
-                        "mac_address": "00:11:22:33:44:55",
-                        "switch_port_descr": "port24"
-                        "switch_chassis_descr": "tor1"
-                    },
-                    ...
-                ], ...
-            }
-        }
+        kwargs should have the following format::
+
+         {
+             "version": "2"
+             "inventory": {
+                 "interfaces": [
+                     {
+                         "name": "eth0",
+                         "mac_address": "00:11:22:33:44:55",
+                         "switch_port_descr": "port24"
+                         "switch_chassis_descr": "tor1"
+                     }, ...
+                 ], ...
+             }
+         }
 
         The interfaces list should include a list of the non-IPMI MAC addresses
         in the form aa:bb:cc:dd:ee:ff.
@@ -523,12 +468,8 @@ class AgentVendorInterface(base.VendorInterface):
         :raises: NotFound if no matching node is found.
         :raises: InvalidParameterValue with unknown payload version
         """
-        version = kwargs.get('version')
-
-        if version not in self.supported_payload_versions:
-            raise exception.InvalidParameterValue(_('Unknown lookup payload'
-                                                    'version: %s') % version)
-        interfaces = self._get_interfaces(version, kwargs)
+        inventory = kwargs.get('inventory')
+        interfaces = self._get_interfaces(inventory)
         mac_addresses = self._get_mac_addresses(interfaces)
 
         node = self._find_node_by_macs(context, mac_addresses)
@@ -553,10 +494,10 @@ class AgentVendorInterface(base.VendorInterface):
             'node': node
         }
 
-    def _get_interfaces(self, version, inventory):
+    def _get_interfaces(self, inventory):
         interfaces = []
         try:
-            interfaces = inventory['inventory']['interfaces']
+            interfaces = inventory['interfaces']
         except (KeyError, TypeError):
             raise exception.InvalidParameterValue(_(
                 'Malformed network interfaces lookup: %s') % inventory)
@@ -564,8 +505,7 @@ class AgentVendorInterface(base.VendorInterface):
         return interfaces
 
     def _get_mac_addresses(self, interfaces):
-        """Returns MACs for the network devices
-        """
+        """Returns MACs for the network devices."""
         mac_addresses = []
 
         for interface in interfaces:
@@ -578,7 +518,9 @@ class AgentVendorInterface(base.VendorInterface):
         return mac_addresses
 
     def _find_node_by_macs(self, context, mac_addresses):
-        """Given a list of MAC addresses, find the ports that match the MACs
+        """Get nodes for a given list of MAC addresses.
+
+        Given a list of MAC addresses, find the ports that match the MACs
         and return the node they are all connected to.
 
         :raises: NodeNotFound if the ports point to multiple nodes or no
@@ -600,7 +542,9 @@ class AgentVendorInterface(base.VendorInterface):
         return node
 
     def _find_ports_by_macs(self, context, mac_addresses):
-        """Given a list of MAC addresses, find the ports that match the MACs
+        """Get ports for a given list of MAC addresses.
+
+        Given a list of MAC addresses, find the ports that match the MACs
         and return them as a list of Port objects, or an empty list if there
         are no matches
         """
@@ -617,7 +561,9 @@ class AgentVendorInterface(base.VendorInterface):
         return ports
 
     def _get_node_id(self, ports):
-        """Given a list of ports, either return the node_id they all share or
+        """Get a node ID for a list of ports.
+
+        Given a list of ports, either return the node_id they all share or
         raise a NotFound if there are multiple node_ids, which indicates some
         ports are connected to one node and the remaining port(s) are connected
         to one or more other nodes.

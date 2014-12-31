@@ -13,11 +13,11 @@
 # limitations under the License.
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
 import requests
 
 from ironic.common import exception
 from ironic.common.i18n import _
-from ironic.openstack.common import jsonutils
 from ironic.openstack.common import log
 
 agent_opts = [
@@ -96,10 +96,15 @@ class AgentClient(object):
         """Call the `prepare_image` method on the node."""
         LOG.debug('Preparing image %(image)s on node %(node)s.',
                   {'image': image_info.get('id'),
-                   'node': self._get_command_url(node)})
+                   'node': node.uuid})
+        params = {'image_info': image_info}
+
+        # this should be an http(s) URL
+        configdrive = node.instance_info.get('configdrive')
+        if configdrive is not None:
+            params['configdrive'] = configdrive
+
         return self._command(node=node,
                              method='standby.prepare_image',
-                             params={
-                                 'image_info': image_info,
-                             },
+                             params=params,
                              wait=wait)

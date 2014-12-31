@@ -16,14 +16,11 @@ Tests for ACL. Checks whether certain kinds of requests
 are blocked or allowed to be processed.
 """
 
-import mock
-
 # NOTE(deva): import auth_token so we can override a config option
 from keystonemiddleware import auth_token  # noqa
-
+import mock
 from oslo.config import cfg
 
-from ironic.db import api as db_api
 from ironic.tests.api import base
 from ironic.tests.api import utils
 from ironic.tests.db import utils as db_utils
@@ -36,7 +33,6 @@ class TestACL(base.FunctionalTest):
 
         self.environ = {'fake.cache': utils.FakeMemcache()}
         self.fake_db_node = db_utils.get_test_node(chassis_id=None)
-        self.dbapi = db_api.get_instance()
         self.node_path = '/nodes/%s' % self.fake_db_node['uuid']
 
     def get_json(self, path, expect_errors=False, headers=None, q=[], **param):

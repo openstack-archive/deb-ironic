@@ -31,10 +31,12 @@ The test will then use that db and u/p combo to run the tests.
 
 For postgres on Ubuntu this can be done with the following commands:
 
-sudo -u postgres psql
-postgres=# create user openstack_citest with createdb login password
+::
+
+ sudo -u postgres psql
+ postgres=# create user openstack_citest with createdb login password
       'openstack_citest';
-postgres=# create database openstack_citest with owner openstack_citest;
+ postgres=# create database openstack_citest with owner openstack_citest;
 
 """
 
@@ -227,8 +229,8 @@ class TestWalkVersions(base.TestCase, WalkVersionsMixin):
     @mock.patch.object(WalkVersionsMixin, '_migrate_down')
     def test_walk_versions_all_default(self, _migrate_up, _migrate_down,
                                        script_directory):
-        script_directory.from_config().\
-            walk_revisions.return_value = self.versions
+        fc = script_directory.from_config()
+        fc.walk_revisions.return_value = self.versions
         self.migration_api.version.return_value = None
 
         self._walk_versions(self.engine, self.config)
@@ -248,8 +250,8 @@ class TestWalkVersions(base.TestCase, WalkVersionsMixin):
     @mock.patch.object(WalkVersionsMixin, '_migrate_down')
     def test_walk_versions_all_false(self, _migrate_up, _migrate_down,
                                      script_directory):
-        script_directory.from_config().\
-            walk_revisions.return_value = self.versions
+        fc = script_directory.from_config()
+        fc.walk_revisions.return_value = self.versions
         self.migration_api.version.return_value = None
 
         self._walk_versions(self.engine, self.config, downgrade=False)
@@ -318,6 +320,13 @@ class MigrationCheckersMixin(object):
         self.assertRaises(
             (sqlalchemy.exc.IntegrityError, db_exc.DBDuplicateEntry),
             nodes.insert().execute, data)
+
+    def _check_242cc6a923b3(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        col_names = [column.name for column in nodes.c]
+        self.assertIn('maintenance_reason', col_names)
+        self.assertIsInstance(nodes.c.maintenance_reason.type,
+                              sqlalchemy.types.String)
 
     def test_upgrade_and_version(self):
         with patch_with_engine(self.engine):

@@ -29,6 +29,7 @@ Currently supported environments are:
 import os
 
 from oslo.config import cfg
+from oslo_concurrency import processutils
 
 from ironic.common import boot_devices
 from ironic.common import exception
@@ -41,7 +42,6 @@ from ironic.conductor import task_manager
 from ironic.drivers import base
 from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import log as logging
-from ironic.openstack.common import processutils
 
 libvirt_opts = [
     cfg.StrOpt('libvirt_uri',
@@ -285,8 +285,8 @@ def _parse_driver_info(node):
     missing_info = [key for key in REQUIRED_PROPERTIES if not info.get(key)]
     if missing_info:
         raise exception.MissingParameterValue(_(
-            "SSHPowerDriver requires the following to be set: %s.")
-            % missing_info)
+            "SSHPowerDriver requires the following parameters to be set in "
+            "node's driver_info: %s.") % missing_info)
 
     address = info.get('ssh_address')
     username = info.get('ssh_username')
@@ -341,13 +341,14 @@ def _get_power_status(ssh_obj, driver_info):
 
     """
     power_state = None
-    cmd_to_exec = "%s %s" % (driver_info['cmd_set']['base_cmd'],
-                             driver_info['cmd_set']['list_running'])
-    running_list = _ssh_execute(ssh_obj, cmd_to_exec)
-    # Command should return a list of running vms. If the current node is
-    # not listed then we can assume it is not powered on.
     node_name = _get_hosts_name_for_node(ssh_obj, driver_info)
     if node_name:
+        # Get a list of vms running on the host. If the command supports
+        # it, explicitly specify the desired node."
+        cmd_to_exec = "%s %s" % (driver_info['cmd_set']['base_cmd'],
+                                 driver_info['cmd_set']['list_running'])
+        cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', node_name)
+        running_list = _ssh_execute(ssh_obj, cmd_to_exec)
         for node in running_list:
             if not node:
                 continue
@@ -492,9 +493,11 @@ class SSHPower(base.PowerInterface):
         :param task: a TaskManager instance containing the node to act on.
         :raises: InvalidParameterValue if any connection parameters are
             incorrect or if ssh failed to connect to the node.
+        :raises: MissingParameterValue if no ports are enrolled for the given
+                 node.
         """
         if not driver_utils.get_node_mac_addresses(task):
-            raise exception.InvalidParameterValue(_("Node %s does not have "
+            raise exception.MissingParameterValue(_("Node %s does not have "
                               "any port associated with it.") % task.node.uuid)
         try:
             _get_connection(task.node)

@@ -18,6 +18,7 @@
 from oslo.utils import timeutils
 
 from ironic.common import states
+from ironic.db import api as db_api
 
 
 def get_test_ipmi_info():
@@ -107,7 +108,9 @@ def get_test_agent_instance_info():
     return {
         'image_source': 'fake-image',
         'image_url': 'http://image',
-        'image_checksum': 'checksum'
+        'image_checksum': 'checksum',
+        'image_disk_format': 'qcow2',
+        'image_container_format': 'bare',
     }
 
 
@@ -169,11 +172,29 @@ def get_test_node(**kw):
         'properties': kw.get('properties', properties),
         'reservation': kw.get('reservation'),
         'maintenance': kw.get('maintenance', False),
+        'maintenance_reason': kw.get('maintenance_reason'),
         'console_enabled': kw.get('console_enabled', False),
         'extra': kw.get('extra', {}),
-        'updated_at': kw.get('created_at'),
-        'created_at': kw.get('updated_at'),
+        'updated_at': kw.get('updated_at'),
+        'created_at': kw.get('created_at'),
     }
+
+
+def create_test_node(**kw):
+    """Create test node entry in DB and return Node DB object.
+
+    Function to be used to create test Node objects in the database.
+
+    :param kw: kwargs with overriding values for node's attributes.
+    :returns: Test Node DB object.
+
+    """
+    node = get_test_node(**kw)
+    # Let DB generate ID if it isn't specified explicitly
+    if 'id' not in kw:
+        del node['id']
+    dbapi = db_api.get_instance()
+    return dbapi.create_node(node)
 
 
 def get_test_port(**kw):
@@ -186,6 +207,23 @@ def get_test_port(**kw):
         'created_at': kw.get('created_at'),
         'updated_at': kw.get('updated_at'),
     }
+
+
+def create_test_port(**kw):
+    """Create test port entry in DB and return Port DB object.
+
+    Function to be used to create test Port objects in the database.
+
+    :param kw: kwargs with overriding values for port's attributes.
+    :returns: Test Port DB object.
+
+    """
+    port = get_test_port(**kw)
+    # Let DB generate ID if it isn't specified explicitly
+    if 'id' not in kw:
+        del port['id']
+    dbapi = db_api.get_instance()
+    return dbapi.create_port(port)
 
 
 def get_test_chassis(**kw):

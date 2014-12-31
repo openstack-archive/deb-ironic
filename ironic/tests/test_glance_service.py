@@ -28,12 +28,12 @@ from ironic.common.glance_service import base_image_service
 from ironic.common.glance_service import service_utils
 from ironic.common import image_service as service
 from ironic.openstack.common import context
-from ironic.openstack.common import jsonutils
 from ironic.tests import base
 from ironic.tests import matchers
 from ironic.tests import stubs
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
 
 CONF = cfg.CONF
 
@@ -176,7 +176,9 @@ class TestGlanceImageService(base.TestCase):
         self.assertThat(image_metas[0], matchers.DictMatches(expected))
 
     def test_create_without_instance_id(self):
-        """Ensure we can create an image without having to specify an
+        """Test creating an image without an instance ID.
+
+        Ensure we can create an image without having to specify an
         instance_id. Public images are an example of an image not tied to an
         instance.
         """
@@ -487,7 +489,7 @@ class TestGlanceImageService(base.TestCase):
         stub_service.download(image_id, writer)
 
     def test_download_file_url(self):
-        #NOTE: only in v2 API
+        # NOTE: only in v2 API
         class MyGlanceStubClient(stubs.StubGlanceClient):
 
             """A client that returns a file url."""
@@ -692,17 +694,17 @@ class TestGlanceSwiftTempURL(base.TestCase):
 
     def test__validate_temp_url_key_exception(self):
         self.config(swift_temp_url_key=None, group='glance')
-        self.assertRaises(exception.InvalidParameterValue,
+        self.assertRaises(exception.MissingParameterValue,
                           self.service._validate_temp_url_config)
 
     def test__validate_temp_url_endpoint_config_exception(self):
         self.config(swift_endpoint_url=None, group='glance')
-        self.assertRaises(exception.InvalidParameterValue,
+        self.assertRaises(exception.MissingParameterValue,
                           self.service._validate_temp_url_config)
 
     def test__validate_temp_url_account_exception(self):
         self.config(swift_account=None, group='glance')
-        self.assertRaises(exception.InvalidParameterValue,
+        self.assertRaises(exception.MissingParameterValue,
                           self.service._validate_temp_url_config)
 
     def test__validate_temp_url_endpoint_negative_duration(self):
@@ -750,3 +752,39 @@ class TestServiceUtils(base.TestCase):
         generated_url = service_utils.generate_image_url(image_href)
         self.assertEqual('https://123.123.123.123:1234/images/image_uuid',
                          generated_url)
+
+
+class TestGlanceAPIServers(base.TestCase):
+
+    def setUp(self):
+        super(TestGlanceAPIServers, self).setUp()
+        service_utils._GLANCE_API_SERVER = None
+
+    def test__get_api_servers_default(self):
+        host, port, use_ssl = service_utils._get_api_server()
+        self.assertEqual(CONF.glance.glance_host, host)
+        self.assertEqual(CONF.glance.glance_port, port)
+        self.assertEqual(CONF.glance.glance_protocol == 'https', use_ssl)
+
+    def test__get_api_servers_one(self):
+        CONF.set_override('glance_api_servers', ['https://10.0.0.1:9293'],
+                          'glance')
+        s1 = service_utils._get_api_server()
+        s2 = service_utils._get_api_server()
+        self.assertEqual(('10.0.0.1', 9293, True), s1)
+
+        # Only one server, should always get the same one
+        self.assertEqual(s1, s2)
+
+    def test__get_api_servers_two(self):
+        CONF.set_override('glance_api_servers',
+                          ['http://10.0.0.1:9293', 'http://10.0.0.2:9294'],
+                          'glance')
+        s1 = service_utils._get_api_server()
+        s2 = service_utils._get_api_server()
+        s3 = service_utils._get_api_server()
+
+        self.assertNotEqual(s1, s2)
+
+        # 2 servers, so cycles to the first again
+        self.assertEqual(s1, s3)

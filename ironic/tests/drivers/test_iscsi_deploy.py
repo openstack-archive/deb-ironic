@@ -15,15 +15,15 @@
 
 """Test class for iSCSI deploy mechanism."""
 
-import mock
 import os
 import tempfile
 
+import mock
 from oslo.config import cfg
 
 from ironic.common import exception
+from ironic.common import keystone
 from ironic.common import utils
-from ironic.db import api as dbapi
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import iscsi_deploy
 from ironic.openstack.common import fileutils
@@ -39,10 +39,6 @@ DRV_INFO_DICT = db_utils.get_test_pxe_driver_info()
 
 
 class IscsiDeployValidateParametersTestCase(db_base.DbTestCase):
-
-    def setUp(self):
-        super(IscsiDeployValidateParametersTestCase, self).setUp()
-        self.dbapi = dbapi.get_instance()
 
     def test_parse_instance_info_good(self):
         # make sure we get back the expected things
@@ -113,10 +109,10 @@ class IscsiDeployValidateParametersTestCase(db_base.DbTestCase):
 
     def test_parse_instance_info_valid_preserve_ephemeral_true(self):
         info = dict(INST_INFO_DICT)
-        for _id, opt in enumerate(['true', 'TRUE', 'True', 't',
-                                   'on', 'yes', 'y', '1']):
+        for opt in ['true', 'TRUE', 'True', 't',
+                    'on', 'yes', 'y', '1']:
             info['preserve_ephemeral'] = opt
-            node = obj_utils.create_test_node(self.context, id=_id,
+            node = obj_utils.create_test_node(self.context,
                                               uuid=utils.generate_uuid(),
                                               instance_info=info)
             data = iscsi_deploy.parse_instance_info(node)
@@ -124,10 +120,10 @@ class IscsiDeployValidateParametersTestCase(db_base.DbTestCase):
 
     def test_parse_instance_info_valid_preserve_ephemeral_false(self):
         info = dict(INST_INFO_DICT)
-        for _id, opt in enumerate(['false', 'FALSE', 'False', 'f',
-                                   'off', 'no', 'n', '0']):
+        for opt in ['false', 'FALSE', 'False', 'f',
+                    'off', 'no', 'n', '0']:
             info['preserve_ephemeral'] = opt
-            node = obj_utils.create_test_node(self.context, id=_id,
+            node = obj_utils.create_test_node(self.context,
                                               uuid=utils.generate_uuid(),
                                               instance_info=info)
             data = iscsi_deploy.parse_instance_info(node)
@@ -152,7 +148,6 @@ class IscsiDeployPrivateMethodsTestCase(db_base.DbTestCase):
               'driver_info': DRV_INFO_DICT,
         }
         mgr_utils.mock_the_extension_manager(driver="fake_pxe")
-        self.dbapi = dbapi.get_instance()
         self.node = obj_utils.create_test_node(self.context, **n)
 
     def test__get_image_dir_path(self):
@@ -177,7 +172,6 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
               'driver_info': DRV_INFO_DICT,
         }
         mgr_utils.mock_the_extension_manager(driver="fake_pxe")
-        self.dbapi = dbapi.get_instance()
         self.node = obj_utils.create_test_node(self.context, **n)
 
     @mock.patch.object(deploy_utils, 'fetch_images')
@@ -192,7 +186,7 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         (uuid, image_path) = iscsi_deploy.cache_instance_image(None, self.node)
         mock_fetch_image.assert_called_once_with(None,
                                                  mock.ANY,
-                                                 [(uuid, image_path)])
+                                                 [(uuid, image_path)], True)
         self.assertEqual('glance://image_uuid', uuid)
         self.assertEqual(os.path.join(temp_dir,
                                       self.node.uuid,
@@ -210,3 +204,47 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         mock_cache.return_value.clean_up.assert_called_once_with()
         mock_unlink.assert_called_once_with('/path/uuid/disk')
         mock_rmtree.assert_called_once_with('/path/uuid')
+
+    def _test_build_deploy_ramdisk_options(self, mock_alnum, api_url):
+        fake_key = '0123456789ABCDEFGHIJKLMNOPQRSTUV'
+        fake_disk = 'fake-disk'
+
+        self.config(disk_devices=fake_disk, group='pxe')
+
+        mock_alnum.return_value = fake_key
+
+        expected_opts = {'iscsi_target_iqn': 'iqn-%s' % self.node.uuid,
+                         'deployment_id': self.node.uuid,
+                         'deployment_key': fake_key,
+                         'disk': fake_disk,
+                         'ironic_api_url': api_url}
+
+        opts = iscsi_deploy.build_deploy_ramdisk_options(self.node)
+
+        self.assertEqual(expected_opts, opts)
+        mock_alnum.assert_called_once_with(32)
+        # assert deploy_key was injected in the node
+        self.assertIn('deploy_key', self.node.instance_info)
+
+    @mock.patch.object(keystone, 'get_service_url')
+    @mock.patch.object(utils, 'random_alnum')
+    def test_build_deploy_ramdisk_options(self, mock_alnum, mock_get_url):
+        fake_api_url = 'http://127.0.0.1:6385'
+        self.config(api_url=fake_api_url, group='conductor')
+        self._test_build_deploy_ramdisk_options(mock_alnum, fake_api_url)
+
+        # As we are getting the Ironic api url from the config file
+        # assert keystone wasn't called
+        self.assertFalse(mock_get_url.called)
+
+    @mock.patch.object(keystone, 'get_service_url')
+    @mock.patch.object(utils, 'random_alnum')
+    def test_build_deploy_ramdisk_options_keystone(self, mock_alnum,
+                                                   mock_get_url):
+        fake_api_url = 'http://127.0.0.1:6385'
+        mock_get_url.return_value = fake_api_url
+        self._test_build_deploy_ramdisk_options(mock_alnum, fake_api_url)
+
+        # As the Ironic api url is not specified in the config file
+        # assert we are getting it from keystone
+        mock_get_url.assert_called_once_with()

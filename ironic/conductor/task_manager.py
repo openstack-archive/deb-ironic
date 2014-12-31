@@ -41,15 +41,22 @@ determine whether their invocation requires an exclusive lock.
 The TaskManager instance exposes certain node resources and properties as
 attributes that you may access:
 
-    task.context -- The context passed to TaskManager()
-    task.shared -- False if Node is locked, True if it is not locked. (The
-                   'shared' kwarg arg of TaskManager())
-    task.node -- The Node object
-    task.ports -- Ports belonging to the Node
-    task.driver -- The Driver for the Node, or the Driver based on the
-                   'driver_name' kwarg of TaskManager().
+    task.context
+        The context passed to TaskManager()
+    task.shared
+        False if Node is locked, True if it is not locked. (The
+        'shared' kwarg arg of TaskManager())
+    task.node
+        The Node object
+    task.ports
+        Ports belonging to the Node
+    task.driver
+        The Driver for the Node, or the Driver based on the
+        'driver_name' kwarg of TaskManager().
 
 Example usage:
+
+::
 
     with task_manager.acquire(context, node_id) as task:
         task.driver.power.power_on(task.node)
@@ -58,6 +65,8 @@ If you need to execute task-requiring code in the background thread, the
 TaskManager instance provides an interface to handle this for you, making
 sure to release resources when exceptions occur or when the thread finishes.
 Common use of this is within the Manager like so:
+
+::
 
     with task_manager.acquire(context, node_id) as task:
         <do some work>
@@ -72,6 +81,8 @@ with a try..exception block (like the API cases where we return after
 the spawn_after()) the task allows you to set a hook to execute custom
 code when the spawned task generates an exception:
 
+::
+
     def on_error(e):
         if isinstance(e, Exception):
             ...
@@ -85,14 +96,16 @@ code when the spawned task generates an exception:
 
 """
 
-import retrying
+import functools
 
 from oslo.config import cfg
 from oslo.utils import excutils
+import retrying
 
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common.i18n import _LW
+from ironic.common import states
 from ironic import objects
 from ironic.openstack.common import log as logging
 
@@ -109,6 +122,7 @@ def require_exclusive_lock(f):
     as the first parameter after "self".
 
     """
+    @functools.wraps(f)
     def wrapper(*args, **kwargs):
         task = args[0] if isinstance(args[0], TaskManager) else args[1]
         if task.shared:
@@ -167,6 +181,8 @@ class TaskManager(object):
         self.node = None
         self.shared = shared
 
+        self.fsm = states.machine.copy()
+
         # NodeLocked exceptions can be annoying. Let's try to alleviate
         # some of that pain by retrying our lock attempts. The retrying
         # module expects a wait_fixed value in milliseconds.
@@ -187,6 +203,8 @@ class TaskManager(object):
             self.ports = objects.Port.list_by_node_id(context, self.node.id)
             self.driver = driver_factory.get_driver(driver_name or
                                                     self.node.driver)
+            self.fsm.initialize(self.node.provision_state)
+
         except Exception:
             with excutils.save_and_reraise_exception():
                 self.release_resources()
@@ -205,8 +223,8 @@ class TaskManager(object):
 
         :param _on_error_method: a callable object, it's first parameter
             should accept the Exception object that was raised.
-        :param *args: additional args passed to the callable object.
-        :param **kwargs: additional kwargs passed to the callable object.
+        :param args: additional args passed to the callable object.
+        :param kwargs: additional kwargs passed to the callable object.
 
         """
         self._on_error_method = _on_error_method
@@ -232,10 +250,17 @@ class TaskManager(object):
         self.node = None
         self.driver = None
         self.ports = None
+        self.fsm = None
 
     def _thread_release_resources(self, t):
         """Thread.link() callback to release resources."""
         self.release_resources()
+
+    def process_event(self, event):
+        """Process an event by advancing the state machine."""
+        self.fsm.process_event(event)
+        self.node.provision_state = self.fsm.current_state
+        self.node.target_provision_state = self.fsm.target_state
 
     def __enter__(self):
         return self

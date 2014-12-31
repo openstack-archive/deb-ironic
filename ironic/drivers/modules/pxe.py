@@ -29,6 +29,7 @@ from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.common.i18n import _LW
 from ironic.common import image_service as service
+from ironic.common import keystone
 from ironic.common import paths
 from ironic.common import pxe_utils
 from ironic.common import states
@@ -90,7 +91,8 @@ LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
 CONF.register_opts(pxe_opts, group='pxe')
-CONF.import_opt('use_ipv6', 'ironic.netconf')
+CONF.import_opt('deploy_callback_timeout', 'ironic.conductor.manager',
+                group='conductor')
 
 
 REQUIRED_PROPERTIES = {
@@ -118,7 +120,8 @@ def _parse_driver_info(node):
     d_info['deploy_kernel'] = info.get('pxe_deploy_kernel')
     d_info['deploy_ramdisk'] = info.get('pxe_deploy_ramdisk')
 
-    error_msg = _("Cannot validate PXE bootloader")
+    error_msg = _("Cannot validate PXE bootloader. Some parameters were"
+                  " missing in node's driver_info")
     deploy_utils.check_for_missing_params(d_info, error_msg, 'pxe_')
 
     return d_info
@@ -207,7 +210,8 @@ def _cache_ramdisk_kernel(ctx, node, pxe_info):
         os.path.join(pxe_utils.get_root_dir(), node.uuid))
     LOG.debug("Fetching kernel and ramdisk for node %s",
               node.uuid)
-    deploy_utils.fetch_images(ctx, TFTPImageCache(), pxe_info.values())
+    deploy_utils.fetch_images(ctx, TFTPImageCache(), pxe_info.values(),
+                              CONF.force_raw_images)
 
 
 def _get_image_info(node, ctx):
@@ -231,7 +235,7 @@ def _get_image_info(node, ctx):
         glance_service = service.Service(version=1, context=ctx)
         iproperties = glance_service.show(d_info['image_source'])['properties']
         for label in labels:
-            i_info[label] = str(iproperties[label + '_id']).split('/')[-1]
+            i_info[label] = str(iproperties[label + '_id'])
         node.instance_info = i_info
         node.save()
 
@@ -249,6 +253,9 @@ def _create_token_file(task):
     token_file_path = _get_token_file_path(task.node.uuid)
     token = task.context.auth_token
     if token:
+        timeout = CONF.conductor.deploy_callback_timeout
+        if timeout and keystone.token_expires_soon(token, timeout):
+            token = keystone.get_admin_auth_token()
         utils.write_to_file(token_file_path, token)
     else:
         utils.unlink_without_raise(token_file_path)
@@ -261,7 +268,7 @@ def _destroy_token_file(node):
 
 
 class PXEDeploy(base.DeployInterface):
-    """PXE Deploy Interface: just a stub until the real driver is ported."""
+    """PXE Deploy Interface for deploy-related actions."""
 
     def get_properties(self):
         return COMMON_PROPERTIES
@@ -312,7 +319,7 @@ class PXEDeploy(base.DeployInterface):
         VendorPassthru._continue_deploy().
 
         :param task: a TaskManager instance containing the node to act on.
-        :returns: deploy state DEPLOYING.
+        :returns: deploy state DEPLOYWAIT.
         """
         iscsi_deploy.cache_instance_image(task.context, task.node)
         iscsi_deploy.check_image_size(task)
@@ -437,14 +444,9 @@ class VendorPassthru(base.VendorInterface):
         :raises: InvalidParameterValue if method is invalid or any parameters
             to the method is invalid.
         """
-        method = kwargs['method']
-        if method == 'pass_deploy_info':
-            iscsi_deploy.get_deploy_info(task.node, **kwargs)
-        else:
-            raise exception.InvalidParameterValue(_(
-                "Unsupported method (%s) passed to PXE driver.")
-                % method)
+        iscsi_deploy.get_deploy_info(task.node, **kwargs)
 
+    @base.passthru(['POST'], method='pass_deploy_info')
     @task_manager.require_exclusive_lock
     def _continue_deploy(self, task, **kwargs):
         """Continues the deployment of baremetal node over iSCSI.
@@ -485,14 +487,4 @@ class VendorPassthru(base.VendorInterface):
                           'Error: %(error)s'),
                       {'instance': node.instance_uuid, 'error': e})
             msg = _('Failed to continue iSCSI deployment.')
-            iscsi_deploy.set_failed_state(task, msg)
-
-    def vendor_passthru(self, task, **kwargs):
-        """Invokes a vendor passthru method.
-
-        :param task: a TaskManager instance containing the node to act on.
-        :param kwargs: kwargs containins the method name and its parameters.
-        """
-        method = kwargs['method']
-        if method == 'pass_deploy_info':
-            self._continue_deploy(task, **kwargs)
+            deploy_utils.set_failed_state(task, msg)

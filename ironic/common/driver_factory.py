@@ -14,12 +14,12 @@
 #    under the License.
 
 from oslo.config import cfg
+from oslo_concurrency import lockutils
+from stevedore import dispatch
 
 from ironic.common import exception
 from ironic.common.i18n import _LI
-from ironic.openstack.common import lockutils
 from ironic.openstack.common import log
-from stevedore import dispatch
 
 
 LOG = log.getLogger(__name__)
@@ -112,12 +112,12 @@ class DriverFactory(object):
         def _check_func(ext):
             return ext.name in CONF.enabled_drivers
 
-        cls._extension_manager = \
+        cls._extension_manager = (
                 dispatch.NameDispatchExtensionManager(
                         'ironic.drivers',
                         _check_func,
                         invoke_on_load=True,
-                        on_load_failure_callback=_catch_driver_not_found)
+                        on_load_failure_callback=_catch_driver_not_found))
         LOG.info(_LI("Loaded the following drivers: %s"),
                 cls._extension_manager.names())
 

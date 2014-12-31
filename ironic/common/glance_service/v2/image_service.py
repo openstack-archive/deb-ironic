@@ -110,17 +110,18 @@ class GlanceImageService(base_image_service.BaseImageService,
         an auth_token.
 
         :param image_info: The return from a GET request to Glance for a
-        certain image_id. Should be a dictionary, with keys like 'name' and
-        'checksum'. See
-        http://docs.openstack.org/developer/glance/glanceapi.html for
-        examples.
+            certain image_id. Should be a dictionary, with keys like 'name' and
+            'checksum'. See
+            http://docs.openstack.org/developer/glance/glanceapi.html for
+            examples.
         :returns: A signed Swift URL from which an image can be downloaded,
-        without authentication.
+            without authentication.
 
         :raises: InvalidParameterValue if Swift config options are not set
-        correctly.
+            correctly.
+        :raises: MissingParameterValue if a required parameter is not set.
         :raises: ImageUnacceptable if the image info from Glance does not
-        have a image ID.
+            have a image ID.
         """
         self._validate_temp_url_config()
 
@@ -152,15 +153,15 @@ class GlanceImageService(base_image_service.BaseImageService,
     def _validate_temp_url_config(self):
         """Validate the required settings for a temporary URL."""
         if not CONF.glance.swift_temp_url_key:
-            raise exc.InvalidParameterValue(_(
+            raise exc.MissingParameterValue(_(
                 'Swift temporary URLs require a shared secret to be created. '
                 'You must provide "swift_temp_url_key" as a config option.'))
         if not CONF.glance.swift_endpoint_url:
-            raise exc.InvalidParameterValue(_(
+            raise exc.MissingParameterValue(_(
                 'Swift temporary URLs require a Swift endpoint URL. '
                 'You must provide "swift_endpoint_url" as a config option.'))
         if not CONF.glance.swift_account:
-            raise exc.InvalidParameterValue(_(
+            raise exc.MissingParameterValue(_(
                 'Swift temporary URLs require a Swift account string. '
                 'You must provide "swift_account" as a config option.'))
         if CONF.glance.swift_temp_url_duration < 0:
@@ -168,7 +169,9 @@ class GlanceImageService(base_image_service.BaseImageService,
                 '"swift_temp_url_duration" must be a positive integer.'))
 
     def _get_location(self, image_id):
-        """Returns the direct url representing the backend storage location,
+        """Get storage URL.
+
+        Returns the direct url representing the backend storage location,
         or None if this attribute is not shown by Glance.
         """
         image_meta = self.call('get', image_id)

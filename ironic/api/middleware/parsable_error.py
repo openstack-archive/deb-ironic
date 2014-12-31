@@ -23,8 +23,9 @@ Based on pecan.middleware.errordocument
 """
 
 import json
-import webob
 from xml import etree as et
+
+import webob
 
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
@@ -34,8 +35,7 @@ LOG = log.getLogger(__name__)
 
 
 class ParsableErrorMiddleware(object):
-    """Replace error body with something the client can parse.
-    """
+    """Replace error body with something the client can parse."""
     def __init__(self, app):
         self.app = app
 
@@ -45,8 +45,7 @@ class ParsableErrorMiddleware(object):
         state = {}
 
         def replacement_start_response(status, headers, exc_info=None):
-            """Overrides the default response to make errors parsable.
-            """
+            """Overrides the default response to make errors parsable."""
             try:
                 status_code = int(status.split(' ')[0])
                 state['status_code'] = status_code

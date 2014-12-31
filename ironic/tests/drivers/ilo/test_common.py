@@ -15,9 +15,9 @@
 
 """Test class for common methods used by iLO modules."""
 
-import mock
 import tempfile
 
+import mock
 from oslo.config import cfg
 from oslo.utils import importutils
 
@@ -26,7 +26,6 @@ from ironic.common import images
 from ironic.common import swift
 from ironic.common import utils
 from ironic.conductor import task_manager
-from ironic.db import api as dbapi
 from ironic.drivers.modules.ilo import common as ilo_common
 from ironic.drivers import utils as driver_utils
 from ironic.tests.conductor import utils as mgr_utils
@@ -37,7 +36,6 @@ from ironic.tests.objects import utils as obj_utils
 ilo_client = importutils.try_import('proliantutils.ilo.ribcl')
 
 
-INFO_DICT = db_utils.get_test_ilo_info()
 CONF = cfg.CONF
 
 
@@ -45,13 +43,11 @@ class IloValidateParametersTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IloValidateParametersTestCase, self).setUp()
-        self.dbapi = dbapi.get_instance()
+        self.node = obj_utils.create_test_node(self.context,
+            driver='fake_ilo', driver_info=db_utils.get_test_ilo_info())
 
     def test_parse_driver_info(self):
-        node = obj_utils.create_test_node(self.context,
-                                          driver='fake_ilo',
-                                          driver_info=INFO_DICT)
-        info = ilo_common.parse_driver_info(node)
+        info = ilo_common.parse_driver_info(self.node)
 
         self.assertIsNotNone(info.get('ilo_address'))
         self.assertIsNotNone(info.get('ilo_username'))
@@ -60,53 +56,35 @@ class IloValidateParametersTestCase(db_base.DbTestCase):
         self.assertIsNotNone(info.get('client_port'))
 
     def test_parse_driver_info_missing_address(self):
-        node = obj_utils.create_test_node(self.context,
-                                          driver='ilo',
-                                          driver_info=INFO_DICT)
-        del node.driver_info['ilo_address']
+        del self.node.driver_info['ilo_address']
         self.assertRaises(exception.MissingParameterValue,
-                          ilo_common.parse_driver_info, node)
+                          ilo_common.parse_driver_info, self.node)
 
     def test_parse_driver_info_missing_username(self):
-        node = obj_utils.create_test_node(self.context,
-                                          driver='ilo',
-                                          driver_info=INFO_DICT)
-        del node.driver_info['ilo_username']
+        del self.node.driver_info['ilo_username']
         self.assertRaises(exception.MissingParameterValue,
-                          ilo_common.parse_driver_info, node)
+                          ilo_common.parse_driver_info, self.node)
 
     def test_parse_driver_info_missing_password(self):
-        node = obj_utils.create_test_node(self.context,
-                                          driver='ilo',
-                                          driver_info=INFO_DICT)
-        del node.driver_info['ilo_password']
+        del self.node.driver_info['ilo_password']
         self.assertRaises(exception.MissingParameterValue,
-                          ilo_common.parse_driver_info, node)
+                          ilo_common.parse_driver_info, self.node)
 
     def test_parse_driver_info_invalid_timeout(self):
-        node = obj_utils.create_test_node(self.context,
-                                          driver='ilo',
-                                          driver_info=INFO_DICT)
-        node.driver_info['client_timeout'] = 'qwe'
+        self.node.driver_info['client_timeout'] = 'qwe'
         self.assertRaises(exception.InvalidParameterValue,
-                          ilo_common.parse_driver_info, node)
+                          ilo_common.parse_driver_info, self.node)
 
     def test_parse_driver_info_invalid_port(self):
-        node = obj_utils.create_test_node(self.context,
-                                          driver='ilo',
-                                          driver_info=INFO_DICT)
-        node.driver_info['client_port'] = 'qwe'
+        self.node.driver_info['client_port'] = 'qwe'
         self.assertRaises(exception.InvalidParameterValue,
-                          ilo_common.parse_driver_info, node)
+                          ilo_common.parse_driver_info, self.node)
 
     def test_parse_driver_info_missing_multiple_params(self):
-        node = obj_utils.create_test_node(self.context,
-                                          driver='ilo',
-                                          driver_info=INFO_DICT)
-        del node.driver_info['ilo_password']
-        del node.driver_info['ilo_address']
+        del self.node.driver_info['ilo_password']
+        del self.node.driver_info['ilo_address']
         try:
-            ilo_common.parse_driver_info(node)
+            ilo_common.parse_driver_info(self.node)
             self.fail("parse_driver_info did not throw exception.")
         except exception.MissingParameterValue as e:
             self.assertIn('ilo_password', str(e))
@@ -117,24 +95,23 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(IloCommonMethodsTestCase, self).setUp()
-        self.dbapi = dbapi.get_instance()
         mgr_utils.mock_the_extension_manager(driver="fake_ilo")
+        self.info = db_utils.get_test_ilo_info()
         self.node = obj_utils.create_test_node(self.context,
-                driver='fake_ilo', driver_info=INFO_DICT)
+                driver='fake_ilo', driver_info=self.info)
 
     @mock.patch.object(ilo_common, 'ilo_client')
     def test_get_ilo_object(self, ilo_client_mock):
-        info = INFO_DICT
-        info['client_timeout'] = 60
-        info['client_port'] = 443
+        self.info['client_timeout'] = 60
+        self.info['client_port'] = 443
         ilo_client_mock.IloClient.return_value = 'ilo_object'
         returned_ilo_object = ilo_common.get_ilo_object(self.node)
         ilo_client_mock.IloClient.assert_called_with(
-            INFO_DICT['ilo_address'],
-            INFO_DICT['ilo_username'],
-            INFO_DICT['ilo_password'],
-            info['client_timeout'],
-            info['client_port'])
+            self.info['ilo_address'],
+            self.info['ilo_username'],
+            self.info['ilo_password'],
+            self.info['client_timeout'],
+            self.info['client_port'])
         self.assertEqual('ilo_object', returned_ilo_object)
 
     @mock.patch.object(ilo_common, 'ilo_client')
@@ -160,6 +137,22 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
         self.assertRaises(exception.IloOperationError,
                           ilo_common.get_ilo_license,
                           self.node)
+
+    def test_update_ipmi_properties(self):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            ipmi_info = {
+                         "ipmi_address": "1.2.3.4",
+                         "ipmi_username": "admin",
+                         "ipmi_password": "fake",
+                         "ipmi_terminal_port": 60
+            }
+            self.info['console_port'] = 60
+            task.node.driver_info = self.info
+            ilo_common.update_ipmi_properties(task)
+            actual_info = task.node.driver_info
+            expected_info = dict(self.info, **ipmi_info)
+            self.assertEqual(expected_info, actual_info)
 
     def test__get_floppy_image_name(self):
         image_name_expected = 'image-' + self.node.uuid
@@ -253,20 +246,6 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
         set_status_mock.side_effect = Exception()
         self.assertRaises(exception.IloOperationError,
                 ilo_common.attach_vmedia, self.node, 'FLOPPY', 'url')
-
-    @mock.patch.object(ilo_common, 'get_ilo_object')
-    def test_set_boot_device(self, get_ilo_object_mock):
-        ilo_object_mock = get_ilo_object_mock.return_value
-        ilo_common.set_boot_device(self.node, 'CDROM')
-        get_ilo_object_mock.assert_called_once_with(self.node)
-        ilo_object_mock.set_one_time_boot.assert_called_once_with('CDROM')
-
-    @mock.patch.object(ilo_common, 'get_ilo_object')
-    def test_set_boot_device_persistent_true(self, get_ilo_object_mock):
-        ilo_mock = get_ilo_object_mock.return_value
-        ilo_common.set_boot_device(self.node, 'NETWORK', True)
-        get_ilo_object_mock.assert_called_once_with(self.node)
-        ilo_mock.update_persistent_boot.assert_called_once_with(['NETWORK'])
 
     @mock.patch.object(ilo_common, 'get_ilo_object')
     def test_set_boot_mode(self, get_ilo_object_mock):

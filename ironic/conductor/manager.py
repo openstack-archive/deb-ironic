@@ -47,10 +47,11 @@ import threading
 
 import eventlet
 from eventlet import greenpool
-
 from oslo.config import cfg
+from oslo.db import exception as db_exception
 from oslo import messaging
 from oslo.utils import excutils
+from oslo_concurrency import lockutils
 
 from ironic.common import dhcp_factory
 from ironic.common import driver_factory
@@ -70,7 +71,6 @@ from ironic.conductor import utils
 from ironic.db import api as dbapi
 from ironic import objects
 from ironic.openstack.common import context as ironic_context
-from ironic.openstack.common import lockutils
 from ironic.openstack.common import log
 from ironic.openstack.common import periodic_task
 
@@ -162,7 +162,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
     """Ironic Conductor manager main class."""
 
     # NOTE(rloo): This must be in sync with rpcapi.ConductorAPI's.
-    RPC_API_VERSION = '1.17'
+    RPC_API_VERSION = '1.21'
 
     target = messaging.Target(version=RPC_API_VERSION)
 
@@ -270,6 +270,12 @@ class ConductorManager(periodic_task.PeriodicTasks):
             raise exception.IronicException(_(
                 "Invalid method call: update_node can not change node state."))
 
+        # NOTE(jroll) clear maintenance_reason if node.update sets
+        # maintenance to False for backwards compatibility, for tools
+        # not using the maintenance endpoint.
+        if 'maintenance' in delta and not node_obj.maintenance:
+            node_obj.maintenance_reason = None
+
         driver_name = node_obj.driver if 'driver' in delta else None
         with task_manager.acquire(context, node_id, shared=False,
                                   driver_name=driver_name) as task:
@@ -278,8 +284,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
             #             instance_uuid needs to be unset, and handle it.
             if 'instance_uuid' in delta:
                 task.driver.power.validate(task)
-                node_obj.power_state = \
-                        task.driver.power.get_power_state(task)
+                node_obj.power_state = task.driver.power.get_power_state(task)
 
                 if node_obj.power_state != states.POWER_OFF:
                     raise exception.NodeInWrongPowerState(
@@ -309,8 +314,8 @@ class ConductorManager(periodic_task.PeriodicTasks):
             node.save()
             LOG.warning(_LW("No free conductor workers available to perform "
                             "an action on node %(node)s, setting node's "
-                            "power state back to %(power_state)s.",
-                            {'node': node.uuid, 'power_state': power_state}))
+                            "power state back to %(power_state)s."),
+                            {'node': node.uuid, 'power_state': power_state})
 
     @messaging.expected_exceptions(exception.InvalidParameterValue,
                                    exception.MissingParameterValue,
@@ -357,16 +362,19 @@ class ConductorManager(periodic_task.PeriodicTasks):
                                    exception.InvalidParameterValue,
                                    exception.UnsupportedDriverExtension,
                                    exception.MissingParameterValue)
-    def vendor_passthru(self, context, node_id, driver_method, info):
+    def vendor_passthru(self, context, node_id, driver_method,
+                        http_method, info):
         """RPC method to encapsulate vendor action.
 
         Synchronously validate driver specific info or get driver status,
-        and if successful, start background worker to perform vendor action
-        asynchronously.
+        and if successful invokes the vendor method. If the method mode
+        is 'async' the conductor will start background worker to perform
+        vendor action.
 
         :param context: an admin context.
         :param node_id: the id or uuid of a node.
         :param driver_method: the name of the vendor method.
+        :param http_method: the HTTP method used for the request.
         :param info: vendor method args.
         :raises: InvalidParameterValue if supplied info is not valid.
         :raises: MissingParameterValue if missing supplied info
@@ -374,7 +382,12 @@ class ConductorManager(periodic_task.PeriodicTasks):
                  vendor interface or method is unsupported.
         :raises: NoFreeConductorWorker when there is no free worker to start
                  async task.
-
+        :raises: NodeLocked if node is locked by another conductor.
+        :returns: A tuple containing the response of the invoked method
+                  and a boolean value indicating whether the method was
+                  invoked asynchronously (True) or synchronously (False).
+                  If invoked asynchronously the response field will be
+                  always None.
         """
         LOG.debug("RPC vendor_passthru called for node %s." % node_id)
         # NOTE(max_lobur): Even though not all vendor_passthru calls may
@@ -385,27 +398,77 @@ class ConductorManager(periodic_task.PeriodicTasks):
             if not getattr(task.driver, 'vendor', None):
                 raise exception.UnsupportedDriverExtension(
                     driver=task.node.driver,
-                    extension='vendor passthru')
+                    extension='vendor interface')
 
-            task.driver.vendor.validate(task, method=driver_method,
-                                        **info)
-            task.spawn_after(self._spawn_worker,
-                             task.driver.vendor.vendor_passthru, task,
-                             method=driver_method, **info)
+            vendor_iface = task.driver.vendor
 
-    @messaging.expected_exceptions(exception.InvalidParameterValue,
+            # NOTE(lucasagomes): Before the vendor_passthru() method was
+            # a self-contained method and each driver implemented their own
+            # version of it, now we have a common mechanism that drivers
+            # should use to expose their vendor methods. If a driver still
+            # have their own vendor_passthru() method we call it to be
+            # backward compat. This code should be removed once L opens.
+            if hasattr(vendor_iface, 'vendor_passthru'):
+                LOG.warning(_LW("Drivers implementing their own version "
+                                "of vendor_passthru() has been deprecated. "
+                                "Please update the code to use the "
+                                "@passthru decorator."))
+                vendor_iface.validate(task, method=driver_method,
+                                            **info)
+                task.spawn_after(self._spawn_worker,
+                                 vendor_iface.vendor_passthru, task,
+                                 method=driver_method, **info)
+                # NodeVendorPassthru was always async
+                return (None, True)
+
+            try:
+                vendor_opts = vendor_iface.vendor_routes[driver_method]
+                vendor_func = vendor_opts['func']
+            except KeyError:
+                raise exception.InvalidParameterValue(
+                    _('No handler for method %s') % driver_method)
+
+            http_method = http_method.upper()
+            if http_method not in vendor_opts['http_methods']:
+                raise exception.InvalidParameterValue(
+                    _('The method %(method)s does not support HTTP %(http)s') %
+                    {'method': driver_method, 'http': http_method})
+
+            vendor_iface.validate(task, method=driver_method,
+                                  http_method=http_method, **info)
+
+            # Inform the vendor method which HTTP method it was invoked with
+            info['http_method'] = http_method
+
+            # Invoke the vendor method accordingly with the mode
+            is_async = vendor_opts['async']
+            ret = None
+            if is_async:
+                task.spawn_after(self._spawn_worker, vendor_func, task, **info)
+            else:
+                ret = vendor_func(task, **info)
+
+            return (ret, is_async)
+
+    @messaging.expected_exceptions(exception.NoFreeConductorWorker,
+                                   exception.InvalidParameterValue,
                                    exception.MissingParameterValue,
                                    exception.UnsupportedDriverExtension,
                                    exception.DriverNotFound)
     def driver_vendor_passthru(self, context, driver_name, driver_method,
-                                  info):
-        """RPC method which synchronously handles driver-level vendor passthru
-        calls. These calls don't require a node UUID and are executed on a
-        random conductor with the specified driver.
+                               http_method, info):
+        """Handle top-level vendor actions.
+
+        RPC method which handles driver-level vendor passthru calls. These
+        calls don't require a node UUID and are executed on a random
+        conductor with the specified driver. If the method mode is
+        async the conductor will start background worker to perform
+        vendor action.
 
         :param context: an admin context.
         :param driver_name: name of the driver on which to call the method.
         :param driver_method: name of the vendor method, for use by the driver.
+        :param http_method: the HTTP method used for the request.
         :param info: user-supplied data to pass through to the driver.
         :raises: MissingParameterValue if missing supplied info
         :raises: InvalidParameterValue if supplied info is not valid.
@@ -414,7 +477,13 @@ class ConductorManager(periodic_task.PeriodicTasks):
                  driver-level vendor passthru or if the passthru method is
                  unsupported.
         :raises: DriverNotFound if the supplied driver is not loaded.
-
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task.
+        :returns: A tuple containing the response of the invoked method
+                  and a boolean value indicating whether the method was
+                  invoked asynchronously (True) or synchronously (False).
+                  If invoked asynchronously the response field will be
+                  always None.
         """
         # Any locking in a top-level vendor action will need to be done by the
         # implementation, as there is little we could reasonably lock on here.
@@ -425,9 +494,101 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 driver=driver_name,
                 extension='vendor interface')
 
-        return driver.vendor.driver_vendor_passthru(context,
-                                                    method=driver_method,
-                                                    **info)
+        # NOTE(lucasagomes): Before the driver_vendor_passthru()
+        # method was a self-contained method and each driver implemented
+        # their own version of it, now we have a common mechanism that
+        # drivers should use to expose their vendor methods. If a driver
+        # still have their own driver_vendor_passthru() method we call
+        # it to be backward compat. This code should be removed
+        # once L opens.
+        if hasattr(driver.vendor, 'driver_vendor_passthru'):
+            LOG.warning(_LW("Drivers implementing their own version "
+                            "of driver_vendor_passthru() has been "
+                            "deprecated. Please update the code to use "
+                            "the @driver_passthru decorator."))
+
+            driver.vendor.driver_validate(method=driver_method, **info)
+            ret = driver.vendor.driver_vendor_passthru(
+                            context, method=driver_method, **info)
+            # DriverVendorPassthru was always sync
+            return (ret, False)
+
+        try:
+            vendor_opts = driver.vendor.driver_routes[driver_method]
+            vendor_func = vendor_opts['func']
+        except KeyError:
+            raise exception.InvalidParameterValue(
+                _('No handler for method %s') % driver_method)
+
+        http_method = http_method.upper()
+        if http_method not in vendor_opts['http_methods']:
+            raise exception.InvalidParameterValue(
+                _('The method %(method)s does not support HTTP %(http)s') %
+                {'method': driver_method, 'http': http_method})
+
+        # Inform the vendor method which HTTP method it was invoked with
+        info['http_method'] = http_method
+
+        # Invoke the vendor method accordingly with the mode
+        is_async = vendor_opts['async']
+        ret = None
+        driver.vendor.driver_validate(method=driver_method, **info)
+
+        if is_async:
+            self._spawn_worker(vendor_func, context, **info)
+        else:
+            ret = vendor_func(context, **info)
+
+        return (ret, is_async)
+
+    def _get_vendor_passthru_metadata(self, route_dict):
+        d = {}
+        for method, metadata in route_dict.iteritems():
+            # 'func' is the vendor method reference, ignore it
+            d[method] = {k: metadata[k] for k in metadata if k != 'func'}
+        return d
+
+    @messaging.expected_exceptions(exception.UnsupportedDriverExtension)
+    def get_node_vendor_passthru_methods(self, context, node_id):
+        """Retrieve information about vendor methods of the given node.
+
+        :param context: an admin context.
+        :param node_id: the id or uuid of a node.
+        :returns: dictionary of <method name>:<method metadata> entries.
+
+        """
+        LOG.debug("RPC get_node_vendor_passthru_methods called for node %s"
+                  % node_id)
+        with task_manager.acquire(context, node_id, shared=True) as task:
+            if not getattr(task.driver, 'vendor', None):
+                raise exception.UnsupportedDriverExtension(
+                    driver=task.node.driver,
+                    extension='vendor interface')
+
+            return self._get_vendor_passthru_metadata(
+                       task.driver.vendor.vendor_routes)
+
+    @messaging.expected_exceptions(exception.UnsupportedDriverExtension,
+                                   exception.DriverNotFound)
+    def get_driver_vendor_passthru_methods(self, context, driver_name):
+        """Retrieve information about vendor methods of the given driver.
+
+        :param context: an admin context.
+        :param driver_name: name of the driver.
+        :returns: dictionary of <method name>:<method metadata> entries.
+
+        """
+        # Any locking in a top-level vendor action will need to be done by the
+        # implementation, as there is little we could reasonably lock on here.
+        LOG.debug("RPC get_driver_vendor_passthru_methods for driver %s"
+                  % driver_name)
+        driver = self._get_driver(driver_name)
+        if not getattr(driver, 'vendor', None):
+            raise exception.UnsupportedDriverExtension(
+                driver=driver_name,
+                extension='vendor interface')
+
+        return self._get_vendor_passthru_metadata(driver.vendor.driver_routes)
 
     def _provisioning_error_handler(self, e, node, provision_state,
                                     target_provision_state):
@@ -491,35 +652,22 @@ class ConductorManager(periodic_task.PeriodicTasks):
         # want to add retries or extra synchronization here.
         with task_manager.acquire(context, node_id, shared=False) as task:
             node = task.node
-            # Only rebuild a node in ACTIVE, ERROR, or DEPLOYFAIL state
-            rebuild_states = [states.ACTIVE,
-                              states.ERROR,
-                              states.DEPLOYFAIL]
-            if rebuild and (node.provision_state not in rebuild_states):
-                valid_states_string = ', '.join(rebuild_states)
-                raise exception.InstanceDeployFailure(_(
-                    "RPC do_node_deploy called to rebuild %(node)s, but "
-                    "provision state is %(curstate)s. State must be one "
-                    "of : %(states)s.") % {'node': node.uuid,
-                     'curstate': node.provision_state,
-                     'states': valid_states_string})
-            elif node.provision_state != states.NOSTATE and not rebuild:
-                raise exception.InstanceDeployFailure(_(
-                    "RPC do_node_deploy called for %(node)s, but provision "
-                    "state is already %(state)s.") %
-                    {'node': node.uuid, 'state': node.provision_state})
-
             if node.maintenance:
                 raise exception.NodeInMaintenance(op=_('provisioning'),
                                                   node=node.uuid)
-
             try:
+                task.driver.power.validate(task)
                 task.driver.deploy.validate(task)
             except (exception.InvalidParameterValue,
                     exception.MissingParameterValue) as e:
                 raise exception.InstanceDeployFailure(_(
-                    "RPC do_node_deploy failed to validate deploy info. "
-                    "Error: %(msg)s") % {'msg': e})
+                    "RPC do_node_deploy failed to validate deploy or "
+                    "power info. Error: %(msg)s") % {'msg': e})
+
+            if rebuild:
+                event = 'rebuild'
+            else:
+                event = 'deploy'
 
             # Save the previous states so we can rollback the node to a
             # consistent state in case there's no free workers to do the
@@ -527,16 +675,23 @@ class ConductorManager(periodic_task.PeriodicTasks):
             previous_prov_state = node.provision_state
             previous_tgt_provision_state = node.target_provision_state
 
-            # Set target state to expose that work is in progress
-            node.provision_state = states.DEPLOYING
-            node.target_provision_state = states.DEPLOYDONE
-            node.last_error = None
-            node.save()
-
-            task.set_spawn_error_hook(self._provisioning_error_handler,
-                                      node, previous_prov_state,
-                                      previous_tgt_provision_state)
-            task.spawn_after(self._spawn_worker, self._do_node_deploy, task)
+            try:
+                task.process_event(event)
+                node.last_error = None
+                node.save()
+            except exception.InvalidState:
+                raise exception.InstanceDeployFailure(_(
+                    "Request received to %(what)s %(node)s, but "
+                    "this is not possible in the current state of "
+                    "'%(state)s'. ") % {'what': event,
+                                        'node': node.uuid,
+                                        'state': node.provision_state})
+            else:
+                task.set_spawn_error_hook(self._provisioning_error_handler,
+                                          node, previous_prov_state,
+                                          previous_tgt_provision_state)
+                task.spawn_after(self._spawn_worker,
+                                 self._do_node_deploy, task)
 
     def _do_node_deploy(self, task):
         """Prepare the environment and deploy a node."""
@@ -549,24 +704,26 @@ class ConductorManager(periodic_task.PeriodicTasks):
             # since there may be local persistent state
             node.conductor_affinity = self.conductor.id
         except Exception as e:
+            # NOTE(deva): there is no need to clear conductor_affinity
             with excutils.save_and_reraise_exception():
+                task.process_event('fail')
                 LOG.warning(_LW('Error in deploy of node %(node)s: %(err)s'),
                             {'node': task.node.uuid, 'err': e})
                 node.last_error = _("Failed to deploy. Error: %s") % e
-                node.provision_state = states.DEPLOYFAIL
-                node.target_provision_state = states.NOSTATE
-                # NOTE(deva): there is no need to clear conductor_affinity
         else:
             # NOTE(deva): Some drivers may return states.DEPLOYWAIT
             #             eg. if they are waiting for a callback
             if new_state == states.DEPLOYDONE:
-                node.target_provision_state = states.NOSTATE
-                node.provision_state = states.ACTIVE
+                task.process_event('done')
                 LOG.info(_LI('Successfully deployed node %(node)s with '
                              'instance %(instance)s.'),
                          {'node': node.uuid, 'instance': node.instance_uuid})
+            elif new_state == states.DEPLOYWAIT:
+                task.process_event('wait')
             else:
-                node.provision_state = new_state
+                LOG.error(_LE('Unexpected state %(state)s returned while '
+                              'deploying node %(node)s.'),
+                              {'state': new_state, 'node': node.uuid})
         finally:
             node.save()
 
@@ -592,20 +749,10 @@ class ConductorManager(periodic_task.PeriodicTasks):
 
         with task_manager.acquire(context, node_id, shared=False) as task:
             node = task.node
-            if node.provision_state not in [states.ACTIVE,
-                                            states.DEPLOYFAIL,
-                                            states.ERROR,
-                                            states.DEPLOYWAIT]:
-                raise exception.InstanceDeployFailure(_(
-                    "RPC do_node_tear_down "
-                    "not allowed for node %(node)s in state %(state)s")
-                    % {'node': node_id, 'state': node.provision_state})
-
             try:
                 # NOTE(ghe): Valid power driver values are needed to perform
                 # a tear-down. Deploy info is useful to purge the cache but not
                 # required for this method.
-
                 task.driver.power.validate(task)
             except (exception.InvalidParameterValue,
                     exception.MissingParameterValue) as e:
@@ -619,42 +766,47 @@ class ConductorManager(periodic_task.PeriodicTasks):
             previous_prov_state = node.provision_state
             previous_tgt_provision_state = node.target_provision_state
 
-            # set target state to expose that work is in progress
-            node.provision_state = states.DELETING
-            node.target_provision_state = states.DELETED
-            node.last_error = None
-            node.save()
-
-            task.set_spawn_error_hook(self._provisioning_error_handler,
-                                      node, previous_prov_state,
-                                      previous_tgt_provision_state)
-            task.spawn_after(self._spawn_worker, self._do_node_tear_down, task)
+            try:
+                task.process_event('delete')
+                node.last_error = None
+                node.save()
+            except exception.InvalidState:
+                raise exception.InstanceDeployFailure(_(
+                    "RPC do_node_tear_down "
+                    "not allowed for node %(node)s in state %(state)s")
+                    % {'node': node_id, 'state': node.provision_state})
+            else:
+                task.set_spawn_error_hook(self._provisioning_error_handler,
+                                          node, previous_prov_state,
+                                          previous_tgt_provision_state)
+                task.spawn_after(self._spawn_worker,
+                                self._do_node_tear_down, task)
 
     def _do_node_tear_down(self, task):
         """Internal RPC method to tear down an existing node deployment."""
         node = task.node
         try:
             task.driver.deploy.clean_up(task)
-            new_state = task.driver.deploy.tear_down(task)
+            task.driver.deploy.tear_down(task)
         except Exception as e:
             with excutils.save_and_reraise_exception():
                 LOG.warning(_LW('Error in tear_down of node %(node)s: '
                                 '%(err)s'),
                             {'node': task.node.uuid, 'err': e})
                 node.last_error = _("Failed to tear down. Error: %s") % e
-                node.provision_state = states.ERROR
-                node.target_provision_state = states.NOSTATE
+                task.process_event('error')
         else:
-            # NOTE(deva): Some drivers may return states.DELETING
-            #             eg. if they are waiting for a callback
-            if new_state == states.DELETED:
-                node.target_provision_state = states.NOSTATE
-                node.provision_state = states.NOSTATE
-                LOG.info(_LI('Successfully unprovisioned node %(node)s with '
-                             'instance %(instance)s.'),
-                         {'node': node.uuid, 'instance': node.instance_uuid})
-            else:
-                node.provision_state = new_state
+            # NOTE(deva): When tear_down finishes, the deletion is done
+            task.process_event('done')
+            LOG.info(_LI('Successfully unprovisioned node %(node)s with '
+                         'instance %(instance)s.'),
+                     {'node': node.uuid, 'instance': node.instance_uuid})
+            # NOTE(deva): Currently, NOSTATE is represented as None
+            #             However, FSM class treats a target_state of None as
+            #             the lack of a target state -- not a target of NOSTATE
+            #             Thus, until we migrate to an explicit AVAILABLE state
+            #             we need to clear the target_state here manually.
+            node.target_provision_state = None
         finally:
             # NOTE(deva): there is no need to unset conductor_affinity
             # because it is a reference to the most recent conductor which
@@ -665,7 +817,11 @@ class ConductorManager(periodic_task.PeriodicTasks):
 
     def _conductor_service_record_keepalive(self):
         while not self._keepalive_evt.is_set():
-            self.dbapi.touch_conductor(self.host)
+            try:
+                self.dbapi.touch_conductor(self.host)
+            except db_exception.DBConnectionError:
+                LOG.warning(_LW('Conductor could not connect to database '
+                                'while heartbeating.'))
             self._keepalive_evt.wait(CONF.conductor.heartbeat_interval)
 
     def _handle_sync_power_state_max_retries_exceeded(self, task,
@@ -681,6 +837,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
         node.power_state = actual_power_state
         node.last_error = msg
         node.maintenance = True
+        node.maintenance_reason = msg
         node.save()
         LOG.error(msg)
 
@@ -703,8 +860,6 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 raise exception.PowerStateFailure(_("Driver returns ERROR"
                                                     " state."))
         except Exception as e:
-            # TODO(rloo): change to IronicException, after
-            #             https://bugs.launchpad.net/ironic/+bug/1267693
             LOG.warning(_LW("During sync_power_state, could not get power "
                             "state for node %(node)s. Error: %(err)s."),
                             {'node': node.uuid, 'err': e})
@@ -756,8 +911,6 @@ class ConductorManager(periodic_task.PeriodicTasks):
             # so don't do that again here.
             utils.node_power_action(task, node.power_state)
         except Exception as e:
-            # TODO(rloo): change to IronicException after
-            # https://bugs.launchpad.net/ironic/+bug/1267693
             LOG.error(_LE("Failed to change power state of node %(node)s "
                           "to '%(state)s'."), {'node': node.uuid,
                                                'state': node.power_state})
@@ -991,34 +1144,6 @@ class ConductorManager(periodic_task.PeriodicTasks):
                     ret_dict[iface_name]['reason'] = reason
         return ret_dict
 
-    @messaging.expected_exceptions(exception.NodeLocked,
-                                   exception.NodeMaintenanceFailure)
-    def change_node_maintenance_mode(self, context, node_id, mode):
-        """Set node maintenance mode on or off.
-
-        :param context: request context.
-        :param node_id: node id or uuid.
-        :param mode: True or False.
-        :raises: NodeMaintenanceFailure
-
-        """
-        LOG.debug("RPC change_node_maintenance_mode called for node %(node)s"
-                  " with maintenance mode: %(mode)s" % {'node': node_id,
-                                                        'mode': mode})
-
-        with task_manager.acquire(context, node_id, shared=True) as task:
-            node = task.node
-            if mode is not node.maintenance:
-                node.maintenance = mode
-                node.save()
-            else:
-                msg = _("The node is already in maintenance mode") if mode \
-                        else _("The node is not in maintenance mode")
-                raise exception.NodeMaintenanceFailure(node=node_id,
-                                                       reason=msg)
-
-            return node
-
     @lockutils.synchronized(WORKER_SPAWN_lOCK, 'ironic-')
     def _spawn_worker(self, func, *args, **kwargs):
 
@@ -1241,8 +1366,9 @@ class ConductorManager(periodic_task.PeriodicTasks):
                        'event_type': 'hardware.ipmi.metrics.update'}
 
             try:
-                with task_manager.acquire(context, node_uuid, shared=True) \
-                         as task:
+                with task_manager.acquire(context,
+                                          node_uuid,
+                                          shared=True) as task:
                     task.driver.management.validate(task)
                     sensors_data = task.driver.management.get_sensors_data(
                         task)
@@ -1271,6 +1397,9 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 if message['payload']:
                     self.notifier.info(context, "hardware.ipmi.metrics",
                                        message)
+            finally:
+                # Yield on every iteration
+                eventlet.sleep(0)
 
     def _filter_out_unsupported_types(self, sensors_data):
         # support the CONF.send_sensor_data_types sensor types only

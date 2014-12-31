@@ -18,7 +18,6 @@ import mock
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.conductor import task_manager
-from ironic.db import api as db_api
 from ironic.drivers.modules import fake
 from ironic.drivers import utils as driver_utils
 from ironic.tests.conductor import utils as mgr_utils
@@ -30,7 +29,6 @@ class UtilsTestCase(db_base.DbTestCase):
 
     def setUp(self):
         super(UtilsTestCase, self).setUp()
-        self.dbapi = db_api.get_instance()
         mgr_utils.mock_the_extension_manager()
         self.driver = driver_factory.get_driver("fake")
         self.node = obj_utils.create_test_node(self.context)
@@ -50,77 +48,24 @@ class UtilsTestCase(db_base.DbTestCase):
         mock_fakea_validate.assert_called_once_with(method='first_method')
 
     def test_vendor_interface_validate_bad_method(self):
-        self.assertRaises(exception.UnsupportedDriverExtension,
+        self.assertRaises(exception.InvalidParameterValue,
                           self.driver.vendor.validate, method='fake_method')
 
     def test_vendor_interface_validate_none_method(self):
-        self.assertRaises(exception.InvalidParameterValue,
+        self.assertRaises(exception.MissingParameterValue,
                           self.driver.vendor.validate)
-
-    @mock.patch.object(fake.FakeVendorA, 'vendor_passthru')
-    @mock.patch.object(fake.FakeVendorB, 'vendor_passthru')
-    def test_vendor_interface_route_valid_method(self, mock_fakeb_vendor,
-                                                 mock_fakea_vendor):
-        self.driver.vendor.vendor_passthru('task',
-                                           method='first_method',
-                                           param1='fake1', param2='fake2')
-        mock_fakea_vendor.assert_called_once_with('task',
-                                            method='first_method',
-                                            param1='fake1', param2='fake2')
-        self.driver.vendor.vendor_passthru('task',
-                                           method='second_method',
-                                           param1='fake1', param2='fake2')
-        mock_fakeb_vendor.assert_called_once_with('task',
-                                            method='second_method',
-                                            param1='fake1', param2='fake2')
-
-    def test_driver_passthru_mixin_success(self):
-        vendor_a = fake.FakeVendorA()
-        vendor_a.driver_vendor_passthru = mock.Mock()
-        vendor_b = fake.FakeVendorB()
-        vendor_b.driver_vendor_passthru = mock.Mock()
-        driver_vendor_mapping = {
-            'method_a': vendor_a,
-            'method_b': vendor_b,
-        }
-        mixed_vendor = driver_utils.MixinVendorInterface(
-            {},
-            driver_vendor_mapping)
-        mixed_vendor.driver_vendor_passthru('context',
-                                            'method_a',
-                                            param1='p1')
-        vendor_a.driver_vendor_passthru.assert_called_once_with(
-            'context',
-            'method_a',
-            param1='p1')
-
-    def test_driver_passthru_mixin_unsupported(self):
-        mixed_vendor = driver_utils.MixinVendorInterface({}, {})
-        self.assertRaises(exception.UnsupportedDriverExtension,
-                          mixed_vendor.driver_vendor_passthru,
-                          'context',
-                          'fake_method',
-                          param='p1')
-
-    def test_driver_passthru_mixin_unspecified(self):
-        mixed_vendor = driver_utils.MixinVendorInterface({})
-        self.assertRaises(exception.UnsupportedDriverExtension,
-                          mixed_vendor.driver_vendor_passthru,
-                          'context',
-                          'fake_method',
-                          param='p1')
 
     def test_get_node_mac_addresses(self):
         ports = []
         ports.append(
             obj_utils.create_test_port(self.context,
-                    id=6, address='aa:bb:cc',
+                    address='aa:bb:cc',
                     uuid='bb43dc0b-03f2-4d2e-ae87-c02d7f33cc53',
                     node_id=self.node.id)
         )
         ports.append(
             obj_utils.create_test_port(self.context,
-                    id=7, address='dd:ee:ff',
+                    address='dd:ee:ff',
                     uuid='4fc26c0b-03f2-4d2e-ae87-c02d7f33c234',
                     node_id=self.node.id)
         )

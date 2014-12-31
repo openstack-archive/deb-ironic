@@ -28,7 +28,6 @@ from ironic.common import exception
 from ironic.common import states
 from ironic.conductor import manager as conductor_manager
 from ironic.conductor import rpcapi as conductor_rpcapi
-from ironic.db import api as dbapi
 from ironic import objects
 from ironic.tests import base as tests_base
 from ironic.tests.db import base
@@ -49,7 +48,6 @@ class RPCAPITestCase(base.DbTestCase):
 
     def setUp(self):
         super(RPCAPITestCase, self).setUp()
-        self.dbapi = dbapi.get_instance()
         self.fake_node = dbutils.get_test_node(driver='fake-driver')
         self.fake_node_obj = objects.Node._from_db_object(
                                                     objects.Node(self.context),
@@ -183,20 +181,22 @@ class RPCAPITestCase(base.DbTestCase):
                           node_id=self.fake_node['uuid'],
                           new_state=states.POWER_ON)
 
-    def test_pass_vendor_info(self):
+    def test_vendor_passthru(self):
         self._test_rpcapi('vendor_passthru',
                           'call',
-                          version='1.12',
+                          version='1.20',
                           node_id=self.fake_node['uuid'],
                           driver_method='test-driver-method',
+                          http_method='test-http-method',
                           info={"test_info": "test_value"})
 
     def test_driver_vendor_passthru(self):
         self._test_rpcapi('driver_vendor_passthru',
                           'call',
-                          version='1.14',
+                          version='1.20',
                           driver_name='test-driver-name',
                           driver_method='test-driver-method',
+                          http_method='test-http-method',
                           info={'test_key': 'test_value'})
 
     def test_do_node_deploy(self):
@@ -217,13 +217,6 @@ class RPCAPITestCase(base.DbTestCase):
                           'call',
                           version='1.5',
                           node_id=self.fake_node['uuid'])
-
-    def test_change_node_maintenance_mode(self):
-        self._test_rpcapi('change_node_maintenance_mode',
-                          'call',
-                          version='1.8',
-                          node_id=self.fake_node['uuid'],
-                          mode=True)
 
     def test_destroy_node(self):
         self._test_rpcapi('destroy_node',
@@ -276,3 +269,15 @@ class RPCAPITestCase(base.DbTestCase):
                           'call',
                           version='1.17',
                           node_id=self.fake_node['uuid'])
+
+    def test_get_node_vendor_passthru_methods(self):
+        self._test_rpcapi('get_node_vendor_passthru_methods',
+                          'call',
+                          version='1.21',
+                          node_id=self.fake_node['uuid'])
+
+    def test_get_driver_vendor_passthru_methods(self):
+        self._test_rpcapi('get_driver_vendor_passthru_methods',
+                          'call',
+                          version='1.21',
+                          driver_name='fake-driver')

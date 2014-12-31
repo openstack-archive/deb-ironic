@@ -27,6 +27,7 @@ from ironic.drivers.modules.drac import management as drac_mgmt
 from ironic.drivers.modules.drac import power as drac_power
 from ironic.drivers.modules import fake
 from ironic.drivers.modules import iboot
+from ironic.drivers.modules.ilo import management as ilo_management
 from ironic.drivers.modules.ilo import power as ilo_power
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
@@ -47,7 +48,8 @@ class FakeDriver(base.BaseDriver):
         self.a = fake.FakeVendorA()
         self.b = fake.FakeVendorB()
         self.mapping = {'first_method': self.a,
-                        'second_method': self.b}
+                        'second_method': self.b,
+                        'third_method_sync': self.b}
         self.vendor = utils.MixinVendorInterface(self.mapping)
         self.console = fake.FakeConsole()
         self.management = fake.FakeManagement()
@@ -108,6 +110,7 @@ class FakeSeaMicroDriver(base.BaseDriver):
         self.deploy = fake.FakeDeploy()
         self.management = seamicro.Management()
         self.vendor = seamicro.VendorPassthru()
+        self.console = seamicro.ShellinaboxConsole()
 
 
 class FakeAgentDriver(base.BaseDriver):
@@ -141,6 +144,7 @@ class FakeIloDriver(base.BaseDriver):
                     reason=_("Unable to import proliantutils library"))
         self.power = ilo_power.IloPower()
         self.deploy = fake.FakeDeploy()
+        self.management = ilo_management.IloManagement()
 
 
 class FakeDracDriver(base.BaseDriver):

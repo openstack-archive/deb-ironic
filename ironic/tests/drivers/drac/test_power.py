@@ -19,12 +19,13 @@ import mock
 
 from ironic.common import exception
 from ironic.common import states
-from ironic.db import api as dbapi
+from ironic.conductor import task_manager
 from ironic.drivers.modules.drac import client as drac_client
 from ironic.drivers.modules.drac import common as drac_common
 from ironic.drivers.modules.drac import power as drac_power
 from ironic.drivers.modules.drac import resource_uris
-from ironic.tests import base
+from ironic.tests.conductor import utils as mgr_utils
+from ironic.tests.db import base
 from ironic.tests.db import utils as db_utils
 from ironic.tests.drivers.drac import utils as test_utils
 
@@ -33,16 +34,15 @@ INFO_DICT = db_utils.get_test_drac_info()
 
 @mock.patch.object(drac_client, 'pywsman')
 @mock.patch.object(drac_power, 'pywsman')
-class DracPowerInternalMethodsTestCase(base.TestCase):
+class DracPowerInternalMethodsTestCase(base.DbTestCase):
 
     def setUp(self):
         super(DracPowerInternalMethodsTestCase, self).setUp()
         driver_info = INFO_DICT
-        db_node = db_utils.get_test_node(driver='fake_drac',
-                                         driver_info=driver_info,
-                                         instance_uuid='instance_uuid_123')
-        self.dbapi = dbapi.get_instance()
-        self.node = self.dbapi.create_node(db_node)
+        self.node = db_utils.create_test_node(
+            driver='fake_drac',
+            driver_info=driver_info,
+            instance_uuid='instance_uuid_123')
 
     def test__get_power_state(self, mock_power_pywsman, mock_client_pywsman):
         result_xml = test_utils.build_soap_xml([{'EnabledState': '2'}],
@@ -107,16 +107,16 @@ class DracPowerInternalMethodsTestCase(base.TestCase):
             resource_uris.DCIM_ComputerSystem, 'RequestStateChange')
 
 
-class DracPowerTestCase(base.TestCase):
+class DracPowerTestCase(base.DbTestCase):
 
     def setUp(self):
         super(DracPowerTestCase, self).setUp()
         driver_info = INFO_DICT
-        db_node = db_utils.get_test_node(driver='fake_drac',
-                                         driver_info=driver_info,
-                                         instance_uuid='instance_uuid_123')
-        self.dbapi = dbapi.get_instance()
-        self.node = self.dbapi.create_node(db_node)
+        mgr_utils.mock_the_extension_manager(driver="fake_drac")
+        self.node = db_utils.create_test_node(
+            driver='fake_drac',
+            driver_info=driver_info,
+            instance_uuid='instance_uuid_123')
 
     def test_get_properties(self):
         expected = drac_common.COMMON_PROPERTIES
@@ -135,20 +135,18 @@ class DracPowerTestCase(base.TestCase):
 
     @mock.patch.object(drac_power, '_set_power_state')
     def test_set_power_state(self, mock_set_power_state):
-        driver = drac_power.DracPower()
-        task = mock.Mock()
-        task.node.return_value = self.node
-
-        driver.set_power_state(task, states.POWER_ON)
-        mock_set_power_state.assert_called_once_with(task.node,
-                                                     states.POWER_ON)
+        mock_set_power_state.return_value = states.POWER_ON
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.driver.power.set_power_state(task, states.POWER_ON)
+            mock_set_power_state.assert_called_once_with(task.node,
+                                                         states.POWER_ON)
 
     @mock.patch.object(drac_power, '_set_power_state')
     def test_reboot(self, mock_set_power_state):
-        driver = drac_power.DracPower()
-        task = mock.Mock()
-        task.node.return_value = self.node
-
-        driver.reboot(task)
-        mock_set_power_state.assert_called_once_with(task.node,
-                                                     states.REBOOT)
+        mock_set_power_state.return_value = states.REBOOT
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.driver.power.reboot(task)
+            mock_set_power_state.assert_called_once_with(task.node,
+                                                         states.REBOOT)

@@ -35,33 +35,40 @@ class ConductorAPI(object):
 
     API version history:
 
-        1.0 - Initial version.
-              Included get_node_power_status
-        1.1 - Added update_node and start_power_state_change.
-        1.2 - Added vendor_passhthru.
-        1.3 - Rename start_power_state_change to change_node_power_state.
-        1.4 - Added do_node_deploy and do_node_tear_down.
-        1.5 - Added validate_driver_interfaces.
-        1.6 - change_node_power_state, do_node_deploy and do_node_tear_down
-              accept node id instead of node object.
-        1.7 - Added topic parameter to RPC methods.
-        1.8 - Added change_node_maintenance_mode.
-        1.9 - Added destroy_node.
-        1.10 - Remove get_node_power_state
-        1.11 - Added get_console_information, set_console_mode.
-        1.12 - validate_vendor_action, do_vendor_action replaced by single
-              vendor_passthru method.
-        1.13 - Added update_port.
-        1.14 - Added driver_vendor_passthru.
-        1.15 - Added rebuild parameter to do_node_deploy.
-        1.16 - Added get_driver_properties.
-        1.17 - Added set_boot_device, get_boot_device and
-               get_supported_boot_devices.
+    |    1.0 - Initial version.
+    |          Included get_node_power_status
+    |    1.1 - Added update_node and start_power_state_change.
+    |    1.2 - Added vendor_passthru.
+    |    1.3 - Rename start_power_state_change to change_node_power_state.
+    |    1.4 - Added do_node_deploy and do_node_tear_down.
+    |    1.5 - Added validate_driver_interfaces.
+    |    1.6 - change_node_power_state, do_node_deploy and do_node_tear_down
+    |          accept node id instead of node object.
+    |    1.7 - Added topic parameter to RPC methods.
+    |    1.8 - Added change_node_maintenance_mode.
+    |    1.9 - Added destroy_node.
+    |    1.10 - Remove get_node_power_state
+    |    1.11 - Added get_console_information, set_console_mode.
+    |    1.12 - validate_vendor_action, do_vendor_action replaced by single
+    |          vendor_passthru method.
+    |    1.13 - Added update_port.
+    |    1.14 - Added driver_vendor_passthru.
+    |    1.15 - Added rebuild parameter to do_node_deploy.
+    |    1.16 - Added get_driver_properties.
+    |    1.17 - Added set_boot_device, get_boot_device and
+    |          get_supported_boot_devices.
+    |    1.18 - Remove change_node_maintenance_mode.
+    |    1.19 - Change return value of vendor_passthru and
+    |           driver_vendor_passthru
+    |    1.20 - Added http_method parameter to vendor_passthru and
+    |           driver_vendor_passthru
+    |    1.21 - Added get_node_vendor_passthru_methods and
+    |           get_driver_vendor_passthru_methods
 
     """
 
     # NOTE(rloo): This must be in sync with manager.ConductorManager's.
-    RPC_API_VERSION = '1.17'
+    RPC_API_VERSION = '1.21'
 
     def __init__(self, topic=None):
         super(ConductorAPI, self).__init__()
@@ -79,8 +86,7 @@ class ConductorAPI(object):
         self.ring_manager = hash_ring.HashRingManager()
 
     def get_topic_for(self, node):
-        """Get the RPC topic for the conductor service which the node
-        is mapped to.
+        """Get the RPC topic for the conductor service the node is mapped to.
 
         :param node: a node object.
         :returns: an RPC topic string.
@@ -99,9 +105,11 @@ class ConductorAPI(object):
             raise exception.NoValidHost(reason=reason)
 
     def get_topic_for_driver(self, driver_name):
-        """Get an RPC topic which will route messages to a conductor which
-        supports the specified driver. A conductor is selected at
-        random from the set of qualified conductors.
+        """Get RPC topic name for a conductor supporting the given driver.
+
+        The topic is used to route messages to the conductor supporting
+        the specified driver. A conductor is selected at random from the
+        set of qualified conductors.
 
         :param driver_name: the name of the driver to route to.
         :returns: an RPC topic string.
@@ -136,7 +144,9 @@ class ConductorAPI(object):
         return cctxt.call(context, 'update_node', node_obj=node_obj)
 
     def change_node_power_state(self, context, node_id, new_state, topic=None):
-        """Synchronously, acquire lock and start the conductor background task
+        """Change a node's power state.
+
+        Synchronously, acquire lock and start the conductor background task
         to change power state of a node.
 
         :param context: request context.
@@ -151,14 +161,19 @@ class ConductorAPI(object):
         return cctxt.call(context, 'change_node_power_state', node_id=node_id,
                           new_state=new_state)
 
-    def vendor_passthru(self, context, node_id, driver_method, info,
-                        topic=None):
-        """Synchronously, acquire lock, validate given parameters and start
-        the conductor background task for specified vendor action.
+    def vendor_passthru(self, context, node_id, driver_method, http_method,
+                        info, topic=None):
+        """Receive requests for vendor-specific actions.
+
+        Synchronously validate driver specific info or get driver status,
+        and if successful invokes the vendor method. If the method mode
+        is async the conductor will start background worker to perform
+        vendor action.
 
         :param context: request context.
         :param node_id: node id or uuid.
         :param driver_method: name of method for driver.
+        :param http_method: the HTTP method used for the request.
         :param info: info for node driver.
         :param topic: RPC topic. Defaults to self.topic.
         :raises: InvalidParameterValue if supplied info is not valid.
@@ -167,19 +182,33 @@ class ConductorAPI(object):
                  vendor interface.
         :raises: NoFreeConductorWorker when there is no free worker to start
                  async task.
+        :raises: NodeLocked if node is locked by another conductor.
+        :returns: A tuple containing the response of the invoked method
+                  and a boolean value indicating whether the method was
+                  invoked asynchronously (True) or synchronously (False).
+                  If invoked asynchronously the response field will be
+                  always None.
 
         """
-        cctxt = self.client.prepare(topic=topic or self.topic, version='1.12')
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.20')
         return cctxt.call(context, 'vendor_passthru', node_id=node_id,
-                          driver_method=driver_method, info=info)
+                          driver_method=driver_method,
+                          http_method=http_method,
+                          info=info)
 
-    def driver_vendor_passthru(self, context, driver_name, driver_method, info,
-                        topic=None):
+    def driver_vendor_passthru(self, context, driver_name, driver_method,
+                               http_method, info, topic=None):
         """Pass vendor-specific calls which don't specify a node to a driver.
+
+        Handles driver-level vendor passthru calls. These calls don't
+        require a node UUID and are executed on a random conductor with
+        the specified driver. If the method mode is async the conductor
+        will start background worker to perform vendor action.
 
         :param context: request context.
         :param driver_name: name of the driver on which to call the method.
         :param driver_method: name of the vendor method, for use by the driver.
+        :param http_method: the HTTP method used for the request.
         :param info: data to pass through to the driver.
         :param topic: RPC topic. Defaults to self.topic.
         :raises: InvalidParameterValue for parameter errors.
@@ -187,13 +216,49 @@ class ConductorAPI(object):
         :raises: UnsupportedDriverExtension if the driver doesn't have a vendor
                  interface, or if the vendor interface does not support the
                  specified driver_method.
+        :raises: DriverNotFound if the supplied driver is not loaded.
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task.
+        :returns: A tuple containing the response of the invoked method
+                  and a boolean value indicating whether the method was
+                  invoked asynchronously (True) or synchronously (False).
+                  If invoked asynchronously the response field will be
+                  always None.
 
         """
-        cctxt = self.client.prepare(topic=topic or self.topic, version='1.14')
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.20')
         return cctxt.call(context, 'driver_vendor_passthru',
                           driver_name=driver_name,
                           driver_method=driver_method,
+                          http_method=http_method,
                           info=info)
+
+    def get_node_vendor_passthru_methods(self, context, node_id, topic=None):
+        """Retrieve information about vendor methods of the given node.
+
+        :param context: an admin context.
+        :param node_id: the id or uuid of a node.
+        :param topic: RPC topic. Defaults to self.topic.
+        :returns: dictionary of <method name>:<method metadata> entries.
+
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.21')
+        return cctxt.call(context, 'get_node_vendor_passthru_methods',
+                          node_id=node_id)
+
+    def get_driver_vendor_passthru_methods(self, context, driver_name,
+                                            topic=None):
+        """Retrieve information about vendor methods of the given driver.
+
+        :param context: an admin context.
+        :param driver_name: name of the driver.
+        :param topic: RPC topic. Defaults to self.topic.
+        :returns: dictionary of <method name>:<method metadata> entries.
+
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.21')
+        return cctxt.call(context, 'get_driver_vendor_passthru_methods',
+                          driver_name=driver_name)
 
     def do_node_deploy(self, context, node_id, rebuild, topic=None):
         """Signal to conductor service to perform a deployment.
@@ -248,21 +313,6 @@ class ConductorAPI(object):
         cctxt = self.client.prepare(topic=topic or self.topic, version='1.5')
         return cctxt.call(context, 'validate_driver_interfaces',
                           node_id=node_id)
-
-    def change_node_maintenance_mode(self, context, node_id, mode, topic=None):
-        """Set node maintenance mode on or off.
-
-        :param context: request context.
-        :param node_id: node id or uuid.
-        :param mode: True or False.
-        :param topic: RPC topic. Defaults to self.topic.
-        :returns: a node object.
-        :raises: NodeMaintenanceFailure.
-
-        """
-        cctxt = self.client.prepare(topic=topic or self.topic, version='1.8')
-        return cctxt.call(context, 'change_node_maintenance_mode',
-                          node_id=node_id, mode=mode)
 
     def destroy_node(self, context, node_id, topic=None):
         """Delete a node.

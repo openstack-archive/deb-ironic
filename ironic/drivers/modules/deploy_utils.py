@@ -22,15 +22,18 @@ import time
 
 from oslo.config import cfg
 from oslo.utils import excutils
+from oslo_concurrency import processutils
 
 from ironic.common import disk_partitioner
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
+from ironic.common import images
+from ironic.common import states
 from ironic.common import utils
+from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import image_cache
 from ironic.openstack.common import log as logging
-from ironic.openstack.common import processutils
 
 
 LOG = logging.getLogger(__name__)
@@ -144,6 +147,14 @@ def dd(src, dst):
     utils.dd(src, dst, 'bs=1M', 'oflag=direct')
 
 
+def populate_image(src, dst):
+    data = images.qemu_img_info(src)
+    if data.file_format == 'raw':
+        dd(src, dst)
+    else:
+        images.convert_image(src, dst, 'raw', True)
+
+
 def mkswap(dev, label='swap1'):
     """Execute mkswap on a device."""
     utils.mkfs('swap', dev, label)
@@ -195,15 +206,18 @@ def notify(address, port):
 
 def get_dev(address, port, iqn, lun):
     """Returns a device path for given parameters."""
-    dev = "/dev/disk/by-path/ip-%s:%s-iscsi-%s-lun-%s" \
-            % (address, port, iqn, lun)
+    dev = ("/dev/disk/by-path/ip-%s:%s-iscsi-%s-lun-%s"
+           % (address, port, iqn, lun))
     return dev
 
 
-def get_image_mb(image_path):
+def get_image_mb(image_path, virtual_size=True):
     """Get size of an image in Megabyte."""
     mb = 1024 * 1024
-    image_byte = os.path.getsize(image_path)
+    if not virtual_size:
+        image_byte = os.path.getsize(image_path)
+    else:
+        image_byte = images.converted_size(image_path)
     # round up size to MB
     image_mb = int((image_byte + mb - 1) / mb)
     return image_mb
@@ -311,7 +325,7 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
         raise exception.InstanceDeployFailure(
                          _("Ephemeral device '%s' not found") % ephemeral_part)
 
-    dd(image_path, root_part)
+    populate_image(image_path, root_part)
 
     if swap_part:
         mkswap(swap_part)
@@ -402,18 +416,19 @@ def check_for_missing_params(info_dict, error_msg, param_prefix=''):
             missing_info.append(param_prefix + label)
 
     if missing_info:
-        exc_msg = _("%(error_msg)s. The following parameters were "
-                    "not passed to ironic: %(missing_info)s")
+        exc_msg = _("%(error_msg)s. Missing are: %(missing_info)s")
         raise exception.MissingParameterValue(exc_msg %
                     {'error_msg': error_msg, 'missing_info': missing_info})
 
 
-def fetch_images(ctx, cache, images_info):
+def fetch_images(ctx, cache, images_info, force_raw=True):
     """Check for available disk space and fetch images using ImageCache.
 
     :param ctx: context
     :param cache: ImageCache instance to use for fetching
-    :param images_info: list of tuples (image uuid, destination path)
+    :param images_info: list of tuples (image href, destination path)
+    :param force_raw: boolean value, whether to convert the image to raw
+                      format
     :raises: InstanceDeployFailure if unable to find enough disk space
     """
 
@@ -426,5 +441,34 @@ def fetch_images(ctx, cache, images_info):
     # if disk space is used between the check and actual download.
     # This is probably unavoidable, as we can't control other
     # (probably unrelated) processes
-    for uuid, path in images_info:
-        cache.fetch_image(uuid, path, ctx=ctx)
+    for href, path in images_info:
+        cache.fetch_image(href, path, ctx=ctx, force_raw=force_raw)
+
+
+def set_failed_state(task, msg):
+    """Sets the deploy status as failed with relevant messages.
+
+    This method sets the deployment as fail with the given message.
+    It sets node's provision_state to DEPLOYFAIL and updates last_error
+    with the given error message. It also powers off the baremetal node.
+
+    :param task: a TaskManager instance containing the node to act on.
+    :param msg: the message to set in last_error of the node.
+    """
+    node = task.node
+    node.provision_state = states.DEPLOYFAIL
+    node.target_provision_state = states.NOSTATE
+    node.save()
+    try:
+        manager_utils.node_power_action(task, states.POWER_OFF)
+    except Exception:
+        msg2 = (_LE('Node %s failed to power off while handling deploy '
+                    'failure. This may be a serious condition. Node '
+                    'should be removed from Ironic or put in maintenance '
+                    'mode until the problem is resolved.') % node.uuid)
+        LOG.exception(msg2)
+    finally:
+        # NOTE(deva): node_power_action() erases node.last_error
+        #             so we need to set it again here.
+        node.last_error = msg
+        node.save()

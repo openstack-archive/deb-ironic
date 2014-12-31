@@ -17,6 +17,8 @@
 
 import fixtures
 import mock
+from oslo.config import cfg
+from oslo_concurrency import processutils
 import paramiko
 
 from ironic.common import boot_devices
@@ -25,16 +27,13 @@ from ironic.common import exception
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
-from ironic.db import api as dbapi
 from ironic.drivers.modules import ssh
 from ironic.drivers import utils as driver_utils
-from ironic.openstack.common import processutils
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
 from ironic.tests.objects import utils as obj_utils
 
-from oslo.config import cfg
 
 CONF = cfg.CONF
 
@@ -274,8 +273,6 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
 
         info = ssh._parse_driver_info(self.node)
 
-        exec_ssh_mock.return_value = (
-            '"NodeName" {b43c4982-110c-4c29-9325-d5f41b053513}', '')
         info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
         get_hosts_name_mock.return_value = None
         self.assertRaises(exception.NodeNotFound,
@@ -283,11 +280,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
                           self.sshclient,
                           info)
 
-        ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
-                             info['cmd_set']['list_running'])
-
-        exec_ssh_mock.assert_called_once_with(self.sshclient, ssh_cmd)
         get_hosts_name_mock.assert_called_once_with(self.sshclient, info)
+        exec_ssh_mock.assert_not_called()
 
     @mock.patch.object(processutils, 'ssh_execute')
     def test__get_power_status_exception(self, exec_ssh_mock):
@@ -299,7 +293,7 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
                           self.sshclient,
                           info)
         ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
-                             info['cmd_set']['list_running'])
+                             info['cmd_set']['list_all'])
         exec_ssh_mock.assert_called_once_with(
                 self.sshclient, ssh_cmd)
 
@@ -523,8 +517,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
             def close(self):
                 pass
 
-        with mock.patch.object(self.sshclient, 'exec_command') \
-                as exec_command_mock:
+        with mock.patch.object(self.sshclient,
+                               'exec_command') as exec_command_mock:
             exec_command_mock.return_value = (Stream(),
                                               Stream('hello'),
                                               Stream())
@@ -550,8 +544,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
             def close(self):
                 pass
 
-        with mock.patch.object(self.sshclient, 'exec_command') \
-                as exec_command_mock:
+        with mock.patch.object(self.sshclient,
+                               'exec_command') as exec_command_mock:
             exec_command_mock.return_value = (Stream(),
                                               Stream('hello'),
                                               Stream())
@@ -571,7 +565,6 @@ class SSHDriverTestCase(db_base.DbTestCase):
         self.node = obj_utils.create_test_node(
                 self.context, driver='fake_ssh',
                 driver_info=db_utils.get_test_ssh_info())
-        self.dbapi = dbapi.get_instance()
         self.port = obj_utils.create_test_port(self.context,
                                                node_id=self.node.id)
         self.sshclient = paramiko.SSHClient()
@@ -599,13 +592,12 @@ class SSHDriverTestCase(db_base.DbTestCase):
     def test_validate_fail_no_port(self):
         new_node = obj_utils.create_test_node(
                 self.context,
-                id=321,
                 uuid='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
                 driver='fake_ssh',
                 driver_info=db_utils.get_test_ssh_info())
         with task_manager.acquire(self.context, new_node.uuid,
                                   shared=True) as task:
-            self.assertRaises(exception.InvalidParameterValue,
+            self.assertRaises(exception.MissingParameterValue,
                               task.driver.power.validate,
                               task)
 
@@ -932,13 +924,31 @@ class SSHDriverTestCase(db_base.DbTestCase):
             self.assertEqual(expected,
                              self.driver.management.get_boot_device(task))
 
+    @mock.patch.object(ssh, '_get_connection')
+    @mock.patch.object(ssh, '_get_hosts_name_for_node')
+    @mock.patch.object(ssh, '_ssh_execute')
+    def test_get_power_state_vmware(self, mock_exc, mock_h, mock_get_conn):
+        # To see replacing {_NodeName_} in vmware's list_running
+        nodename = 'fakevm'
+        mock_h.return_value = nodename
+        mock_get_conn.return_value = self.sshclient
+        mock_exc.return_value = (nodename, '')
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node['driver_info']['ssh_virt_type'] = 'vmware'
+            power_state = self.driver.power.get_power_state(task)
+            self.assertEqual(states.POWER_ON, power_state)
+        expected_cmd = ("LC_ALL=C /bin/vim-cmd vmsvc/power.getstate "
+                        "%(node)s | grep 'Powered on' >/dev/null && "
+                        "echo '\"%(node)s\"' || true") % {'node': nodename}
+        mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
+
     def test_management_interface_validate_good(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             task.driver.management.validate(task)
 
     def test_management_interface_validate_fail(self):
         # Missing SSH driver_info information
-        node = obj_utils.create_test_node(self.context, id=2,
+        node = obj_utils.create_test_node(self.context,
                                           uuid=utils.generate_uuid(),
                                           driver='fake_ssh')
         with task_manager.acquire(self.context, node.uuid) as task:

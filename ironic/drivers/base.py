@@ -18,11 +18,18 @@ Abstract base classes for drivers.
 """
 
 import abc
+import collections
+import functools
+import inspect
 
+from oslo.utils import excutils
 import six
 
 from ironic.common import exception
-from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.openstack.common import log as logging
+
+LOG = logging.getLogger(__name__)
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -349,17 +356,109 @@ class RescueInterface(object):
         """
 
 
+# Representation of a single vendor method metadata
+VendorMetadata = collections.namedtuple('VendorMetadata', ['method',
+                                                           'metadata'])
+
+
+def _passthru(http_methods, method=None, async=True, driver_passthru=False,
+              description=None):
+    """A decorator for registering a function as a passthru function.
+
+    Decorator ensures function is ready to catch any ironic exceptions
+    and reraise them after logging the issue. It also catches non-ironic
+    exceptions reraising them as a VendorPassthruException after writing
+    a log.
+
+    Logs need to be added because even though the exception is being
+    reraised, it won't be handled if it is an async. call.
+
+    :param http_methods: A list of supported HTTP methods by the vendor
+                         function.
+    :param method: an arbitrary string describing the action to be taken.
+    :param async: Boolean value. If True invoke the passthru function
+                  asynchronously; if False, synchronously. If a passthru
+                  function touches the BMC we strongly recommend it to
+                  run asynchronously. Defaults to True.
+    :param driver_passthru: Boolean value. True if this is a driver vendor
+                            passthru method, and False if it is a node
+                            vendor passthru method.
+    :param description: a string shortly describing what the method does.
+
+    """
+    def handle_passthru(func):
+        api_method = method
+        if api_method is None:
+            api_method = func.__name__
+
+        supported_ = [i.upper() for i in http_methods]
+        description_ = description or ''
+        metadata = VendorMetadata(api_method, {'http_methods': supported_,
+                                               'async': async,
+                                               'description': description_})
+        if driver_passthru:
+            func._driver_metadata = metadata
+        else:
+            func._vendor_metadata = metadata
+
+        passthru_logmessage = _LE('vendor_passthru failed with method %s')
+
+        @functools.wraps(func)
+        def passthru_handler(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except exception.IronicException as e:
+                with excutils.save_and_reraise_exception():
+                    LOG.exception(passthru_logmessage, api_method)
+            except Exception as e:
+                # catch-all in case something bubbles up here
+                LOG.exception(passthru_logmessage, api_method)
+                raise exception.VendorPassthruException(message=e)
+        return passthru_handler
+    return handle_passthru
+
+
+def passthru(http_methods, method=None, async=True, description=None):
+    return _passthru(http_methods, method, async, driver_passthru=False,
+                     description=description)
+
+
+def driver_passthru(http_methods, method=None, async=True, description=None):
+    return _passthru(http_methods, method, async, driver_passthru=True,
+                     description=description)
+
+
 @six.add_metaclass(abc.ABCMeta)
 class VendorInterface(object):
     """Interface for all vendor passthru functionality.
 
-    Additional vendor- or driver-specific capabilities should be implemented as
-    private methods and invoked from vendor_passthru() or
-    driver_vendor_passthru().
+    Additional vendor- or driver-specific capabilities should be
+    implemented as a method in the class inheriting from this class and
+    use the @passthru or @driver_passthru decorators.
 
-    driver_vendor_passthru() is a blocking call - methods implemented here
-    should be short-lived.
+    Methods decorated with @driver_passthru should be short-lived because
+    it is a blocking call.
     """
+
+    def __new__(cls, *args, **kwargs):
+        inst = super(VendorInterface, cls).__new__(cls, *args, **kwargs)
+
+        inst.vendor_routes = {}
+        inst.driver_routes = {}
+
+        for name, ref in inspect.getmembers(inst, predicate=inspect.ismethod):
+            vmeta = getattr(ref, '_vendor_metadata', None)
+            dmeta = getattr(ref, '_driver_metadata', None)
+
+            if vmeta is not None:
+                vmeta.metadata['func'] = ref
+                inst.vendor_routes.update({vmeta.method: vmeta.metadata})
+
+            if dmeta is not None:
+                dmeta.metadata['func'] = ref
+                inst.driver_routes.update({dmeta.method: dmeta.metadata})
+
+        return inst
 
     @abc.abstractmethod
     def get_properties(self):
@@ -378,39 +477,22 @@ class VendorInterface(object):
         :param kwargs: info for action.
         :raises: UnsupportedDriverExtension if 'method' can not be mapped to
                  the supported interfaces.
-        :raises: InvalidParameterValue if **kwargs does not contain 'method'.
+        :raises: InvalidParameterValue if kwargs does not contain 'method'.
         :raises: MissingParameterValue
         """
 
-    @abc.abstractmethod
-    def vendor_passthru(self, task, **kwargs):
-        """Receive requests for vendor-specific actions.
+    def driver_validate(self, method, **kwargs):
+        """Validate driver-vendor-passthru actions.
 
-        :param task: a task from TaskManager.
+        If invalid, raises an exception; otherwise returns None.
+
+        :param method: method to be validated
         :param kwargs: info for action.
-
-        :raises: UnsupportedDriverExtension if 'method' can not be mapped to
-                 the supported interfaces.
-        :raises: InvalidParameterValue if **kwargs does not contain 'method'.
-        :raises: MissingParameterValue when a required parameter is missing
+        :raises: MissingParameterValue if kwargs does not contain
+                 certain parameter.
+        :raises: InvalidParameterValue if parameter does not match.
         """
-
-    def driver_vendor_passthru(self, context, method, **kwargs):
-        """Handle top-level (ie, no node is specified) vendor actions. These
-        allow a vendor interface to expose additional cross-node API
-        functionality.
-
-        VendorInterface subclasses are explicitly not required to implement
-        this in order to maintain backwards compatibility with existing
-        drivers.
-
-        :param context: a context for this action.
-        :param method: an arbitrary string describing the action to be taken.
-        :param kwargs: arbitrary parameters to the passthru method.
-        """
-        raise exception.UnsupportedDriverExtension(
-            _('Vendor interface does not support driver vendor_passthru '
-              'method: %s') % method)
+        pass
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -470,10 +552,13 @@ class ManagementInterface(object):
         :param task: a task from TaskManager.
         :raises: MissingParameterValue if a required parameter is missing
         :returns: a dictionary containing:
-            :boot_device: the boot device, one of
-                :mod:`ironic.common.boot_devices` or None if it is unknown.
-            :persistent: Whether the boot device will persist to all
-                future boots or not, None if it is unknown.
+
+            :boot_device:
+                the boot device, one of :mod:`ironic.common.boot_devices` or
+                None if it is unknown.
+            :persistent:
+                Whether the boot device will persist to all future boots or
+                not, None if it is unknown.
 
         """
 
@@ -486,7 +571,11 @@ class ManagementInterface(object):
         :raises: FailedToParseSensorData when parsing sensor data fails.
         :returns: returns a consistent format dict of sensor data grouped by
                   sensor type, which can be processed by Ceilometer.
-                  eg, {
+                  eg,
+
+                  ::
+
+                      {
                         'Sensor Type 1': {
                           'Sensor ID 1': {
                             'Sensor Reading': 'current value',
