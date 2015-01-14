@@ -1,3 +1,12 @@
+ironic (2014.2-3) experimental; urgency=medium
+
+  * Only doing pkgos_dbc_postinst and ironic-dbsync if ironic/configure_db
+    is set to true.
+  * ironic/configure_db default value is now false.
+  * Build-depends on openstack-pkg-tools (>= 22~).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 15 Jan 2015 00:14:51 +0100
+
 ironic (2014.2-2) experimental; urgency=medium
 
   * Cleans /var/lib/ironic/{cache, ironicdb} on purge. (Closes: #768561)
