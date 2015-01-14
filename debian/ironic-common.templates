@@ -9,7 +9,7 @@
 
 Template: ironic/configure_db
 Type: boolean
-Default: true
+Default: false
 _Description: Set up a database for Ironic?
  No database has been set up for Ironic to use. Before continuing, you should
  make sure you have the following information:
