@@ -1,6 +1,8 @@
 ironic (2015.1~b1-1) UNRELEASED; urgency=medium
 
   * New upstream release.
+  * Now handles rabbitmq & keystone auth credentials & ironic-api endpoint
+    using debconf.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 31 Dec 2014 16:22:59 +0100
 

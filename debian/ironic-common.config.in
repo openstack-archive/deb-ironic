@@ -10,5 +10,7 @@ CONF=/etc/ironic/ironic.conf
 
 pkgos_var_user_group ironic
 pkgos_dbc_read_conf -pkg ironic-common ${CONF} database connection ironic $@
+pkgos_rabbit_read_conf ${CONF} DEFAULT ironic
+pkgos_read_admin_creds ${CONF} keystone_authtoken ironic
 
 exit 0

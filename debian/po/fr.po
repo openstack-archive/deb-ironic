@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: neutron\n"
 "Report-Msgid-Bugs-To: ironic@packages.debian.org\n"
-"POT-Creation-Date: 2013-11-26 16:52+0800\n"
+"POT-Creation-Date: 2015-02-04 12:49+0100\n"
 "PO-Revision-Date: 2013-10-31 11:05+0100\n"
 "Last-Translator: Julien Patriarca <leatherface@debian.org>\n"
 "Language-Team: FRENCH <debian-l10n-french@lists.debian.org>\n"
@@ -68,40 +68,136 @@ msgstr ""
 "Vous pouvez modifier ce réglage plus tard en lançant « dpkg-reconfigure -"
 "plow ironic-common »."
 
-#~ msgid "Authentication server hostname:"
-#~ msgstr "Nom d'hôte du serveur d'authentification :"
+#. Type: string
+#. Description
+#: ../ironic-common.templates:3001
+msgid "IP address of your RabbitMQ host:"
+msgstr "Adresse IP de votre hôte RabbitMQ :"
 
-#~ msgid ""
-#~ "Please specify the hostname of your Neutron authentication server. "
-#~ "Typically this is also the hostname of your OpenStack Identity Service "
-#~ "(Keystone)."
-#~ msgstr ""
-#~ "Veuillez indiquer le nom d'hôte du serveur d'authentification Neutron. En "
-#~ "général, il s'agit du nom d'hôte du Service d'Identité OpenStack "
-#~ "(Keystone)."
+#. Type: string
+#. Description
+#. Type: string
+#. Description
+#. Type: password
+#. Description
+#: ../ironic-common.templates:3001 ../ironic-common.templates:4001
+#: ../ironic-common.templates:5001
+msgid ""
+"In order to interoperate with other components of OpenStack, this package "
+"needs to connect to a central RabbitMQ server."
+msgstr ""
+"Afin de pouvoir interagir avec d'autres composants d'OpenStack, ce paquet "
+"doit se connecter à un serveur centralisé RabbitMQ."
 
-#~ msgid "Authentication server tenant name:"
-#~ msgstr "Nom d'espace client du serveur d'authentification :"
+#. Type: string
+#. Description
+#: ../ironic-common.templates:3001
+msgid "Please specify the IP address of that server."
+msgstr "Veuillez indiquer l'adresse IP de ce serveur."
 
-#~ msgid "Please specify the authentication server tenant name."
-#~ msgstr ""
-#~ "Veuillez indiquer le nom d'espace client du serveur d'authentification."
+#. Type: string
+#. Description
+#: ../ironic-common.templates:4001
+msgid "Username for connection to the RabbitMQ server:"
+msgstr "Nom d'utilisateur pour la connexion au serveur RabbitMQ :"
 
-#~ msgid "Authentication server username:"
-#~ msgstr "Nom d'utilisateur du serveur d'authentification :"
+#. Type: string
+#. Description
+#: ../ironic-common.templates:4001
+msgid "Please specify the username used to connect to the RabbitMQ server."
+msgstr ""
+"Veuillez indiquer le nom d'utilisateur à utiliser pour se connecter au "
+"serveur RabbitMQ."
 
-#~ msgid "Please specify the username to use with the authentication server."
-#~ msgstr ""
-#~ "Veuillez indiquer le nom d'utilisateur à utiliser sur le serveur "
-#~ "d'authentification."
+#. Type: password
+#. Description
+#: ../ironic-common.templates:5001
+msgid "Password for connection to the RabbitMQ server:"
+msgstr "Mot de passe pour la connexion au serveur RabbitMQ :"
 
-#~ msgid "Authentication server password:"
-#~ msgstr "Mot de passe du serveur d'authentification :"
+#. Type: password
+#. Description
+#: ../ironic-common.templates:5001
+msgid "Please specify the password used to connect to the RabbitMQ server."
+msgstr ""
+"Veuillez indiquer le mot de passe à utiliser pour se connecter au serveur "
+"RabbitMQ."
 
-#~ msgid "Please specify the password to use with the authentication server."
-#~ msgstr ""
-#~ "Veuillez indiquer le mot de passe à utiliser sur le serveur "
-#~ "d'authentification."
+#. Type: string
+#. Description
+#: ../ironic-common.templates:6001
+msgid "Authentication server hostname:"
+msgstr "Nom d'hôte du serveur d'authentification :"
+
+#. Type: string
+#. Description
+#: ../ironic-common.templates:6001
+#, fuzzy
+#| msgid ""
+#| "Please specify the hostname of your Neutron authentication server. "
+#| "Typically this is also the hostname of your OpenStack Identity Service "
+#| "(Keystone)."
+msgid ""
+"Please specify the hostname of the authentication server. Typically this is "
+"also the hostname of the OpenStack Identity Service (Keystone)."
+msgstr ""
+"Veuillez indiquer le nom d'hôte du serveur d'authentification Neutron. En "
+"général, il s'agit du nom d'hôte du Service d'Identité OpenStack (Keystone)."
+
+#. Type: string
+#. Description
+#. Translators: a "tenant" in OpenStack world is
+#. an entity that contains one or more username/password couples.
+#. It's typically the tenant that will be used for billing. Having more than one
+#. username/password is very helpful in larger organization.
+#. You're advised to either keep "tenant" without translating it
+#. or keep it aside with your translation. Example for French:
+#. proprietaire ("tenant")
+#: ../ironic-common.templates:7001
+msgid "Authentication server tenant name:"
+msgstr "Nom d'espace client du serveur d'authentification :"
+
+#. Type: string
+#. Description
+#. Translators: a "tenant" in OpenStack world is
+#. an entity that contains one or more username/password couples.
+#. It's typically the tenant that will be used for billing. Having more than one
+#. username/password is very helpful in larger organization.
+#. You're advised to either keep "tenant" without translating it
+#. or keep it aside with your translation. Example for French:
+#. proprietaire ("tenant")
+#: ../ironic-common.templates:7001
+msgid "Please specify the authentication server tenant name."
+msgstr ""
+"Veuillez indiquer le nom d'espace client du serveur d'authentification."
+
+#. Type: string
+#. Description
+#: ../ironic-common.templates:8001
+msgid "Authentication server username:"
+msgstr "Nom d'utilisateur du serveur d'authentification :"
+
+#. Type: string
+#. Description
+#: ../ironic-common.templates:8001
+msgid "Please specify the username to use with the authentication server."
+msgstr ""
+"Veuillez indiquer le nom d'utilisateur à utiliser sur le serveur "
+"d'authentification."
+
+#. Type: password
+#. Description
+#: ../ironic-common.templates:9001
+msgid "Authentication server password:"
+msgstr "Mot de passe du serveur d'authentification :"
+
+#. Type: password
+#. Description
+#: ../ironic-common.templates:9001
+msgid "Please specify the password to use with the authentication server."
+msgstr ""
+"Veuillez indiquer le mot de passe à utiliser sur le serveur "
+"d'authentification."
 
 #~ msgid "OpenVSwitch"
 #~ msgstr "OpenVSwitch"
@@ -164,35 +260,6 @@ msgstr ""
 #~ "doit être chargé en le passant comme paramètre lors du lancement du démon "
 #~ "du serveur Neutron. Il faut également que l'instruction de l'extension "
 #~ "centrale corresponde. Veuillez choisir quelle extension utiliser."
-
-#~ msgid "IP address of your RabbitMQ host:"
-#~ msgstr "Adresse IP de votre hôte RabbitMQ :"
-
-#~ msgid ""
-#~ "In order to interoperate with other components of OpenStack, this package "
-#~ "needs to connect to a central RabbitMQ server."
-#~ msgstr ""
-#~ "Afin de pouvoir interagir avec d'autres composants d'OpenStack, ce paquet "
-#~ "doit se connecter à un serveur centralisé RabbitMQ."
-
-#~ msgid "Please specify the IP address of that server."
-#~ msgstr "Veuillez indiquer l'adresse IP de ce serveur."
-
-#~ msgid "Username for connection to the RabbitMQ server:"
-#~ msgstr "Nom d'utilisateur pour la connexion au serveur RabbitMQ :"
-
-#~ msgid "Please specify the username used to connect to the RabbitMQ server."
-#~ msgstr ""
-#~ "Veuillez indiquer le nom d'utilisateur à utiliser pour se connecter au "
-#~ "serveur RabbitMQ."
-
-#~ msgid "Password for connection to the RabbitMQ server:"
-#~ msgstr "Mot de passe pour la connexion au serveur RabbitMQ :"
-
-#~ msgid "Please specify the password used to connect to the RabbitMQ server."
-#~ msgstr ""
-#~ "Veuillez indiquer le mot de passe à utiliser pour se connecter au serveur "
-#~ "RabbitMQ."
 
 #~ msgid "local"
 #~ msgstr "local"

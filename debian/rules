@@ -10,7 +10,7 @@ export OSLO_PACKAGE_VERSION=$(VERSION)
 
 override_dh_auto_clean:
 	dh_auto_clean -O--buildsystem=python_distutils
-	rm -f debian/ironic-common.config debian/ironic-common.postinst
+	rm -f debian/ironic-common.config debian/ironic-common.postinst debian/ironic-api.postinst debian/ironic-api.config
 	rm -rf doc/build
 	rm -f debian/*.init debian/*.service debian/*.upstart
 
@@ -18,11 +18,12 @@ override_dh_auto_build:
 	dh_auto_build
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-common.config
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-common.postinst
-#	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-api.config
-#	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-api.postinst
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-api.config
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-api.postinst
 
 override_dh_auto_install:
 	dh_auto_install -O--buildsystem=python_distutils
+	# TODO: replace this by generated conf file (see tox.ini)
 	install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
 	sed -i 's|#connection=<None>|connection=sqlite:////var/lib/ironic/ironicdb|' $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
 	set -e && for pyvers in $(PYTHONS); do \
