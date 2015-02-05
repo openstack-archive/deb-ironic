@@ -8,9 +8,30 @@ CONF=/etc/ironic/ironic.conf
 
 #PKGOS-INCLUDE#
 
+configure_enabled_drivers () {
+	local IRONIC_DRIVERS MULTISEL_VAL
+	pkgos_inifile get ${CONF} DEFAULT enabled_drivers
+	if [ -n "${RET}" ] && [ ! "${RET}" = "NOT_FOUND" ] ; then
+		IRONIC_DRIVERS=`echo $RET | sed "s/,/ /g"`
+		for IRONIC_DRIVER in ${NOVA_APIS} ; do
+			if [ -n "${MULTISEL_VAL}" ] ; then
+				MULTISEL_VAL="${MULTISEL_VAL}, "
+			fi
+			MULTISEL_VAL="${MULTISEL_VAL}${NOVA_API}"
+		done
+		if [ -n "${MULTISEL_VAL}" ] ; then
+			db_set ironic/enabled_drivers ${MULTISEL_VAL}
+		fi
+	fi
+	db_input high ironic/enabled_drivers || true
+	db_go
+}
+
 pkgos_var_user_group ironic
 pkgos_dbc_read_conf -pkg ironic-common ${CONF} database connection ironic $@
 pkgos_rabbit_read_conf ${CONF} DEFAULT ironic
 pkgos_read_admin_creds ${CONF} keystone_authtoken ironic
+
+configure_enabled_drivers
 
 exit 0
