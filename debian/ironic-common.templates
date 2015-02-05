@@ -84,6 +84,7 @@ _Description: Authentication server password:
 
 Template: ironic/enabled_drivers
 Type: multiselect
+Default: pxe_ipmitool
 Choices: pxe_ipmitool, pxe_ipminative, pxe_ssh, pxe_seamicro, pxe_iboot, pxe_ilo, pxe_drac, pxe_snmp
 _Description: Please select a list of Ironic drivers for this conductor to enable:
  It is possible to activate multiple drivers per Ironic conductor node to
