@@ -19,12 +19,14 @@ import datetime
 import json
 
 import mock
-from oslo.config import cfg
 from oslo.utils import timeutils
+from oslo_config import cfg
 from six.moves.urllib import parse as urlparse
 from testtools.matchers import HasLength
 from wsme import types as wtypes
 
+from ironic.api.controllers import base as api_base
+from ironic.api.controllers import v1 as api_v1
 from ironic.api.controllers.v1 import node as api_node
 from ironic.common import boot_devices
 from ironic.common import exception
@@ -32,8 +34,8 @@ from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import rpcapi
 from ironic import objects
-from ironic.tests.api import base as api_base
-from ironic.tests.api import utils as apiutils
+from ironic.tests.api import base as test_api_base
+from ironic.tests.api import utils as test_api_utils
 from ironic.tests import base
 from ironic.tests.db import utils as dbutils
 from ironic.tests.objects import utils as obj_utils
@@ -42,7 +44,7 @@ from ironic.tests.objects import utils as obj_utils
 # NOTE(lucasagomes): When creating a node via API (POST)
 #                    we have to use chassis_uuid
 def post_get_test_node(**kw):
-    node = apiutils.node_post_data(**kw)
+    node = test_api_utils.node_post_data(**kw)
     chassis = dbutils.get_test_chassis()
     node['chassis_id'] = None
     node['chassis_uuid'] = kw.get('chassis_uuid', chassis['uuid'])
@@ -52,13 +54,13 @@ def post_get_test_node(**kw):
 class TestNodeObject(base.TestCase):
 
     def test_node_init(self):
-        node_dict = apiutils.node_post_data(chassis_id=None)
+        node_dict = test_api_utils.node_post_data(chassis_id=None)
         del node_dict['instance_uuid']
         node = api_node.Node(**node_dict)
         self.assertEqual(wtypes.Unset, node.instance_uuid)
 
 
-class TestListNodes(api_base.FunctionalTest):
+class TestListNodes(test_api_base.FunctionalTest):
 
     def setUp(self):
         super(TestListNodes, self).setUp()
@@ -92,7 +94,8 @@ class TestListNodes(api_base.FunctionalTest):
 
     def test_one(self):
         node = obj_utils.create_test_node(self.context)
-        data = self.get_json('/nodes')
+        data = self.get_json('/nodes',
+                 headers={api_base.Version.string: str(api_v1.MAX_VER)})
         self.assertIn('instance_uuid', data['nodes'][0])
         self.assertIn('maintenance', data['nodes'][0])
         self.assertIn('power_state', data['nodes'][0])
@@ -101,6 +104,7 @@ class TestListNodes(api_base.FunctionalTest):
         self.assertEqual(node['uuid'], data['nodes'][0]["uuid"])
         self.assertNotIn('driver', data['nodes'][0])
         self.assertNotIn('driver_info', data['nodes'][0])
+        self.assertNotIn('driver_internal_info', data['nodes'][0])
         self.assertNotIn('extra', data['nodes'][0])
         self.assertNotIn('properties', data['nodes'][0])
         self.assertNotIn('chassis_uuid', data['nodes'][0])
@@ -115,10 +119,14 @@ class TestListNodes(api_base.FunctionalTest):
 
     def test_get_one(self):
         node = obj_utils.create_test_node(self.context)
-        data = self.get_json('/nodes/%s' % node['uuid'])
+        data = self.get_json('/nodes/%s' % node['uuid'],
+                 headers={api_base.Version.string: str(api_v1.MAX_VER)})
         self.assertEqual(node.uuid, data['uuid'])
         self.assertIn('driver', data)
         self.assertIn('driver_info', data)
+        self.assertEqual('******', data['driver_info']['fake_password'])
+        self.assertEqual('bar', data['driver_info']['foo'])
+        self.assertIn('driver_internal_info', data)
         self.assertIn('extra', data)
         self.assertIn('properties', data)
         self.assertIn('chassis_uuid', data)
@@ -150,6 +158,29 @@ class TestListNodes(api_base.FunctionalTest):
         response = self.get_json('/nodes/%s/detail' % node['uuid'],
                                  expect_errors=True)
         self.assertEqual(404, response.status_int)
+
+    def test_mask_available_state(self):
+        node = obj_utils.create_test_node(self.context,
+                                          provision_state=states.AVAILABLE)
+
+        data = self.get_json('/nodes/%s' % node['uuid'],
+                headers={api_base.Version.string: str(api_v1.MIN_VER)})
+        self.assertEqual(states.NOSTATE, data['provision_state'])
+
+        data = self.get_json('/nodes/%s' % node['uuid'],
+                headers={api_base.Version.string: "1.2"})
+        self.assertEqual(states.AVAILABLE, data['provision_state'])
+
+    def test_hide_driver_internal_info(self):
+        node = obj_utils.create_test_node(self.context,
+                                          driver_internal_info={"foo": "bar"})
+        data = self.get_json('/nodes/%s' % node['uuid'],
+                headers={api_base.Version.string: str(api_v1.MIN_VER)})
+        self.assertNotIn('driver_internal_info', data)
+
+        data = self.get_json('/nodes/%s' % node['uuid'],
+                headers={api_base.Version.string: "1.3"})
+        self.assertEqual({"foo": "bar"}, data['driver_internal_info'])
 
     def test_many(self):
         nodes = []
@@ -486,7 +517,7 @@ class TestListNodes(api_base.FunctionalTest):
         mock_gsbd.assert_called_once_with(mock.ANY, node.uuid, 'test-topic')
 
 
-class TestPatch(api_base.FunctionalTest):
+class TestPatch(test_api_base.FunctionalTest):
 
     def setUp(self):
         super(TestPatch, self).setUp()
@@ -638,6 +669,20 @@ class TestPatch(api_base.FunctionalTest):
         self.assertEqual(409, response.status_code)
         self.assertTrue(response.json['error_message'])
 
+    def test_add_state_in_deployfail(self):
+        node = obj_utils.create_test_node(self.context,
+                                          uuid=utils.generate_uuid(),
+                                          provision_state=states.DEPLOYFAIL,
+                                          target_provision_state=states.ACTIVE)
+        self.mock_update_node.return_value = node
+        response = self.patch_json('/nodes/%s' % node.uuid,
+                                   [{'path': '/extra/foo', 'value': 'bar',
+                                     'op': 'add'}])
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(200, response.status_code)
+        self.mock_update_node.assert_called_once_with(
+                mock.ANY, mock.ANY, 'test-topic')
+
     def test_patch_ports_subresource(self):
         response = self.patch_json('/nodes/%s/ports' % self.node['uuid'],
                                    [{'path': '/extra/foo', 'value': 'bar',
@@ -765,7 +810,7 @@ class TestPatch(api_base.FunctionalTest):
         self.assertTrue(response.json['error_message'])
 
 
-class TestPost(api_base.FunctionalTest):
+class TestPost(test_api_base.FunctionalTest):
 
     def setUp(self):
         super(TestPost, self).setUp()
@@ -810,18 +855,26 @@ class TestPost(api_base.FunctionalTest):
             # Check that 'id' is not in first arg of positional args
             self.assertNotIn('id', cn_mock.call_args[0][0])
 
-    def test_create_node_valid_extra(self):
-        ndict = post_get_test_node(extra={'foo': 123})
+    def _test_jsontype_attributes(self, attr_name):
+        kwargs = {attr_name: {'str': 'foo', 'int': 123, 'float': 0.1,
+                              'bool': True, 'list': [1, 2], 'none': None,
+                              'dict': {'cat': 'meow'}}}
+        ndict = post_get_test_node(**kwargs)
         self.post_json('/nodes', ndict)
         result = self.get_json('/nodes/%s' % ndict['uuid'])
-        self.assertEqual(ndict['extra'], result['extra'])
+        self.assertEqual(ndict[attr_name], result[attr_name])
 
-    def test_create_node_invalid_extra(self):
-        ndict = post_get_test_node(extra={'foo': 0.123})
-        response = self.post_json('/nodes', ndict, expect_errors=True)
-        self.assertEqual('application/json', response.content_type)
-        self.assertEqual(400, response.status_code)
-        self.assertTrue(response.json['error_message'])
+    def test_create_node_valid_extra(self):
+        self._test_jsontype_attributes('extra')
+
+    def test_create_node_valid_properties(self):
+        self._test_jsontype_attributes('properties')
+
+    def test_create_node_valid_driver_info(self):
+        self._test_jsontype_attributes('driver_info')
+
+    def test_create_node_valid_instance_info(self):
+        self._test_jsontype_attributes('instance_info')
 
     def _test_vendor_passthru_ok(self, mock_vendor, return_value=None,
                                  is_async=True):
@@ -905,7 +958,7 @@ class TestPost(api_base.FunctionalTest):
 
     def test_post_ports_subresource(self):
         node = obj_utils.create_test_node(self.context)
-        pdict = apiutils.port_post_data(node_id=None)
+        pdict = test_api_utils.port_post_data(node_id=None)
         pdict['node_uuid'] = node.uuid
         response = self.post_json('/nodes/ports', pdict,
                                   expect_errors=True)
@@ -990,7 +1043,7 @@ class TestPost(api_base.FunctionalTest):
         self.assertFalse(get_methods_mock.called)
 
 
-class TestDelete(api_base.FunctionalTest):
+class TestDelete(test_api_base.FunctionalTest):
 
     def setUp(self):
         super(TestDelete, self).setUp()
@@ -1051,12 +1104,13 @@ class TestDelete(api_base.FunctionalTest):
                                             topic='test-topic')
 
 
-class TestPut(api_base.FunctionalTest):
+class TestPut(test_api_base.FunctionalTest):
 
     def setUp(self):
         super(TestPut, self).setUp()
         self.chassis = obj_utils.create_test_chassis(self.context)
-        self.node = obj_utils.create_test_node(self.context)
+        self.node = obj_utils.create_test_node(self.context,
+                provision_state=states.AVAILABLE)
         p = mock.patch.object(rpcapi.ConductorAPI, 'get_topic_for')
         self.mock_gtf = p.start()
         self.mock_gtf.return_value = 'test-topic'
@@ -1072,12 +1126,12 @@ class TestPut(api_base.FunctionalTest):
         self.addCleanup(p.stop)
 
     def test_power_state(self):
-        response = self.put_json('/nodes/%s/states/power' % self.node['uuid'],
+        response = self.put_json('/nodes/%s/states/power' % self.node.uuid,
                                  {'target': states.POWER_ON})
         self.assertEqual(202, response.status_code)
         self.assertEqual('', response.body)
         self.mock_cnps.assert_called_once_with(mock.ANY,
-                                               self.node['uuid'],
+                                               self.node.uuid,
                                                states.POWER_ON,
                                                'test-topic')
         # Check location header
@@ -1091,51 +1145,48 @@ class TestPut(api_base.FunctionalTest):
                             {'target': 'not-supported'}, expect_errors=True)
         self.assertEqual(400, ret.status_code)
 
+    def test_provision_invalid_state_request(self):
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': 'not-supported'}, expect_errors=True)
+        self.assertEqual(400, ret.status_code)
+
     def test_provision_with_deploy(self):
         ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
                             {'target': states.ACTIVE})
         self.assertEqual(202, ret.status_code)
         self.assertEqual('', ret.body)
         self.mock_dnd.assert_called_once_with(
-                mock.ANY, self.node.uuid, False, 'test-topic')
+                mock.ANY, self.node.uuid, False, None, 'test-topic')
         # Check location header
         self.assertIsNotNone(ret.location)
         expected_location = '/v1/nodes/%s/states' % self.node.uuid
         self.assertEqual(urlparse.urlparse(ret.location).path,
                          expected_location)
 
-    def test_provision_with_tear_down(self):
+    def test_provision_with_deploy_configdrive(self):
         ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
-                            {'target': states.DELETED})
+                            {'target': states.ACTIVE, 'configdrive': 'foo'})
         self.assertEqual(202, ret.status_code)
         self.assertEqual('', ret.body)
-        self.mock_dntd.assert_called_once_with(
-                mock.ANY, self.node.uuid, 'test-topic')
+        self.mock_dnd.assert_called_once_with(
+                mock.ANY, self.node.uuid, False, 'foo', 'test-topic')
         # Check location header
         self.assertIsNotNone(ret.location)
         expected_location = '/v1/nodes/%s/states' % self.node.uuid
         self.assertEqual(urlparse.urlparse(ret.location).path,
                          expected_location)
 
-    def test_provision_invalid_state_request(self):
+    def test_provision_with_configdrive_not_active(self):
         ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
-                            {'target': 'not-supported'}, expect_errors=True)
+                            {'target': states.DELETED, 'configdrive': 'foo'},
+                            expect_errors=True)
         self.assertEqual(400, ret.status_code)
 
-    def test_provision_already_in_progress(self):
-        node = obj_utils.create_test_node(self.context,
-                                          uuid=utils.generate_uuid(),
-                                          target_provision_state=states.ACTIVE)
-        ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
-                            {'target': states.ACTIVE},
-                            expect_errors=True)
-        self.assertEqual(409, ret.status_code)  # Conflict
-
-    def test_provision_with_tear_down_in_progress_deploywait(self):
-        node = obj_utils.create_test_node(
-                self.context, uuid=utils.generate_uuid(),
-                provision_state=states.DEPLOYWAIT,
-                target_provision_state=states.DEPLOYDONE)
+    def test_provision_with_tear_down(self):
+        node = self.node
+        node.provision_state = states.ACTIVE
+        node.target_provision_state = states.NOSTATE
+        node.save()
         ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
                             {'target': states.DELETED})
         self.assertEqual(202, ret.status_code)
@@ -1148,15 +1199,110 @@ class TestPut(api_base.FunctionalTest):
         self.assertEqual(urlparse.urlparse(ret.location).path,
                          expected_location)
 
-    def test_provision_already_in_state(self):
-        node = obj_utils.create_test_node(
-                self.context, uuid=utils.generate_uuid(),
-                target_provision_state=states.NOSTATE,
-                provision_state=states.ACTIVE)
+    def test_provision_already_in_progress(self):
+        node = self.node
+        node.provision_state = states.DEPLOYING
+        node.target_provision_state = states.ACTIVE
+        node.reservation = 'fake-host'
+        node.save()
         ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
                             {'target': states.ACTIVE},
                             expect_errors=True)
+        self.assertEqual(409, ret.status_code)  # Conflict
+
+    def test_provision_with_tear_down_in_progress_deploywait(self):
+        node = self.node
+        node.provision_state = states.DEPLOYWAIT
+        node.target_provision_state = states.ACTIVE
+        node.save()
+        ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
+                            {'target': states.DELETED})
+        self.assertEqual(202, ret.status_code)
+        self.assertEqual('', ret.body)
+        self.mock_dntd.assert_called_once_with(
+                mock.ANY, node.uuid, 'test-topic')
+        # Check location header
+        self.assertIsNotNone(ret.location)
+        expected_location = '/v1/nodes/%s/states' % node.uuid
+        self.assertEqual(urlparse.urlparse(ret.location).path,
+                         expected_location)
+
+    # NOTE(deva): this test asserts API funcionality which is not part of
+    # the new-ironic-state-machine in Kilo. It is retained for backwards
+    # compatibility with Juno.
+    # TODO(deva): add a deprecation-warning to the REST result
+    # and check for it here.
+    def test_provision_with_deploy_after_deployfail(self):
+        node = self.node
+        node.provision_state = states.DEPLOYFAIL
+        node.target_provision_state = states.ACTIVE
+        node.save()
+        ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
+                            {'target': states.ACTIVE})
+        self.assertEqual(202, ret.status_code)
+        self.assertEqual('', ret.body)
+        self.mock_dnd.assert_called_once_with(
+                mock.ANY, node.uuid, False, None, 'test-topic')
+        # Check location header
+        self.assertIsNotNone(ret.location)
+        expected_location = '/v1/nodes/%s/states' % node.uuid
+        self.assertEqual(expected_location,
+                         urlparse.urlparse(ret.location).path)
+
+    def test_provision_already_in_state(self):
+        self.node.provision_state = states.ACTIVE
+        self.node.save()
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.ACTIVE},
+                            expect_errors=True)
         self.assertEqual(400, ret.status_code)
+
+    def test_manage_raises_error_before_1_2(self):
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['manage']},
+                            headers={},
+                            expect_errors=True)
+        self.assertEqual(406, ret.status_code)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_provide_from_manage(self, mock_dpa):
+        self.node.provision_state = states.MANAGEABLE
+        self.node.save()
+
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['provide']},
+                            headers={api_base.Version.string: "1.4"})
+        self.assertEqual(202, ret.status_code)
+        self.assertEqual('', ret.body)
+        mock_dpa.assert_called_once_with(mock.ANY, self.node.uuid,
+                                         states.VERBS['provide'],
+                                         'test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_manage_from_available(self, mock_dpa):
+        self.node.provision_state = states.AVAILABLE
+        self.node.save()
+
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['manage']},
+                            headers={api_base.Version.string: "1.4"})
+        self.assertEqual(202, ret.status_code)
+        self.assertEqual('', ret.body)
+        mock_dpa.assert_called_once_with(mock.ANY, self.node.uuid,
+                                         states.VERBS['manage'],
+                                         'test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_bad_requests_in_managed_state(self, mock_dpa):
+        self.node.provision_state = states.MANAGEABLE
+        self.node.save()
+
+        for state in [states.ACTIVE, states.REBUILD, states.DELETED]:
+            ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                                {'target': states.ACTIVE},
+                                expect_errors=True)
+            self.assertEqual(400, ret.status_code)
+        self.assertEqual(0, mock_dpa.call_count)
 
     def test_set_console_mode_enabled(self):
         with mock.patch.object(rpcapi.ConductorAPI,
@@ -1220,13 +1366,12 @@ class TestPut(api_base.FunctionalTest):
 
     def test_provision_node_in_maintenance_fail(self):
         with mock.patch.object(rpcapi.ConductorAPI, 'do_node_deploy') as dnd:
-            node = obj_utils.create_test_node(self.context,
-                                              uuid=utils.generate_uuid(),
-                                              maintenance=True)
+            self.node.maintenance = True
+            self.node.save()
             dnd.side_effect = exception.NodeInMaintenance(op='provisioning',
-                                                          node=node.uuid)
+                                                          node=self.node.uuid)
 
-            ret = self.put_json('/nodes/%s/states/provision' % node.uuid,
+            ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
                                 {'target': states.ACTIVE},
                                 expect_errors=True)
             self.assertEqual(400, ret.status_code)

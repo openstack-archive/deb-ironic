@@ -20,7 +20,7 @@ PXE Driver and supporting meta-classes.
 import os
 import shutil
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from ironic.common import dhcp_factory
 from ironic.common import exception
@@ -432,7 +432,7 @@ class VendorPassthru(base.VendorInterface):
     def get_properties(self):
         return COMMON_PROPERTIES
 
-    def validate(self, task, **kwargs):
+    def validate(self, task, method, **kwargs):
         """Validates the inputs for a vendor passthru.
 
         This method checks whether the vendor passthru method is a valid one,
@@ -440,9 +440,9 @@ class VendorPassthru(base.VendorInterface):
         vendor passthru has been provided or not.
 
         :param task: a TaskManager instance containing the node to act on.
-        :param kwargs: kwargs containins the method name and its parameters.
-        :raises: InvalidParameterValue if method is invalid or any parameters
-            to the method is invalid.
+        :param method: method to be validated.
+        :param kwargs: kwargs containins the method's parameters.
+        :raises: InvalidParameterValue if any parameters is invalid.
         """
         iscsi_deploy.get_deploy_info(task.node, **kwargs)
 
@@ -456,12 +456,10 @@ class VendorPassthru(base.VendorInterface):
 
         :param task: a TaskManager instance containing the node to act on.
         :param kwargs: kwargs for performing iscsi deployment.
+        :raises: InvalidState
         """
         node = task.node
-
-        if node.provision_state != states.DEPLOYWAIT:
-            LOG.error(_LE('Node %s is not waiting to be deployed.'), node.uuid)
-            return
+        task.process_event('resume')
 
         _destroy_token_file(node)
 
@@ -478,11 +476,8 @@ class VendorPassthru(base.VendorInterface):
             deploy_utils.notify_deploy_complete(kwargs['address'])
 
             LOG.info(_LI('Deployment to node %s done'), node.uuid)
-            node.provision_state = states.ACTIVE
-            node.target_provision_state = states.NOSTATE
-            node.save()
+            task.process_event('done')
         except Exception as e:
-
             LOG.error(_LE('Deploy failed for instance %(instance)s. '
                           'Error: %(error)s'),
                       {'instance': node.instance_uuid, 'error': e})

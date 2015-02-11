@@ -20,9 +20,9 @@ SQLAlchemy models for baremetal data.
 
 import json
 
-from oslo.config import cfg
-from oslo.db import options as db_options
-from oslo.db.sqlalchemy import models
+from oslo_config import cfg
+from oslo_db import options as db_options
+from oslo_db.sqlalchemy import models
 import six.moves.urllib.parse as urlparse
 from sqlalchemy import Boolean, Column, DateTime
 from sqlalchemy import ForeignKey, Integer
@@ -164,6 +164,7 @@ class Node(Base):
     properties = Column(JSONEncodedDict)
     driver = Column(String(15))
     driver_info = Column(JSONEncodedDict)
+    driver_internal_info = Column(JSONEncodedDict)
 
     # NOTE(deva): this is the host name of the conductor which has
     #             acquired a TaskManager lock on the node.

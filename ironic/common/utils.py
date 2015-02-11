@@ -29,9 +29,9 @@ import tempfile
 import uuid
 
 import netaddr
-from oslo.config import cfg
 from oslo.utils import excutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
 import paramiko
 import six
 
@@ -201,21 +201,6 @@ def validate_and_normalize_mac(address):
     if not is_valid_mac(address):
         raise exception.InvalidMAC(mac=address)
     return address.lower()
-
-
-def is_valid_ipv4(address):
-    """Verify that address represents a valid IPv4 address."""
-    try:
-        return netaddr.valid_ipv4(address)
-    except Exception:
-        return False
-
-
-def is_valid_ipv6(address):
-    try:
-        return netaddr.valid_ipv6(address)
-    except Exception:
-        return False
 
 
 def is_valid_ipv6_cidr(address):
@@ -541,5 +526,11 @@ def dd(src, dst, *args):
     :raises: processutils.ProcessExecutionError if it failed
         to run the process.
     """
+    LOG.debug("Starting dd process.")
     execute('dd', 'if=%s' % src, 'of=%s' % dst, *args,
             run_as_root=True, check_exit_code=[0])
+
+
+def is_http_url(url):
+    url = url.lower()
+    return url.startswith('http://') or url.startswith('https://')

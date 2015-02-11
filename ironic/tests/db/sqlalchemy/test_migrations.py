@@ -44,10 +44,10 @@ import contextlib
 
 from alembic import script
 import mock
-from oslo.db import exception as db_exc
-from oslo.db.sqlalchemy import test_base
-from oslo.db.sqlalchemy import test_migrations
-from oslo.db.sqlalchemy import utils as db_utils
+from oslo_db import exception as db_exc
+from oslo_db.sqlalchemy import test_base
+from oslo_db.sqlalchemy import test_migrations
+from oslo_db.sqlalchemy import utils as db_utils
 import sqlalchemy
 import sqlalchemy.exc
 
@@ -315,7 +315,7 @@ class MigrationCheckersMixin(object):
         nodes.insert().values(data).execute()
         data['uuid'] = utils.generate_uuid()
         # TODO(viktors): Remove check on sqlalchemy.exc.IntegrityError, when
-        #                Ironic will use oslo.db 0.4.0 or higher.
+        #                Ironic will use oslo_db 0.4.0 or higher.
         #                See bug #1214341 for details.
         self.assertRaises(
             (sqlalchemy.exc.IntegrityError, db_exc.DBDuplicateEntry),
@@ -327,6 +327,45 @@ class MigrationCheckersMixin(object):
         self.assertIn('maintenance_reason', col_names)
         self.assertIsInstance(nodes.c.maintenance_reason.type,
                               sqlalchemy.types.String)
+
+    def _pre_upgrade_5674c57409b9(self, engine):
+        # add some nodes in various states so we can assert that "None"
+        # was replaced by "available", and nothing else changed.
+        nodes = db_utils.get_table(engine, 'nodes')
+        data = [{'uuid': utils.generate_uuid(),
+                 'provision_state': 'fake state'},
+                {'uuid': utils.generate_uuid(),
+                 'provision_state': 'active'},
+                {'uuid': utils.generate_uuid(),
+                 'provision_state': 'deleting'},
+                {'uuid': utils.generate_uuid(),
+                 'provision_state': None}]
+        nodes.insert().values(data).execute()
+        return data
+
+    def _check_5674c57409b9(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        result = engine.execute(nodes.select())
+
+        def _get_state(uuid):
+            for row in data:
+                if row['uuid'] == uuid:
+                    return row['provision_state']
+
+        for row in result:
+            old = _get_state(row['uuid'])
+            new = row['provision_state']
+            if old is None:
+                self.assertEqual('available', new)
+            else:
+                self.assertEqual(old, new)
+
+    def _check_bb59b63f55a(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        col_names = [column.name for column in nodes.c]
+        self.assertIn('driver_internal_info', col_names)
+        self.assertIsInstance(nodes.c.driver_internal_info.type,
+                              sqlalchemy.types.TEXT)
 
     def test_upgrade_and_version(self):
         with patch_with_engine(self.engine):

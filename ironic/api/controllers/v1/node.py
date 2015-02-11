@@ -13,12 +13,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import ast
 import datetime
 
-from oslo.config import cfg
+from oslo_config import cfg
 import pecan
 from pecan import rest
-import six
 import wsme
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
@@ -35,6 +35,7 @@ from ironic.common import states as ir_states
 from ironic.common import utils
 from ironic import objects
 from ironic.openstack.common import log
+from ironic.openstack.common import strutils
 
 
 CONF = cfg.CONF
@@ -54,6 +55,27 @@ LOG = log.getLogger(__name__)
 _VENDOR_METHODS = {}
 
 
+def assert_juno_provision_state_name(obj):
+    # if requested version is < 1.2, convert AVAILABLE to the old NOSTATE
+    if (pecan.request.version.minor < 2 and
+            obj.provision_state == ir_states.AVAILABLE):
+        obj.provision_state = ir_states.NOSTATE
+
+
+def hide_driver_internal_info(obj):
+    # if requested version is < 1.3, hide driver_internal_info
+    if pecan.request.version.minor < 3:
+        obj.driver_internal_info = wsme.Unset
+
+
+def check_allow_management_verbs(verb):
+    # v1.4 added the MANAGEABLE state and two verbs to move nodes into
+    # and out of that state. Reject requests to do this in older versions
+    if (pecan.request.version.minor < 4 and
+            verb in [ir_states.VERBS['manage'], ir_states.VERBS['provide']]):
+        raise exception.NotAcceptable()
+
+
 class NodePatchType(types.JsonPatchType):
 
     @staticmethod
@@ -64,7 +86,8 @@ class NodePatchType(types.JsonPatchType):
         return defaults + ['/console_enabled', '/last_error',
                            '/power_state', '/provision_state', '/reservation',
                            '/target_power_state', '/target_provision_state',
-                           '/provision_updated_at', '/maintenance_reason']
+                           '/provision_updated_at', '/maintenance_reason',
+                           '/driver_internal_info']
 
     @staticmethod
     def mandatory_attrs():
@@ -159,8 +182,7 @@ class ConsoleInfo(base.APIBase):
     console_enabled = types.boolean
     """The console state: if the console is enabled or not."""
 
-    console_info = {wtypes.text: types.MultiType(wtypes.text,
-                                                 six.integer_types)}
+    console_info = {wtypes.text: types.jsontype}
     """The console information. It typically includes the url to access the
     console and the type of the application that hosts the console."""
 
@@ -212,18 +234,27 @@ class NodeStates(base.APIBase):
     """API representation of the states of a node."""
 
     console_enabled = types.boolean
+    """Indicates whether the console access is enabled or disabled on
+    the node."""
 
     power_state = wtypes.text
+    """Represent the current (not transition) power state of the node"""
 
     provision_state = wtypes.text
+    """Represent the current (not transition) provision state of the node"""
 
     provision_updated_at = datetime.datetime
+    """The UTC date and time of the last provision state change"""
 
     target_power_state = wtypes.text
+    """The user modified desired power state of the node."""
 
     target_provision_state = wtypes.text
+    """The user modified desired provision state of the node."""
 
     last_error = wtypes.text
+    """Any error from the most recent (last) asynchronous transaction that
+    started but failed to finish."""
 
     @staticmethod
     def convert(rpc_node):
@@ -233,6 +264,7 @@ class NodeStates(base.APIBase):
         states = NodeStates()
         for attr in attr_list:
             setattr(states, attr, getattr(rpc_node, attr))
+        assert_juno_provision_state_name(states)
         return states
 
     @classmethod
@@ -289,7 +321,8 @@ class NodeStatesController(rest.RestController):
         if target not in [ir_states.POWER_ON,
                           ir_states.POWER_OFF,
                           ir_states.REBOOT]:
-            raise exception.InvalidStateRequested(state=target, node=node_uuid)
+            raise exception.InvalidStateRequested(
+                    action=target, node=node_uuid, state=rpc_node.power_state)
 
         pecan.request.rpcapi.change_node_power_state(pecan.request.context,
                                                      node_uuid, target, topic)
@@ -297,9 +330,10 @@ class NodeStatesController(rest.RestController):
         url_args = '/'.join([node_uuid, 'states'])
         pecan.response.location = link.build_url('nodes', url_args)
 
-    @wsme_pecan.wsexpose(None, types.uuid, wtypes.text, status_code=202)
-    def provision(self, node_uuid, target):
-        """Asynchronous trigger the provisioning of the node.
+    @wsme_pecan.wsexpose(None, types.uuid, wtypes.text, wtypes.text,
+                         status_code=202)
+    def provision(self, node_uuid, target, configdrive=None):
+        """Asynchronously trigger the provisioning of the node.
 
         This will set the target provision state of the node, and a
         background task will begin which actually applies the state
@@ -310,45 +344,66 @@ class NodeStatesController(rest.RestController):
 
         :param node_uuid: UUID of a node.
         :param target: The desired provision state of the node.
+        :param configdrive: Optional. A gzipped and base64 encoded
+            configdrive. Only valid when setting provision state
+            to "active".
+        :raises: NodeLocked (HTTP 409) if the node is currently locked.
         :raises: ClientSideError (HTTP 409) if the node is already being
                  provisioned.
-        :raises: ClientSideError (HTTP 400) if the node is already in
-                 the requested state.
-        :raises: InvalidStateRequested (HTTP 400) if the requested target
-                 state is not valid.
+        :raises: InvalidStateRequested (HTTP 400) if the requested transition
+                 is not possible from the current state.
+        :raises: NotAcceptable (HTTP 406) if the API version specified does
+                 not allow the requested state transition.
         """
+        check_allow_management_verbs(target)
         rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
 
-        if target == rpc_node.provision_state:
-            msg = (_("Node %(node)s is already in the '%(state)s' state.") %
-                   {'node': rpc_node['uuid'], 'state': target})
+        # Normally, we let the task manager recognize and deal with
+        # NodeLocked exceptions. However, that isn't done until the RPC calls
+        # below. In order to main backward compatibility with our API HTTP
+        # response codes, we have this check here to deal with cases where
+        # a node is already being operated on (DEPLOYING or such) and we
+        # want to continue returning 409. Without it, we'd return 400.
+        if rpc_node.reservation:
+            raise exception.NodeLocked(node=rpc_node.uuid,
+                                       host=rpc_node.reservation)
+
+        m = ir_states.machine.copy()
+        m.initialize(rpc_node.provision_state)
+        if not m.is_valid_event(ir_states.VERBS.get(target, target)):
+            raise exception.InvalidStateRequested(
+                    action=target, node=node_uuid,
+                    state=rpc_node.provision_state)
+
+        if configdrive and target != ir_states.ACTIVE:
+            msg = (_('Adding a config drive is only supported when setting '
+                     'provision state to %s') % ir_states.ACTIVE)
             raise wsme.exc.ClientSideError(msg, status_code=400)
-
-        if target in (ir_states.ACTIVE, ir_states.REBUILD):
-            processing = rpc_node.target_provision_state is not None
-        elif target == ir_states.DELETED:
-            processing = (rpc_node.target_provision_state is not None and
-                        rpc_node.provision_state != ir_states.DEPLOYWAIT)
-        else:
-            raise exception.InvalidStateRequested(state=target, node=node_uuid)
-
-        if processing:
-            msg = (_('Node %s is already being provisioned or decommissioned.')
-                   % rpc_node.uuid)
-            raise wsme.exc.ClientSideError(msg, status_code=409)  # Conflict
 
         # Note that there is a race condition. The node state(s) could change
         # by the time the RPC call is made and the TaskManager manager gets a
         # lock.
-
-        if target in (ir_states.ACTIVE, ir_states.REBUILD):
-            rebuild = (target == ir_states.REBUILD)
-            pecan.request.rpcapi.do_node_deploy(
-                    pecan.request.context, node_uuid, rebuild, topic)
+        if target == ir_states.ACTIVE:
+            pecan.request.rpcapi.do_node_deploy(pecan.request.context,
+                                                node_uuid, False,
+                                                configdrive, topic)
+        elif target == ir_states.REBUILD:
+            pecan.request.rpcapi.do_node_deploy(pecan.request.context,
+                                                node_uuid, True,
+                                                None, topic)
         elif target == ir_states.DELETED:
             pecan.request.rpcapi.do_node_tear_down(
                     pecan.request.context, node_uuid, topic)
+        elif target in (
+                ir_states.VERBS['manage'], ir_states.VERBS['provide']):
+            pecan.request.rpcapi.do_provisioning_action(
+                    pecan.request.context, node_uuid, target, topic)
+        else:
+            msg = (_('The requested action "%(action)s" could not be '
+                     'understood.') % {'action': target})
+            raise exception.InvalidStateRequested(message=msg)
+
         # Set the HTTP Location Header
         url_args = '/'.join([node_uuid, 'states'])
         pecan.response.location = link.build_url('nodes', url_args)
@@ -422,24 +477,25 @@ class Node(base.APIBase):
     """Indicates whether the console access is enabled or disabled on
     the node."""
 
-    instance_info = {wtypes.text: types.MultiType(wtypes.text,
-                                                  six.integer_types)}
+    instance_info = {wtypes.text: types.jsontype}
     """This node's instance info."""
 
     driver = wsme.wsattr(wtypes.text, mandatory=True)
     """The driver responsible for controlling the node"""
 
-    driver_info = {wtypes.text: types.MultiType(wtypes.text,
-                                                six.integer_types)}
+    driver_info = {wtypes.text: types.jsontype}
     """This node's driver configuration"""
 
-    extra = {wtypes.text: types.MultiType(wtypes.text, six.integer_types)}
+    driver_internal_info = wsme.wsattr({wtypes.text: types.jsontype},
+                                       readonly=True)
+    """This driver's internal configuration"""
+
+    extra = {wtypes.text: types.jsontype}
     """This node's meta data"""
 
     # NOTE: properties should use a class to enforce required properties
     #       current list: arch, cpus, disk, ram, image
-    properties = {wtypes.text: types.MultiType(wtypes.text,
-                                               six.integer_types)}
+    properties = {wtypes.text: types.jsontype}
     """The physical characteristics of this node"""
 
     chassis_uuid = wsme.wsproperty(types.uuid, _get_chassis_uuid,
@@ -476,12 +532,16 @@ class Node(base.APIBase):
         setattr(self, 'chassis_uuid', kwargs.get('chassis_id', wtypes.Unset))
 
     @staticmethod
-    def _convert_with_links(node, url, expand=True):
+    def _convert_with_links(node, url, expand=True, show_password=True):
         if not expand:
             except_list = ['instance_uuid', 'maintenance', 'power_state',
                            'provision_state', 'uuid']
             node.unset_fields_except(except_list)
         else:
+            if not show_password:
+                node.driver_info = ast.literal_eval(strutils.mask_password(
+                                                    node.driver_info,
+                                                    "******"))
             node.ports = [link.Link.make_link('self', url, 'nodes',
                                               node.uuid + "/ports"),
                           link.Link.make_link('bookmark', url, 'nodes',
@@ -503,8 +563,11 @@ class Node(base.APIBase):
     @classmethod
     def convert_with_links(cls, rpc_node, expand=True):
         node = Node(**rpc_node.as_dict())
+        assert_juno_provision_state_name(node)
+        hide_driver_internal_info(node)
         return cls._convert_with_links(node, pecan.request.host_url,
-                                       expand)
+                                       expand,
+                                       pecan.request.context.show_password)
 
     @classmethod
     def sample(cls, expand=True):
@@ -516,7 +579,8 @@ class Node(base.APIBase):
                      target_power_state=ir_states.NOSTATE,
                      last_error=None, provision_state=ir_states.ACTIVE,
                      target_provision_state=ir_states.NOSTATE,
-                     reservation=None, driver='fake', driver_info={}, extra={},
+                     reservation=None, driver='fake', driver_info={},
+                     driver_internal_info={}, extra={},
                      properties={'memory_mb': '1024', 'local_gb': '10',
                      'cpus': '1'}, updated_at=time, created_at=time,
                      provision_updated_at=time, instance_info={},
@@ -862,9 +926,10 @@ class NodesController(rest.RestController):
 
         rpc_node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
 
-        # Check if node is transitioning state
-        if (rpc_node['target_power_state'] or
-                rpc_node['target_provision_state']):
+        # Check if node is transitioning state, although nodes in DEPLOYFAIL
+        # can be updated.
+        if ((rpc_node.target_power_state or rpc_node.target_provision_state)
+                and rpc_node.provision_state != ir_states.DEPLOYFAIL):
             msg = _("Node %s can not be updated while a state transition "
                     "is in progress.")
             raise wsme.exc.ClientSideError(msg % node_uuid, status_code=409)

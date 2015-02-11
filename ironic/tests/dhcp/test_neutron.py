@@ -39,6 +39,7 @@ class TestNeutron(db_base.DbTestCase):
                     group='dhcp')
         self.config(url='test-url',
                     url_timeout=30,
+                    retries=2,
                     group='neutron')
         self.config(insecure=False,
                     certfile='test-file',
@@ -61,6 +62,7 @@ class TestNeutron(db_base.DbTestCase):
     def test__build_client_with_token(self, mock_client_init):
         token = 'test-token-123'
         expected = {'timeout': 30,
+                    'retries': 2,
                     'insecure': False,
                     'ca_cert': 'test-file',
                     'token': token,
@@ -74,6 +76,7 @@ class TestNeutron(db_base.DbTestCase):
     @mock.patch.object(client.Client, "__init__")
     def test__build_client_without_token(self, mock_client_init):
         expected = {'timeout': 30,
+                    'retries': 2,
                     'insecure': False,
                     'ca_cert': 'test-file',
                     'endpoint_url': 'test-url',
@@ -87,12 +90,32 @@ class TestNeutron(db_base.DbTestCase):
         mock_client_init.assert_called_once_with(**expected)
 
     @mock.patch.object(client.Client, "__init__")
+    def test__build_client_with_region(self, mock_client_init):
+        expected = {'timeout': 30,
+                    'retries': 2,
+                    'insecure': False,
+                    'ca_cert': 'test-file',
+                    'endpoint_url': 'test-url',
+                    'username': 'test-admin-user',
+                    'tenant_name': 'test-admin-tenant',
+                    'password': 'test-admin-password',
+                    'auth_url': 'test-auth-uri',
+                    'region_name': 'test-region'}
+
+        self.config(region_name='test-region',
+                    group='keystone')
+        mock_client_init.return_value = None
+        neutron._build_client(token=None)
+        mock_client_init.assert_called_once_with(**expected)
+
+    @mock.patch.object(client.Client, "__init__")
     def test__build_client_noauth(self, mock_client_init):
         self.config(auth_strategy='noauth', group='neutron')
         expected = {'ca_cert': 'test-file',
                     'insecure': False,
                     'endpoint_url': 'test-url',
                     'timeout': 30,
+                    'retries': 2,
                     'auth_strategy': 'noauth'}
 
         mock_client_init.return_value = None

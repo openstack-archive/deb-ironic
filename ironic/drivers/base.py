@@ -22,12 +22,14 @@ import collections
 import functools
 import inspect
 
+import eventlet
 from oslo.utils import excutils
 import six
 
 from ironic.common import exception
 from ironic.common.i18n import _LE
 from ironic.openstack.common import log as logging
+from ironic.openstack.common import periodic_task
 
 LOG = logging.getLogger(__name__)
 
@@ -468,12 +470,13 @@ class VendorInterface(object):
         """
 
     @abc.abstractmethod
-    def validate(self, task, **kwargs):
+    def validate(self, task, method=None, **kwargs):
         """Validate vendor-specific actions.
 
         If invalid, raises an exception; otherwise returns None.
 
         :param task: a task from TaskManager.
+        :param method: method to be validated
         :param kwargs: info for action.
         :raises: UnsupportedDriverExtension if 'method' can not be mapped to
                  the supported interfaces.
@@ -602,3 +605,46 @@ class ManagementInterface(object):
                         }
                       }
         """
+
+
+def driver_periodic_task(parallel=True, **other):
+    """Decorator for a driver-specific periodic task.
+
+    Example::
+
+        class MyDriver(base.BaseDriver):
+            @base.driver_periodic_task(spacing=42)
+            def task(self, manager, context):
+                # do some job
+
+    :param parallel: If True (default), this task is run in a separate thread.
+            If False, this task will be run in the conductor's periodic task
+            loop, rather than a separate greenthread. False should be used with
+            caution, as it will cause all other periodic tasks to be blocked
+            from starting while the non-parallel task is running. Long running
+            tasks, especially any tasks that make a remote call (to a BMC,
+            HTTP, etc.) must be parallelized.
+    :param other: arguments to pass to @periodic_task.periodic_task
+    """
+    # TODO(dtantsur): drop all this magic once
+    # https://review.openstack.org/#/c/134303/ lands
+    semaphore = eventlet.semaphore.BoundedSemaphore()
+
+    def decorator2(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if parallel:
+                def _internal():
+                    with semaphore:
+                        func(*args, **kwargs)
+
+                eventlet.greenthread.spawn_n(_internal)
+            else:
+                func(*args, **kwargs)
+
+        # NOTE(dtantsur): name should be unique
+        other.setdefault('name', '%s.%s' % (func.__module__, func.__name__))
+        decorator = periodic_task.periodic_task(**other)
+        return decorator(wrapper)
+
+    return decorator2

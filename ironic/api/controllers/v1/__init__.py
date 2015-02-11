@@ -24,6 +24,7 @@ Specification can be found at ironic/doc/api/v1.rst
 
 import pecan
 from pecan import rest
+from webob import exc
 from wsme import types as wtypes
 import wsmeext.pecan as wsme_pecan
 
@@ -33,6 +34,32 @@ from ironic.api.controllers.v1 import chassis
 from ironic.api.controllers.v1 import driver
 from ironic.api.controllers.v1 import node
 from ironic.api.controllers.v1 import port
+from ironic.common.i18n import _
+
+BASE_VERSION = 1
+
+# NOTE(deva): v1.0 is reserved to indicate Juno's API, but is not presently
+#             supported by the API service. All changes between Juno and the
+#             point where we added microversioning are considered backwards-
+#             compatible, but are not specifically discoverable at this time.
+#
+#             The v1.1 version indicates this "initial" version as being
+#             different from Juno (v1.0), and includes the following changes:
+#
+# 827db7fe: Add Node.maintenance_reason
+# 68eed82b: Add API endpoint to set/unset the node maintenance mode
+# bc973889: Add sync and async support for passthru methods
+# e03f443b: Vendor endpoints to support different HTTP methods
+# e69e5309: Make vendor methods discoverable via the Ironic API
+# edf532db: Add logic to store the config drive passed by Nova
+
+# v1.1: API at the point in time when microversioning support was added
+MIN_VER = base.Version({base.Version.string: "1.1"})
+
+# v1.2: Renamed NOSTATE ("None") to AVAILABLE ("available")
+# v1.3: Add node.driver_internal_info
+# v1.4: Add MANAGEABLE state
+MAX_VER = base.Version({base.Version.string: "1.4"})
 
 
 class MediaType(base.APIBase):
@@ -129,5 +156,36 @@ class Controller(rest.RestController):
         #       request is because we need to get the host url from
         #       the request object to make the links.
         return V1.convert()
+
+    def _check_version(self, version):
+        # ensure that major version in the URL matches the header
+        if version.major != BASE_VERSION:
+            raise exc.HTTPNotAcceptable(_(
+                "Mutually exclusive versions requested. Version %(ver)s "
+                "requested but not supported by this service.")
+                % {'ver': version})
+        # ensure the minor version is within the supported range
+        if version < MIN_VER or version > MAX_VER:
+            raise exc.HTTPNotAcceptable(_(
+                "Unsupported minor version requested. This API service "
+                "supports the following version range: "
+                "[%(min)s, %(max)s].") % {'min': MIN_VER,
+                                          'max': MAX_VER})
+
+    @pecan.expose()
+    def _route(self, args):
+        v = base.Version(pecan.request.headers)
+        # Always set the min and max headers
+        # FIXME: these are not being sent if _check_version raises an exception
+        pecan.response.headers[base.Version.min_string] = str(MIN_VER)
+        pecan.response.headers[base.Version.max_string] = str(MAX_VER)
+
+        # assert that requested version is supported
+        self._check_version(v)
+        pecan.response.headers[base.Version.string] = str(v)
+        pecan.request.version = v
+
+        return super(Controller, self)._route(args)
+
 
 __all__ = (Controller)

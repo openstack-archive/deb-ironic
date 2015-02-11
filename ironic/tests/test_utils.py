@@ -23,8 +23,8 @@ import uuid
 
 import mock
 import netaddr
-from oslo.config import cfg
 from oslo_concurrency import processutils
+from oslo_config import cfg
 import six
 import six.moves.builtins as __builtin__
 
@@ -288,24 +288,6 @@ class GenericUtilsTestCase(base.TestCase):
         self.assertFalse(utils.is_valid_boolstr('maybe'))
         self.assertFalse(utils.is_valid_boolstr('only on tuesdays'))
 
-    def test_is_valid_ipv4(self):
-        self.assertTrue(utils.is_valid_ipv4('127.0.0.1'))
-        self.assertFalse(utils.is_valid_ipv4('::1'))
-        self.assertFalse(utils.is_valid_ipv4('bacon'))
-        self.assertFalse(utils.is_valid_ipv4(""))
-        self.assertFalse(utils.is_valid_ipv4(10))
-
-    def test_is_valid_ipv6(self):
-        self.assertTrue(utils.is_valid_ipv6("::1"))
-        self.assertTrue(utils.is_valid_ipv6(
-                            "abcd:ef01:2345:6789:abcd:ef01:192.168.254.254"))
-        self.assertTrue(utils.is_valid_ipv6(
-                                    "0000:0000:0000:0000:0000:0000:0000:0001"))
-        self.assertFalse(utils.is_valid_ipv6("foo"))
-        self.assertFalse(utils.is_valid_ipv6("127.0.0.1"))
-        self.assertFalse(utils.is_valid_ipv6(""))
-        self.assertFalse(utils.is_valid_ipv6(10))
-
     def test_is_valid_ipv6_cidr(self):
         self.assertTrue(utils.is_valid_ipv6_cidr("2600::/64"))
         self.assertTrue(utils.is_valid_ipv6_cidr(
@@ -517,3 +499,14 @@ class TempFilesTestCase(base.TestCase):
 
         rmtree_mock.assert_called_once_with(tempdir_created)
         self.assertTrue(log_mock.error.called)
+
+
+class IsHttpUrlTestCase(base.TestCase):
+
+    def test_is_http_url(self):
+        self.assertTrue(utils.is_http_url('http://127.0.0.1'))
+        self.assertTrue(utils.is_http_url('https://127.0.0.1'))
+        self.assertTrue(utils.is_http_url('HTTP://127.1.2.3'))
+        self.assertTrue(utils.is_http_url('HTTPS://127.3.2.1'))
+        self.assertFalse(utils.is_http_url('Zm9vYmFy'))
+        self.assertFalse(utils.is_http_url('11111111'))

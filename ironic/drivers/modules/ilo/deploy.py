@@ -17,7 +17,7 @@ iLO Deploy Driver(s) and supporting methods.
 
 import tempfile
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from ironic.common import boot_devices
 from ironic.common import exception
@@ -56,9 +56,9 @@ CONF.import_opt('swift_ilo_container', 'ironic.drivers.modules.ilo.common',
 
 
 def _get_boot_iso_object_name(node):
-    """Returns the floppy image name for a given node.
+    """Returns the boot iso object name for a given node.
 
-    :param node: the node for which image name is to be provided.
+    :param node: the node for which object name is to be provided.
     """
     return "boot-%s" % node.uuid
 
@@ -89,9 +89,16 @@ def _get_boot_iso(task, root_uuid):
     # Option 1 - Check if user has provided a boot_iso in Glance.
     LOG.debug("Trying to get a boot ISO to boot the baremetal node")
     deploy_info = _parse_deploy_info(task.node)
+
     image_href = deploy_info['image_source']
-    boot_iso_uuid = images.get_glance_image_property(task.context,
-            image_href, 'boot_iso')
+    glance_properties = (
+        images.get_glance_image_properties(task.context,
+            image_href, ['boot_iso', 'kernel_id', 'ramdisk_id']))
+
+    boot_iso_uuid = glance_properties.get('boot_iso')
+    kernel_uuid = glance_properties.get('kernel_id')
+    ramdisk_uuid = glance_properties.get('ramdisk_id')
+
     if boot_iso_uuid:
         LOG.debug("Found boot_iso %s in Glance", boot_iso_uuid)
         return 'glance:%s' % boot_iso_uuid
@@ -104,10 +111,6 @@ def _get_boot_iso(task, root_uuid):
                   {'node': task.node.uuid})
         return
 
-    kernel_uuid = images.get_glance_image_property(task.context,
-            image_href, 'kernel_id')
-    ramdisk_uuid = images.get_glance_image_property(task.context,
-            image_href, 'ramdisk_id')
     if not kernel_uuid or not ramdisk_uuid:
         LOG.error(_LE("Unable to find 'kernel_id' and 'ramdisk_id' in Glance "
                       "image %(image)s for generating boot ISO for %(node)s"),
@@ -153,18 +156,6 @@ def _clean_up_boot_iso_for_instance(node):
         LOG.exception(_LE("Failed to clean up boot ISO for %(node)s."
                           "Error: %(error)s."),
                       {'node': node.uuid, 'error': e})
-
-
-def _get_single_nic_with_vif_port_id(task):
-    """Returns the MAC address of a port which has a VIF port id.
-
-    :param task: a TaskManager instance containing the ports to act on.
-    :returns: MAC address of the port connected to deployment network.
-              None if it cannot find any port with vif id.
-    """
-    for port in task.ports:
-        if port.extra.get('vif_port_id'):
-            return port.address
 
 
 def _parse_driver_info(node):
@@ -276,7 +267,7 @@ class IloVirtualMediaIscsiDeploy(base.DeployInterface):
         iscsi_deploy.check_image_size(task)
 
         deploy_ramdisk_opts = iscsi_deploy.build_deploy_ramdisk_options(node)
-        deploy_nic_mac = _get_single_nic_with_vif_port_id(task)
+        deploy_nic_mac = deploy_utils.get_single_nic_with_vif_port_id(task)
         deploy_ramdisk_opts['BOOTIF'] = deploy_nic_mac
         deploy_iso_uuid = node.driver_info['ilo_deploy_iso']
         deploy_iso = 'glance:' + deploy_iso_uuid
@@ -401,19 +392,6 @@ class IloVirtualMediaAgentDeploy(base.DeployInterface):
 
 class IloPXEDeploy(pxe.PXEDeploy):
 
-    def validate(self, task):
-        """Validate the deployment information for the task's node.
-
-        This method validates the boot mode capability of the node and then
-        call the PXEDeploy's validate method.
-
-        :param task: a TaskManager instance containing the node to act on.
-        :raises: InvalidParameterValue or MissingParameterValue,
-            if some information is missing or invalid.
-        """
-        driver_utils.validate_boot_mode_capability(task.node)
-        super(IloPXEDeploy, self).validate(task)
-
     def prepare(self, task):
         """Prepare the deployment environment for this task's node.
 
@@ -486,14 +464,15 @@ class VendorPassthru(base.VendorInterface):
     def get_properties(self):
         return COMMON_PROPERTIES
 
-    def validate(self, task, **kwargs):
+    def validate(self, task, method, **kwargs):
         """Validate vendor-specific actions.
 
         Checks if a valid vendor passthru method was passed and validates
         the parameters for the vendor passthru method.
 
         :param task: a TaskManager instance containing the node to act on.
-        :param kwargs: kwargs containing the vendor passthru method and its
+        :param method: method to be validated.
+        :param kwargs: kwargs containing the vendor passthru method's
             parameters.
         :raises: MissingParameterValue, if some required parameters were not
             passed.
@@ -512,11 +491,10 @@ class VendorPassthru(base.VendorInterface):
 
         :param task: a TaskManager instance containing the node to act on.
         :param kwargs: kwargs containing parameters for iSCSI deployment.
+        :raises: InvalidState
         """
         node = task.node
-        if node.provision_state != states.DEPLOYWAIT:
-            LOG.error(_LE('Node %s is not waiting to be deployed.'), node.uuid)
-            return
+        task.process_event('resume')
 
         ilo_common.cleanup_vmedia_boot(task)
         root_uuid = iscsi_deploy.continue_deploy(task, **kwargs)
@@ -537,14 +515,12 @@ class VendorPassthru(base.VendorInterface):
             address = kwargs.get('address')
             deploy_utils.notify_deploy_complete(address)
 
-            node.provision_state = states.ACTIVE
-            node.target_provision_state = states.NOSTATE
+            LOG.info(_LI('Deployment to node %s done'), node.uuid)
 
             i_info = node.instance_info
             i_info['ilo_boot_iso'] = boot_iso
             node.instance_info = i_info
-            node.save()
-            LOG.info(_LI('Deployment to node %s done'), node.uuid)
+            task.process_event('done')
         except Exception as e:
             LOG.error(_LE('Deploy failed for instance %(instance)s. '
                           'Error: %(error)s'),

@@ -207,6 +207,35 @@ class NodePowerActionTestCase(base.DbTestCase):
                 self.assertIsNone(node['target_power_state'])
                 self.assertIsNone(node['last_error'])
 
+    def test_node_power_action_in_same_state_db_not_in_sync(self):
+        """Test setting node state to its present state if DB is out of sync.
+
+        Under rare conditions (see bug #1403106) database might contain stale
+        information, make sure we fix it.
+        """
+        node = obj_utils.create_test_node(self.context,
+                                          uuid=cmn_utils.generate_uuid(),
+                                          driver='fake',
+                                          last_error='anything but None',
+                                          power_state=states.POWER_ON)
+        task = task_manager.TaskManager(self.context, node.uuid)
+
+        with mock.patch.object(self.driver.power,
+                               'get_power_state') as get_power_mock:
+            get_power_mock.return_value = states.POWER_OFF
+
+            with mock.patch.object(self.driver.power,
+                                   'set_power_state') as set_power_mock:
+                conductor_utils.node_power_action(task, states.POWER_OFF)
+
+                node.refresh()
+                get_power_mock.assert_called_once_with(mock.ANY)
+                self.assertFalse(set_power_mock.called,
+                                 "set_power_state unexpectedly called")
+                self.assertEqual(states.POWER_OFF, node['power_state'])
+                self.assertIsNone(node['target_power_state'])
+                self.assertIsNone(node['last_error'])
+
     def test_node_power_action_failed_getting_state(self):
         """Test for exception when we can't get the current power state."""
         node = obj_utils.create_test_node(self.context,
@@ -271,19 +300,11 @@ class CleanupAfterTimeoutTestCase(tests_base.TestCase):
         self.task.node = mock.Mock(spec_set=objects.Node)
         self.node = self.task.node
 
-        def set_state(state):
-            self.node.provision_state = states.DEPLOYFAIL
-            self.node.target_provision_state = states.NOSTATE
-        process_event_mock = self.task.process_event
-        process_event_mock.side_effect = set_state
-
     def test_cleanup_after_timeout(self):
         conductor_utils.cleanup_after_timeout(self.task)
 
         self.node.save.assert_called_once_with()
         self.task.driver.deploy.clean_up.assert_called_once_with(self.task)
-        self.assertEqual(states.DEPLOYFAIL, self.node.provision_state)
-        self.assertEqual(states.NOSTATE, self.node.target_provision_state)
         self.assertIn('Timeout reached', self.node.last_error)
 
     def test_cleanup_after_timeout_shared_lock(self):
@@ -301,8 +322,6 @@ class CleanupAfterTimeoutTestCase(tests_base.TestCase):
 
         self.task.driver.deploy.clean_up.assert_called_once_with(self.task)
         self.assertEqual([mock.call()] * 2, self.node.save.call_args_list)
-        self.assertEqual(states.DEPLOYFAIL, self.node.provision_state)
-        self.assertEqual(states.NOSTATE, self.node.target_provision_state)
         self.assertIn('moocow', self.node.last_error)
 
     def test_cleanup_after_timeout_cleanup_random_exception(self):
@@ -313,6 +332,4 @@ class CleanupAfterTimeoutTestCase(tests_base.TestCase):
 
         self.task.driver.deploy.clean_up.assert_called_once_with(self.task)
         self.assertEqual([mock.call()] * 2, self.node.save.call_args_list)
-        self.assertEqual(states.DEPLOYFAIL, self.node.provision_state)
-        self.assertEqual(states.NOSTATE, self.node.target_provision_state)
         self.assertIn('Deploy timed out', self.node.last_error)

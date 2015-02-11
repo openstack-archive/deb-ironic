@@ -22,7 +22,7 @@ SHOULD include dedicated exception logging.
 
 """
 
-from oslo.config import cfg
+from oslo_config import cfg
 import six
 
 from ironic.common.i18n import _
@@ -119,6 +119,12 @@ class TemporaryFailure(IronicException):
     code = 503
 
 
+class NotAcceptable(IronicException):
+    # TODO(deva): We need to set response headers in the API for this exception
+    message = _("Request not acceptable.")
+    code = 406
+
+
 class InvalidState(Conflict):
     message = _("Invalid resource state.")
 
@@ -157,7 +163,8 @@ class InvalidMAC(Invalid):
 
 
 class InvalidStateRequested(Invalid):
-    message = _("Invalid state '%(state)s' requested for node %(node)s.")
+    message = _('The requested action "%(action)s" can not be performed '
+                'on node "%(node)s" while it is in state "%(state)s".')
 
 
 class PatchError(Invalid):
@@ -245,6 +252,11 @@ class FailedToUpdateMacOnPort(IronicException):
 
 class ChassisNotFound(NotFound):
     message = _("Chassis %(chassis)s could not be found.")
+
+
+class NoDriversLoaded(IronicException):
+    message = _("Conductor %(conductor)s cannot be started "
+                "because no drivers were loaded.")
 
 
 class ConductorNotFound(NotFound):
@@ -434,23 +446,33 @@ class IloOperationError(IronicException):
     message = _("%(operation)s failed, error: %(error)s")
 
 
-class DracClientError(IronicException):
+class DracRequestFailed(IronicException):
+    pass
+
+
+class DracClientError(DracRequestFailed):
     message = _('DRAC client failed. '
                 'Last error (cURL error code): %(last_error)s, '
                 'fault string: "%(fault_string)s" '
                 'response_code: %(response_code)s')
 
 
-class DracOperationError(IronicException):
-    message = _('DRAC %(operation)s failed. Reason: %(error)s')
+class DracOperationFailed(DracRequestFailed):
+    message = _('DRAC operation failed. Message: %(message)s')
 
 
-class DracConfigJobCreationError(DracOperationError):
-    message = _('DRAC failed to create a configuration job. '
-                'Reason: %(error)s')
+class DracUnexpectedReturnValue(DracRequestFailed):
+    message = _('DRAC operation yielded return value %(actual_return_value)s '
+                'that is neither error nor expected %(expected_return_value)s')
 
 
-class DracInvalidFilterDialect(DracOperationError):
+class DracPendingConfigJobExists(IronicException):
+    message = _('Another job with ID %(job_id)s is already created  '
+                'to configure %(target)s. Wait until existing job '
+                'is completed or is canceled')
+
+
+class DracInvalidFilterDialect(IronicException):
     message = _('Invalid filter dialect \'%(invalid_filter)s\'. '
                 'Supported options are %(supported)s')
 
@@ -486,3 +508,7 @@ class SNMPFailure(IronicException):
 class FileSystemNotSupported(IronicException):
     message = _("Failed to create a file system. "
                 "File system %(fs)s is not supported.")
+
+
+class IRMCOperationError(IronicException):
+    message = _('iRMC %(operation)s failed. Reason: %(error)s')

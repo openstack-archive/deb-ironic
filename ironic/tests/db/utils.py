@@ -104,6 +104,16 @@ def get_test_drac_info():
     }
 
 
+def get_test_irmc_info():
+    return {
+        "irmc_address": "1.2.3.4",
+        "irmc_username": "admin0",
+        "irmc_password": "fake0",
+        "irmc_port": 80,
+        "irmc_auth_method": "digest",
+    }
+
+
 def get_test_agent_instance_info():
     return {
         'image_source': 'fake-image',
@@ -116,9 +126,14 @@ def get_test_agent_instance_info():
 
 def get_test_agent_driver_info():
     return {
-        'agent_url': 'http://127.0.0.1/foo',
         'deploy_kernel': 'glance://deploy_kernel_uuid',
         'deploy_ramdisk': 'glance://deploy_ramdisk_uuid',
+    }
+
+
+def get_test_agent_driver_internal_info():
+    return {
+        'agent_url': 'http://127.0.0.1/foo',
     }
 
 
@@ -152,7 +167,7 @@ def get_test_node(**kw):
         "local_gb": "10",
         "memory_mb": "4096",
     }
-    fake_info = {"foo": "bar"}
+    fake_info = {"foo": "bar", "fake_password": "fakepass"}
     return {
         'id': kw.get('id', 123),
         'uuid': kw.get('uuid', '1be26c0b-03f2-4d2e-ae87-c02d7f33c123'),
@@ -169,6 +184,7 @@ def get_test_node(**kw):
         'instance_info': kw.get('instance_info', fake_info),
         'driver': kw.get('driver', 'fake'),
         'driver_info': kw.get('driver_info', fake_info),
+        'driver_internal_info': kw.get('driver_internal_info', fake_info),
         'properties': kw.get('properties', properties),
         'reservation': kw.get('reservation'),
         'maintenance': kw.get('maintenance', False),

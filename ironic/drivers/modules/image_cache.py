@@ -22,8 +22,8 @@ import os
 import tempfile
 import time
 
-from oslo.config import cfg
 from oslo_concurrency import lockutils
+from oslo_config import cfg
 
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
@@ -107,11 +107,18 @@ class ImageCache(object):
         # TODO(dtantsur): lock expiration time
         with lockutils.lock(img_download_lock_name, 'ironic-'):
             if os.path.exists(dest_path):
-                LOG.debug("Destination %(dest)s already exists for "
-                            "image %(uuid)s" %
-                          {'uuid': href,
-                           'dest': dest_path})
-                return
+                # NOTE(vdrok): After rebuild requested image can change, so we
+                # should ensure that dest_path and master_path (if exists) are
+                # pointing to the same file
+                if (os.path.exists(master_path) and
+                        (os.stat(dest_path).st_ino ==
+                         os.stat(master_path).st_ino)):
+                    LOG.debug("Destination %(dest)s already exists for "
+                              "image %(uuid)s" %
+                              {'uuid': href,
+                               'dest': dest_path})
+                    return
+                os.unlink(dest_path)
 
             try:
                 # NOTE(dtantsur): ensure we're not in the middle of clean up

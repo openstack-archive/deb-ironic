@@ -30,6 +30,7 @@ Introduction
   :maxdepth: 1
 
   dev/architecture
+  dev/states
   dev/contributing
 
 .. toctree::
@@ -43,8 +44,6 @@ API References
   :maxdepth: 1
 
   webapi/v1
-  dev/common
-  dev/db
   dev/drivers
 
 Admin Guide

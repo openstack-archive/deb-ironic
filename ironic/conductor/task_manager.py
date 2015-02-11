@@ -29,7 +29,7 @@ an instance of TaskManager will not be possible. Requiring this exclusive
 lock guards against parallel operations interfering with each other.
 
 A shared lock is useful when performing non-interfering operations,
-such as validating the driver interfaces or the vendor_passthru method.
+such as validating the driver interfaces.
 
 An exclusive lock is stored in the database to coordinate between
 :class:`ironic.conductor.manager` instances, that are typically deployed on
@@ -61,25 +61,24 @@ Example usage:
     with task_manager.acquire(context, node_id) as task:
         task.driver.power.power_on(task.node)
 
-If you need to execute task-requiring code in the background thread, the
+If you need to execute task-requiring code in a background thread, the
 TaskManager instance provides an interface to handle this for you, making
-sure to release resources when exceptions occur or when the thread finishes.
-Common use of this is within the Manager like so:
+sure to release resources when the thread finishes (successfully or if
+an exception occurs). Common use of this is within the Manager like so:
 
 ::
 
     with task_manager.acquire(context, node_id) as task:
         <do some work>
         task.spawn_after(self._spawn_worker,
-                         utils.node_power_action, task, task.node,
-                         new_state)
+                         utils.node_power_action, task, new_state)
 
-All exceptions that occur in the current greenthread as part of the
-spawn handling are re-raised. In cases where it's impossible to handle
-the re-raised exception by wrapping the "with task_manager.acquire()"
-with a try..exception block (like the API cases where we return after
-the spawn_after()) the task allows you to set a hook to execute custom
-code when the spawned task generates an exception:
+All exceptions that occur in the current GreenThread as part of the
+spawn handling are re-raised. You can specify a hook to execute custom
+code when such exceptions occur. For example, the hook is a more elegant
+solution than wrapping the "with task_manager.acquire()" with a
+try..exception block. (Note that this hook does not handle exceptions
+raised in the background thread.):
 
 ::
 
@@ -91,15 +90,14 @@ code when the spawned task generates an exception:
         <do some work>
         task.set_spawn_error_hook(on_error)
         task.spawn_after(self._spawn_worker,
-                         utils.node_power_action, task, task.node,
-                         new_state)
+                         utils.node_power_action, task, new_state)
 
 """
 
 import functools
 
-from oslo.config import cfg
 from oslo.utils import excutils
+from oslo_config import cfg
 import retrying
 
 from ironic.common import driver_factory
@@ -203,6 +201,13 @@ class TaskManager(object):
             self.ports = objects.Port.list_by_node_id(context, self.node.id)
             self.driver = driver_factory.get_driver(driver_name or
                                                     self.node.driver)
+
+            # NOTE(deva): this handles the Juno-era NOSTATE state
+            #             and should be deleted after Kilo is released
+            if self.node.provision_state is states.NOSTATE:
+                self.node.provision_state = states.AVAILABLE
+                self.node.save()
+
             self.fsm.initialize(self.node.provision_state)
 
         except Exception:
@@ -210,16 +215,25 @@ class TaskManager(object):
                 self.release_resources()
 
     def spawn_after(self, _spawn_method, *args, **kwargs):
-        """Call this to spawn a thread to complete the task."""
+        """Call this to spawn a thread to complete the task.
+
+        The specified method will be called when the TaskManager instance
+        exits.
+
+        :param _spawn_method: a method that returns a GreenThread object
+        :param args: args passed to the method.
+        :param kwargs: additional kwargs passed to the method.
+
+        """
         self._spawn_method = _spawn_method
         self._spawn_args = args
         self._spawn_kwargs = kwargs
 
     def set_spawn_error_hook(self, _on_error_method, *args, **kwargs):
-        """Create a hook that gets called when the task generates an exception.
+        """Create a hook to handle exceptions when spawning a task.
 
         Create a hook that gets called upon an exception being raised
-        from the spawned task.
+        from spawning a background thread to do a task.
 
         :param _on_error_method: a callable object, it's first parameter
             should accept the Exception object that was raised.
@@ -256,11 +270,48 @@ class TaskManager(object):
         """Thread.link() callback to release resources."""
         self.release_resources()
 
-    def process_event(self, event):
-        """Process an event by advancing the state machine."""
+    def process_event(self, event, callback=None, call_args=None,
+                      call_kwargs=None, err_handler=None):
+        """Process the given event for the task's current state.
+
+        :param event: the name of the event to process
+        :param callback: optional callback to invoke upon event transition
+        :param call_args: optional *args to pass to the callback method
+        :param call_kwargs: optional **kwargs to pass to to the callback method
+        :param err_handler: optional error handler to invoke if the
+                callback fails, eg. because there are no workers available
+                (err_handler should accept arguments node, prev_prov_state, and
+                prev_target_state)
+        :raises: InvalidState if the event is not allowed by the associated
+                 state machine
+        """
+        # Advance the state model for the given event. Note that this doesn't
+        # alter the node in any way. This may raise InvalidState, if this event
+        # is not allowed in the current state.
         self.fsm.process_event(event)
+
+        # stash current states in the error handler if callback is set,
+        # in case we fail to get a worker from the pool
+        if err_handler and callback:
+            self.set_spawn_error_hook(err_handler, self.node,
+                                      self.node.provision_state,
+                                      self.node.target_provision_state)
+
         self.node.provision_state = self.fsm.current_state
         self.node.target_provision_state = self.fsm.target_state
+
+        # set up the async worker
+        if callback:
+            # clear the error if we're going to start work in a callback
+            self.node.last_error = None
+            if call_args is None:
+                call_args = ()
+            if call_kwargs is None:
+                call_kwargs = {}
+            self.spawn_after(callback, *call_args, **call_kwargs)
+
+        # publish the state transition by saving the Node
+        self.node.save()
 
     def __enter__(self):
         return self

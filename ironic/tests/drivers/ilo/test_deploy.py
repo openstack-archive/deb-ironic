@@ -18,13 +18,13 @@
 import tempfile
 
 import mock
-from oslo.config import cfg
+from oslo_config import cfg
 
 from ironic.common import boot_devices
+from ironic.common import exception
 from ironic.common import images
 from ironic.common import states
 from ironic.common import swift
-from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import agent
@@ -60,37 +60,43 @@ class IloDeployPrivateMethodsTestCase(db_base.DbTestCase):
         boot_iso_expected = "boot-%s" % self.node.uuid
         self.assertEqual(boot_iso_expected, boot_iso_actual)
 
-    @mock.patch.object(images, 'get_glance_image_property')
+    @mock.patch.object(images, 'get_glance_image_properties')
     @mock.patch.object(ilo_deploy, '_parse_deploy_info')
     def test__get_boot_iso_glance_image(self, deploy_info_mock,
-            image_prop_mock):
+            image_props_mock):
         deploy_info_mock.return_value = {'image_source': 'image-uuid'}
-        image_prop_mock.return_value = 'boot-iso-uuid'
+        image_props_mock.return_value = {'boot_iso': 'boot-iso-uuid',
+                                         'kernel_id': None,
+                                         'ramdisk_id': None}
 
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             boot_iso_actual = ilo_deploy._get_boot_iso(task, 'root-uuid')
             deploy_info_mock.assert_called_once_with(task.node)
-            image_prop_mock.assert_called_once_with(task.context, 'image-uuid',
-                'boot_iso')
+            image_props_mock.assert_called_once_with(
+                task.context, 'image-uuid',
+                ['boot_iso', 'kernel_id', 'ramdisk_id'])
             boot_iso_expected = 'glance:boot-iso-uuid'
             self.assertEqual(boot_iso_expected, boot_iso_actual)
 
     @mock.patch.object(driver_utils, 'get_node_capability')
-    @mock.patch.object(images, 'get_glance_image_property')
+    @mock.patch.object(images, 'get_glance_image_properties')
     @mock.patch.object(ilo_deploy, '_parse_deploy_info')
     def test__get_boot_iso_uefi_no_glance_image(self, deploy_info_mock,
-            image_prop_mock, get_node_cap_mock):
+            image_props_mock, get_node_cap_mock):
         deploy_info_mock.return_value = {'image_source': 'image-uuid'}
-        image_prop_mock.return_value = None
+        image_props_mock.return_value = {'boot_iso': None,
+                                         'kernel_id': None,
+                                         'ramdisk_id': None}
         get_node_cap_mock.return_value = 'uefi'
 
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             boot_iso_result = ilo_deploy._get_boot_iso(task, 'root-uuid')
             deploy_info_mock.assert_called_once_with(task.node)
-            image_prop_mock.assert_called_once_with(task.context, 'image-uuid',
-                'boot_iso')
+            image_props_mock.assert_called_once_with(
+                task.context, 'image-uuid',
+                ['boot_iso', 'kernel_id', 'ramdisk_id'])
             get_node_cap_mock.assert_called_once_with(task.node, 'boot_mode')
             self.assertIsNone(boot_iso_result)
 
@@ -98,9 +104,9 @@ class IloDeployPrivateMethodsTestCase(db_base.DbTestCase):
     @mock.patch.object(images, 'create_boot_iso')
     @mock.patch.object(swift, 'SwiftAPI')
     @mock.patch.object(ilo_deploy, '_get_boot_iso_object_name')
-    @mock.patch.object(images, 'get_glance_image_property')
+    @mock.patch.object(images, 'get_glance_image_properties')
     @mock.patch.object(ilo_deploy, '_parse_deploy_info')
-    def test__get_boot_iso_create(self, deploy_info_mock, image_prop_mock,
+    def test__get_boot_iso_create(self, deploy_info_mock, image_props_mock,
                                   boot_object_name_mock, swift_api_mock,
                                   create_boot_iso_mock, tempfile_mock):
         CONF.keystone_authtoken.auth_uri = 'http://authurl'
@@ -115,7 +121,9 @@ class IloDeployPrivateMethodsTestCase(db_base.DbTestCase):
         tempfile_mock.return_value = mock_file_handle
 
         deploy_info_mock.return_value = {'image_source': 'image-uuid'}
-        image_prop_mock.side_effect = [None, 'kernel-uuid', 'ramdisk-uuid']
+        image_props_mock.return_value = {'boot_iso': None,
+                                         'kernel_id': 'kernel_uuid',
+                                         'ramdisk_id': 'ramdisk_uuid'}
         boot_object_name_mock.return_value = 'abcdef'
         create_boot_iso_mock.return_value = '/path/to/boot-iso'
 
@@ -123,15 +131,11 @@ class IloDeployPrivateMethodsTestCase(db_base.DbTestCase):
                                   shared=False) as task:
             boot_iso_actual = ilo_deploy._get_boot_iso(task, 'root-uuid')
             deploy_info_mock.assert_called_once_with(task.node)
-            image_prop_mock.assert_any_call(task.context, 'image-uuid',
-                'boot_iso')
-            image_prop_mock.assert_any_call(task.context, 'image-uuid',
-                'kernel_id')
-            image_prop_mock.assert_any_call(task.context, 'image-uuid',
-                'ramdisk_id')
+            image_props_mock.assert_called_once_with(task.context,
+                'image-uuid', ['boot_iso', 'kernel_id', 'ramdisk_id'])
             boot_object_name_mock.assert_called_once_with(task.node)
             create_boot_iso_mock.assert_called_once_with(task.context,
-                    'tmpfile', 'kernel-uuid', 'ramdisk-uuid',
+                    'tmpfile', 'kernel_uuid', 'ramdisk_uuid',
                     'root-uuid', 'kernel-params')
             swift_obj_mock.create_object.assert_called_once_with('ilo-cont',
                                                                  'abcdef',
@@ -149,15 +153,6 @@ class IloDeployPrivateMethodsTestCase(db_base.DbTestCase):
         ilo_deploy._clean_up_boot_iso_for_instance(self.node)
         swift_obj_mock.delete_object.assert_called_once_with('ilo-cont',
                                                              'boot-object')
-
-    def test__get_single_nic_with_vif_port_id(self):
-        obj_utils.create_test_port(self.context, node_id=self.node.id,
-                address='aa:bb:cc', uuid=utils.generate_uuid(),
-                extra={'vif_port_id': 'test-vif-A'}, driver='iscsi_ilo')
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=False) as task:
-            address = ilo_deploy._get_single_nic_with_vif_port_id(task)
-            self.assertEqual('aa:bb:cc', address)
 
     @mock.patch.object(deploy_utils, 'check_for_missing_params')
     def test__parse_driver_info(self, check_params_mock):
@@ -220,7 +215,7 @@ class IloVirtualMediaIscsiDeployTestCase(db_base.DbTestCase):
             validate_boot_mode_mock.assert_called_once_with(task.node)
 
     @mock.patch.object(ilo_deploy, '_reboot_into')
-    @mock.patch.object(ilo_deploy, '_get_single_nic_with_vif_port_id')
+    @mock.patch.object(deploy_utils, 'get_single_nic_with_vif_port_id')
     @mock.patch.object(iscsi_deploy, 'build_deploy_ramdisk_options')
     @mock.patch.object(manager_utils, 'node_power_action')
     @mock.patch.object(iscsi_deploy, 'check_image_size')
@@ -333,6 +328,38 @@ class VendorPassthruTestCase(db_base.DbTestCase):
     @mock.patch.object(ilo_deploy, '_get_boot_iso')
     @mock.patch.object(iscsi_deploy, 'continue_deploy')
     @mock.patch.object(ilo_common, 'cleanup_vmedia_boot')
+    def test__continue_deploy_resume(self, cleanup_vmedia_boot_mock,
+                                     continue_deploy_mock, get_boot_iso_mock,
+                                     setup_vmedia_mock, set_boot_device_mock,
+                                     notify_deploy_complete_mock):
+        kwargs = {'method': 'pass_deploy_info', 'address': '123456'}
+        continue_deploy_mock.return_value = None
+        get_boot_iso_mock.return_value = 'boot-iso'
+
+        self.node.provision_state = states.DEPLOYWAIT
+        self.node.target_provision_state = states.ACTIVE
+        self.node.save()
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            vendor = ilo_deploy.VendorPassthru()
+            vendor._continue_deploy(task, **kwargs)
+
+            cleanup_vmedia_boot_mock.assert_called_once_with(task)
+            continue_deploy_mock.assert_called_once_with(task, **kwargs)
+            self.assertFalse(get_boot_iso_mock.called)
+            self.assertFalse(setup_vmedia_mock.called)
+            self.assertFalse(set_boot_device_mock.called)
+            self.assertEqual(states.DEPLOYING, task.node.provision_state)
+            self.assertEqual(states.ACTIVE,
+                             task.node.target_provision_state)
+        self.assertFalse(notify_deploy_complete_mock.called)
+
+    @mock.patch.object(deploy_utils, 'notify_deploy_complete')
+    @mock.patch.object(manager_utils, 'node_set_boot_device')
+    @mock.patch.object(ilo_common, 'setup_vmedia_for_boot')
+    @mock.patch.object(ilo_deploy, '_get_boot_iso')
+    @mock.patch.object(iscsi_deploy, 'continue_deploy')
+    @mock.patch.object(ilo_common, 'cleanup_vmedia_boot')
     def test__continue_deploy_good(self, cleanup_vmedia_boot_mock,
                                    continue_deploy_mock, get_boot_iso_mock,
                                    setup_vmedia_mock, set_boot_device_mock,
@@ -341,10 +368,12 @@ class VendorPassthruTestCase(db_base.DbTestCase):
         continue_deploy_mock.return_value = 'root-uuid'
         get_boot_iso_mock.return_value = 'boot-iso'
 
+        self.node.provision_state = states.DEPLOYWAIT
+        self.node.target_provision_state = states.ACTIVE
+        self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
-            task.node.provision_state = states.DEPLOYWAIT
-            vendor = ilo_deploy.VendorPassthru()
+            vendor = task.driver.vendor
             vendor._continue_deploy(task, **kwargs)
 
             cleanup_vmedia_boot_mock.assert_called_once_with(task)
@@ -355,19 +384,26 @@ class VendorPassthruTestCase(db_base.DbTestCase):
                                                          boot_devices.CDROM)
             self.assertEqual('boot-iso',
                              task.node.instance_info['ilo_boot_iso'])
+            self.assertEqual(states.ACTIVE, task.node.provision_state)
+            self.assertEqual(states.NOSTATE, task.node.target_provision_state)
         notify_deploy_complete_mock.assert_called_once_with('123456')
 
-    @mock.patch.object(ilo_deploy, 'LOG')
-    def test__continue_deploy_bad(self, log_mock):
+    @mock.patch.object(ilo_common, 'cleanup_vmedia_boot')
+    def test__continue_deploy_bad(self, cleanup_vmedia_boot_mock):
         kwargs = {'method': 'pass_deploy_info', 'address': '123456'}
 
+        self.node.provision_state = states.AVAILABLE
+        self.node.target_provision_state = states.NOSTATE
+        self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
-            task.node.provision_state = states.NOSTATE
-            vendor = ilo_deploy.VendorPassthru()
-            vendor._continue_deploy(task, **kwargs)
-
-            self.assertTrue(log_mock.error.called)
+            vendor = task.driver.vendor
+            self.assertRaises(exception.InvalidState,
+                              vendor._continue_deploy,
+                              task, **kwargs)
+            self.assertEqual(states.AVAILABLE, task.node.provision_state)
+            self.assertEqual(states.NOSTATE, task.node.target_provision_state)
+        self.assertFalse(cleanup_vmedia_boot_mock.called)
 
     @mock.patch.object(iscsi_deploy, 'continue_deploy')
     @mock.patch.object(ilo_common, 'cleanup_vmedia_boot')
@@ -376,10 +412,12 @@ class VendorPassthruTestCase(db_base.DbTestCase):
         kwargs = {'method': 'pass_deploy_info', 'address': '123456'}
         continue_deploy_mock.return_value = None
 
+        self.node.provision_state = states.DEPLOYWAIT
+        self.node.target_provision_state = states.ACTIVE
+        self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
-            task.node.provision_state = states.DEPLOYWAIT
-            vendor = ilo_deploy.VendorPassthru()
+            vendor = task.driver.vendor
             vendor._continue_deploy(task, **kwargs)
 
             cleanup_vmedia_boot_mock.assert_called_once_with(task)
@@ -395,12 +433,10 @@ class IloPXEDeployTestCase(db_base.DbTestCase):
                 driver='pxe_ilo', driver_info=INFO_DICT)
 
     @mock.patch.object(pxe.PXEDeploy, 'validate')
-    @mock.patch.object(driver_utils, 'validate_boot_mode_capability')
-    def test_validate(self, boot_mode_mock, pxe_validate_mock):
+    def test_validate(self, pxe_validate_mock):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             task.driver.deploy.validate(task)
-            boot_mode_mock.assert_called_once_with(task.node)
             pxe_validate_mock.assert_called_once_with(task)
 
     @mock.patch.object(pxe.PXEDeploy, 'prepare')
@@ -466,12 +502,13 @@ class IloPXEVendorPassthruTestCase(db_base.DbTestCase):
 
     @mock.patch.object(pxe.VendorPassthru, '_continue_deploy')
     @mock.patch.object(manager_utils, 'node_set_boot_device')
-    def test_vendorpassthru(self, set_boot_device_mock,
-                            pxe_vendorpassthru_mock):
+    def test_vendorpassthru_continue_deploy(self, set_boot_device_mock,
+                                            pxe_vendorpassthru_mock):
         kwargs = {'address': '123456'}
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             task.node.provision_state = states.DEPLOYWAIT
+            task.node.target_provision_state = states.ACTIVE
             task.driver.vendor._continue_deploy(task, **kwargs)
             set_boot_device_mock.assert_called_with(task, boot_devices.PXE,
                                                     True)

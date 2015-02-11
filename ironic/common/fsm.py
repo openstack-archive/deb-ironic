@@ -144,9 +144,8 @@ class FSM(object):
         if (self._target_state is not None and
                 self._target_state == replacement.name):
             self._target_state = None
-        # set target if there is a new one
-        if (self._target_state is None and
-                self._states[replacement.name]['target'] is not None):
+        # if new state has a different target, update the target
+        if self._states[replacement.name]['target'] is not None:
             self._target_state = self._states[replacement.name]['target']
 
     def is_valid_event(self, event):
@@ -175,6 +174,7 @@ class FSM(object):
             raise excp.InvalidState(_("Can not start from a terminal"
                                       " state '%s'") % (state))
         self._current = _Jump(state, None, None)
+        self._target_state = self._states[state]['target']
 
     def copy(self, shallow=False):
         """Copies the current state machine (shallow or deep).
@@ -209,6 +209,12 @@ class FSM(object):
     def states(self):
         """Returns a list of the state names."""
         return list(six.iterkeys(self._states))
+
+    def __iter__(self):
+        """Iterates over (start, event, end) transition tuples."""
+        for state in six.iterkeys(self._states):
+            for event, target in six.iteritems(self._transitions[state]):
+                yield (state, event, target.name)
 
     @property
     def events(self):

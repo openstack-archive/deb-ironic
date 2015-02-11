@@ -18,7 +18,8 @@ import time
 
 from neutronclient.common import exceptions as neutron_client_exc
 from neutronclient.v2_0 import client as clientv20
-from oslo.config import cfg
+from oslo.utils import netutils
+from oslo_config import cfg
 
 from ironic.common import exception
 from ironic.common.i18n import _
@@ -26,7 +27,6 @@ from ironic.common.i18n import _LE
 from ironic.common.i18n import _LW
 from ironic.common import keystone
 from ironic.common import network
-from ironic.common import utils
 from ironic.dhcp import base
 from ironic.drivers.modules import ssh
 from ironic.openstack.common import log as logging
@@ -39,6 +39,9 @@ neutron_opts = [
     cfg.IntOpt('url_timeout',
                default=30,
                help='Timeout value for connecting to neutron in seconds.'),
+    cfg.IntOpt('retries',
+               default=3,
+               help='Client retries in the case of a failed request.'),
     cfg.StrOpt('auth_strategy',
                default='keystone',
                help='Default authentication strategy to use when connecting '
@@ -58,6 +61,7 @@ def _build_client(token=None):
     """Utility function to create Neutron client."""
     params = {
         'timeout': CONF.neutron.url_timeout,
+        'retries': CONF.neutron.retries,
         'insecure': CONF.keystone_authtoken.insecure,
         'ca_cert': CONF.keystone_authtoken.certfile,
     }
@@ -77,6 +81,8 @@ def _build_client(token=None):
         params['tenant_name'] = CONF.keystone_authtoken.admin_tenant_name
         params['password'] = CONF.keystone_authtoken.admin_password
         params['auth_url'] = (CONF.keystone_authtoken.auth_uri or '')
+        if CONF.keystone.region_name:
+            params['region_name'] = CONF.keystone.region_name
     else:
         params['token'] = token
         params['endpoint_url'] = CONF.neutron.url
@@ -210,7 +216,7 @@ class NeutronDHCPApi(base.BaseDHCP):
             ip_address = fixed_ips[0].get('ip_address', None)
 
         if ip_address:
-            if utils.is_valid_ipv4(ip_address):
+            if netutils.is_valid_ipv4(ip_address):
                 return ip_address
             else:
                 LOG.error(_LE("Neutron returned invalid IPv4 address %s."),

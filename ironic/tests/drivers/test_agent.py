@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import mock
-from oslo.config import cfg
+from oslo_config import cfg
 
 from ironic.common import dhcp_factory
 from ironic.common import exception
@@ -32,6 +32,7 @@ from ironic.tests.objects import utils as object_utils
 
 INSTANCE_INFO = db_utils.get_test_agent_instance_info()
 DRIVER_INFO = db_utils.get_test_agent_driver_info()
+DRIVER_INTERNAL_INFO = db_utils.get_test_agent_driver_internal_info()
 
 CONF = cfg.CONF
 
@@ -66,7 +67,8 @@ class TestAgentDeploy(db_base.DbTestCase):
         n = {
             'driver': 'fake_agent',
             'instance_info': INSTANCE_INFO,
-            'driver_info': DRIVER_INFO
+            'driver_info': DRIVER_INFO,
+            'driver_internal_info': DRIVER_INTERNAL_INFO,
         }
         self.node = object_utils.create_test_node(self.context, **n)
 
@@ -139,13 +141,15 @@ class TestAgentVendor(db_base.DbTestCase):
         n = {
               'driver': 'fake_agent',
               'instance_info': INSTANCE_INFO,
-              'driver_info': DRIVER_INFO
+              'driver_info': DRIVER_INFO,
+              'driver_internal_info': DRIVER_INTERNAL_INFO,
         }
         self.node = object_utils.create_test_node(self.context, **n)
 
     def test_validate(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.passthru.validate(task)
+            method = 'heartbeat'
+            self.passthru.validate(task, method)
 
     def test_driver_validate(self):
         kwargs = {'version': '2'}
@@ -167,28 +171,8 @@ class TestAgentVendor(db_base.DbTestCase):
                           method, **kwargs)
 
     def test_continue_deploy(self):
-        test_temp_url = 'http://image'
-        expected_image_info = {
-            'urls': [test_temp_url],
-            'id': 'fake-image',
-            'checksum': 'checksum',
-            'disk_format': 'qcow2',
-            'container_format': 'bare',
-        }
-
-        client_mock = mock.Mock()
-        self.passthru._client = client_mock
-
-        with task_manager.acquire(self.context, self.node.uuid,
-                                      shared=False) as task:
-            self.passthru._continue_deploy(task)
-
-            client_mock.prepare_image.assert_called_with(task.node,
-                expected_image_info)
-            self.assertEqual(task.node.provision_state, states.DEPLOYING)
-
-    def test_continue_deploy_image_source_is_url(self):
-        self.node.instance_info['image_source'] = 'glance://fake-image'
+        self.node.provision_state = states.DEPLOYWAIT
+        self.node.target_provision_state = states.ACTIVE
         self.node.save()
         test_temp_url = 'http://image'
         expected_image_info = {
@@ -208,7 +192,58 @@ class TestAgentVendor(db_base.DbTestCase):
 
             client_mock.prepare_image.assert_called_with(task.node,
                 expected_image_info)
-            self.assertEqual(task.node.provision_state, states.DEPLOYING)
+            self.assertEqual(states.DEPLOYING, task.node.provision_state)
+            self.assertEqual(states.ACTIVE,
+                             task.node.target_provision_state)
+
+    def test_continue_deploy_image_source_is_url(self):
+        self.node.instance_info['image_source'] = 'glance://fake-image'
+        self.node.provision_state = states.DEPLOYWAIT
+        self.node.target_provision_state = states.ACTIVE
+        self.node.save()
+        test_temp_url = 'http://image'
+        expected_image_info = {
+            'urls': [test_temp_url],
+            'id': 'fake-image',
+            'checksum': 'checksum',
+            'disk_format': 'qcow2',
+            'container_format': 'bare',
+        }
+
+        client_mock = mock.Mock()
+        self.passthru._client = client_mock
+
+        with task_manager.acquire(self.context, self.node.uuid,
+                                      shared=False) as task:
+            self.passthru._continue_deploy(task)
+
+            client_mock.prepare_image.assert_called_with(task.node,
+                expected_image_info)
+            self.assertEqual(states.DEPLOYING, task.node.provision_state)
+            self.assertEqual(states.ACTIVE,
+                             task.node.target_provision_state)
+
+    @mock.patch('ironic.conductor.utils.node_power_action')
+    @mock.patch('ironic.conductor.utils.node_set_boot_device')
+    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
+                '._check_deploy_success')
+    def test__reboot_to_instance(self, check_deploy_mock, bootdev_mock,
+                                 power_mock):
+        check_deploy_mock.return_value = None
+
+        self.node.provision_state = states.DEPLOYING
+        self.node.target_provision_state = states.ACTIVE
+        self.node.save()
+
+        with task_manager.acquire(self.context, self.node.uuid,
+                                      shared=False) as task:
+            self.passthru._reboot_to_instance(task)
+
+            check_deploy_mock.assert_called_once_with(task.node)
+            bootdev_mock.assert_called_once_with(task, 'disk', persistent=True)
+            power_mock.assert_called_once_with(task, states.REBOOT)
+            self.assertEqual(states.ACTIVE, task.node.provision_state)
+            self.assertEqual(states.NOSTATE, task.node.target_provision_state)
 
     def test_lookup_version_not_found(self):
         kwargs = {
@@ -410,6 +445,7 @@ class TestAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=True) as task:
             task.node.provision_state = states.DEPLOYING
+            task.node.target_provision_state = states.ACTIVE
             self.passthru.heartbeat(task, **kwargs)
             failed_mock.assert_called_once_with(task, mock.ANY)
 

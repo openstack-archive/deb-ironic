@@ -15,13 +15,13 @@ an OpenStack project.
 Install prerequisites::
 
     # Ubuntu/Debian:
-    sudo apt-get install python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev gettext
+    sudo apt-get install python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev gettext ipmitool psmisc
 
     # Fedora/RHEL:
-    sudo yum install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool
+    sudo yum install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc
 
     # openSUSE/SLE 12:
-    sudo zypper install git git-review libffi-devel libmysqlclient-devel libopenssl-devel libxml2-devel libxslt-devel postgresql-devel python-devel python-nose python-pip gettext-runtime
+    sudo zypper install git git-review libffi-devel libmysqlclient-devel libopenssl-devel libxml2-devel libxslt-devel postgresql-devel python-devel python-nose python-pip gettext-runtime psmisc
 
     # All distros:
     sudo easy_install nose
@@ -254,12 +254,13 @@ Switch to the stack user and clone DevStack::
     cd ~
     git clone https://github.com/openstack-dev/devstack.git devstack
 
-Create devstack/localrc with minimal settings required to enable Ironic.
+Create devstack/local.conf with minimal settings required to enable Ironic.
 Note that Ironic under devstack can only support running *either* the PXE
 or the agent driver, not both. The default is the PXE driver.::
 
     cd devstack
-    cat >localrc <<END
+    cat >local.conf <<END
+    [[local|localrc]]
     # Credentials
     ADMIN_PASSWORD=password
     DATABASE_PASSWORD=password
@@ -311,9 +312,9 @@ or the agent driver, not both. The default is the PXE driver.::
     END
 
 If running with the agent driver (instead of PXE driver), add these additional
-settings to localrc::
+settings to local.conf::
 
-    cat >>localrc <<END
+    cat >>local.conf <<END
     # Agent driver requires swift with tempurls
     # Enable swift services
     enable_service s-proxy

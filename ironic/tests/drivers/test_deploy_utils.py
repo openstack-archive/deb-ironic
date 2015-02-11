@@ -14,21 +14,30 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import base64
+import gzip
 import os
+import shutil
 import tempfile
 
 import fixtures
 import mock
-from oslo.config import cfg
 from oslo_concurrency import processutils
+from oslo_config import cfg
+import requests
 
 from ironic.common import disk_partitioner
 from ironic.common import exception
 from ironic.common import images
 from ironic.common import utils as common_utils
+from ironic.conductor import task_manager
 from ironic.drivers.modules import deploy_utils as utils
 from ironic.drivers.modules import image_cache
 from ironic.tests import base as tests_base
+from ironic.tests.conductor import utils as mgr_utils
+from ironic.tests.db import base as db_base
+from ironic.tests.db import utils as db_utils
+from ironic.tests.objects import utils as obj_utils
 
 _PXECONF_DEPLOY = """
 default deploy
@@ -122,6 +131,7 @@ image=kernel
 
 
 class PhysicalWorkTestCase(tests_base.TestCase):
+
     def setUp(self):
         super(PhysicalWorkTestCase, self).setUp()
 
@@ -152,6 +162,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         swap_mb = 64
         ephemeral_mb = 0
         ephemeral_format = None
+        configdrive_mb = 0
         node_uuid = "12345678-1234-1234-1234-1234567890abcxyz"
 
         dev = '/dev/fake'
@@ -178,6 +189,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.destroy_disk_metadata(dev, node_uuid),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
+                                                    configdrive_mb,
                                                     commit=True),
                           mock.call.is_block_device(root_part),
                           mock.call.is_block_device(swap_part),
@@ -206,6 +218,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         swap_mb = 0
         ephemeral_mb = 0
         ephemeral_format = None
+        configdrive_mb = 0
         node_uuid = "12345678-1234-1234-1234-1234567890abcxyz"
 
         dev = '/dev/fake'
@@ -230,6 +243,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.destroy_disk_metadata(dev, node_uuid),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
+                                                    configdrive_mb,
                                                     commit=True),
                           mock.call.is_block_device(root_part),
                           mock.call.populate_image(image_path, root_part),
@@ -255,6 +269,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         root_mb = 128
         swap_mb = 64
         ephemeral_mb = 256
+        configdrive_mb = 0
         ephemeral_format = 'exttest'
         node_uuid = "12345678-1234-1234-1234-1234567890abcxyz"
 
@@ -285,6 +300,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.destroy_disk_metadata(dev, node_uuid),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
+                                                    configdrive_mb,
                                                     commit=True),
                           mock.call.is_block_device(root_part),
                           mock.call.is_block_device(swap_part),
@@ -316,6 +332,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         swap_mb = 64
         ephemeral_mb = 256
         ephemeral_format = 'exttest'
+        configdrive_mb = 0
         node_uuid = "12345678-1234-1234-1234-1234567890abcxyz"
 
         dev = '/dev/fake'
@@ -345,6 +362,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.is_block_device(dev),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
+                                                    configdrive_mb,
                                                     commit=False),
                           mock.call.is_block_device(root_part),
                           mock.call.is_block_device(swap_part),
@@ -363,6 +381,127 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         self.assertFalse(parent_mock.mkfs_ephemeral.called)
         self.assertFalse(parent_mock.get_dev_block_size.called)
         self.assertEqual(root_uuid, returned_root_uuid)
+
+    @mock.patch.object(common_utils, 'unlink_without_raise')
+    def test_deploy_with_configdrive(self, mock_unlink):
+        """Check loosely all functions are called with right args."""
+        address = '127.0.0.1'
+        port = 3306
+        iqn = 'iqn.xyz'
+        lun = 1
+        image_path = '/tmp/xyz/image'
+        root_mb = 128
+        swap_mb = 0
+        ephemeral_mb = 0
+        configdrive_mb = 10
+        ephemeral_format = None
+        node_uuid = "12345678-1234-1234-1234-1234567890abcxyz"
+        configdrive_url = 'http://1.2.3.4/cd'
+
+        dev = '/dev/fake'
+        configdrive_part = '/dev/fake-part1'
+        root_part = '/dev/fake-part2'
+        root_uuid = '12345678-1234-1234-12345678-12345678abcdef'
+
+        name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
+                     'logout_iscsi', 'delete_iscsi', 'make_partitions',
+                     'is_block_device', 'populate_image', 'block_uuid',
+                     'notify', 'destroy_disk_metadata', 'dd',
+                     '_get_configdrive']
+        parent_mock = self._mock_calls(name_list)
+        parent_mock.get_dev.return_value = dev
+        parent_mock.get_image_mb.return_value = 1
+        parent_mock.is_block_device.return_value = True
+        parent_mock.block_uuid.return_value = root_uuid
+        parent_mock.make_partitions.return_value = {'root': root_part,
+                                                    'configdrive':
+                                                        configdrive_part}
+        parent_mock._get_configdrive.return_value = (10, 'configdrive-path')
+        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+                          mock.call.get_image_mb(image_path),
+                          mock.call.discovery(address, port),
+                          mock.call.login_iscsi(address, port, iqn),
+                          mock.call.is_block_device(dev),
+                          mock.call.destroy_disk_metadata(dev, node_uuid),
+                          mock.call._get_configdrive(configdrive_url,
+                                                     node_uuid),
+                          mock.call.make_partitions(dev, root_mb, swap_mb,
+                                                    ephemeral_mb,
+                                                    configdrive_mb,
+                                                    commit=True),
+                          mock.call.is_block_device(root_part),
+                          mock.call.is_block_device(configdrive_part),
+                          mock.call.dd(mock.ANY, configdrive_part),
+                          mock.call.populate_image(image_path, root_part),
+                          mock.call.block_uuid(root_part),
+                          mock.call.logout_iscsi(address, port, iqn),
+                          mock.call.delete_iscsi(address, port, iqn)]
+
+        returned_root_uuid = utils.deploy(address, port, iqn, lun,
+                                          image_path, root_mb, swap_mb,
+                                          ephemeral_mb, ephemeral_format,
+                                          node_uuid,
+                                          configdrive=configdrive_url)
+
+        self.assertEqual(calls_expected, parent_mock.mock_calls)
+        self.assertEqual(root_uuid, returned_root_uuid)
+        mock_unlink.assert_called_once_with('configdrive-path')
+
+    @mock.patch.object(common_utils, 'execute')
+    def test_verify_iscsi_connection_raises(self, mock_exec):
+        iqn = 'iqn.xyz'
+        mock_exec.return_value = ['iqn.abc', '']
+        self.assertRaises(exception.InstanceDeployFailure,
+                utils.verify_iscsi_connection, iqn)
+        self.assertEqual(3, mock_exec.call_count)
+
+    @mock.patch.object(common_utils, 'execute')
+    def test_verify_iscsi_connection(self, mock_exec):
+        iqn = 'iqn.xyz'
+        mock_exec.return_value = ['iqn.xyz', '']
+        utils.verify_iscsi_connection(iqn)
+        mock_exec.assert_called_once_with('iscsiadm',
+                  '-m', 'node',
+                  '-S',
+                  run_as_root=True,
+                  check_exit_code=[0])
+
+    @mock.patch.object(common_utils, 'execute')
+    def test_force_iscsi_lun_update(self, mock_exec):
+        iqn = 'iqn.xyz'
+        utils.force_iscsi_lun_update(iqn)
+        mock_exec.assert_called_once_with('iscsiadm',
+                  '-m', 'node',
+                  '-T', iqn,
+                  '-R',
+                  run_as_root=True,
+                  check_exit_code=[0])
+
+    @mock.patch.object(common_utils, 'execute')
+    @mock.patch.object(utils, 'verify_iscsi_connection')
+    @mock.patch.object(utils, 'force_iscsi_lun_update')
+    def test_login_iscsi_calls_verify_and_update(self,
+                                                 mock_update,
+                                                 mock_verify,
+                                                 mock_exec):
+        address = '127.0.0.1'
+        port = 3306
+        iqn = 'iqn.xyz'
+        mock_exec.return_value = ['iqn.xyz', '']
+        utils.login_iscsi(address, port, iqn)
+        mock_exec.assert_called_once_with('iscsiadm',
+            '-m', 'node',
+            '-p', '%s:%s' % (address, port),
+            '-T', iqn,
+            '--login',
+            run_as_root=True,
+            check_exit_code=[0],
+            attempts=5,
+            delay_on_retry=True)
+
+        mock_verify.assert_called_once_with(iqn)
+
+        mock_update.assert_called_once_with(iqn)
 
     def test_always_logout_and_delete_iscsi(self):
         """Check if logout_iscsi() and delete_iscsi() are called.
@@ -408,7 +547,8 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.work_on_disk(dev, root_mb, swap_mb,
                                                  ephemeral_mb,
                                                  ephemeral_format, image_path,
-                                                 node_uuid, False),
+                                                 node_uuid, configdrive=None,
+                                                 preserve_ephemeral=False),
                           mock.call.logout_iscsi(address, port, iqn),
                           mock.call.delete_iscsi(address, port, iqn)]
 
@@ -504,6 +644,7 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.swap_mb = 64
         self.ephemeral_mb = 0
         self.ephemeral_format = None
+        self.configdrive_mb = 0
         self.dev = '/dev/fake'
         self.swap_part = '/dev/fake-part1'
         self.root_part = '/dev/fake-part2'
@@ -539,7 +680,7 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.assertEqual(self.mock_ibd.call_args_list, calls)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
                                              self.swap_mb, self.ephemeral_mb,
-                                             commit=True)
+                                             self.configdrive_mb, commit=True)
 
     def test_no_swap_partition(self):
         self.mock_ibd.side_effect = [True, True, False]
@@ -553,7 +694,7 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.assertEqual(self.mock_ibd.call_args_list, calls)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
                                              self.swap_mb, self.ephemeral_mb,
-                                             commit=True)
+                                             self.configdrive_mb, commit=True)
 
     def test_no_ephemeral_partition(self):
         ephemeral_part = '/dev/fake-part1'
@@ -577,7 +718,37 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.assertEqual(self.mock_ibd.call_args_list, calls)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
                                              self.swap_mb, ephemeral_mb,
-                                             commit=True)
+                                             self.configdrive_mb, commit=True)
+
+    @mock.patch.object(common_utils, 'unlink_without_raise')
+    @mock.patch.object(utils, '_get_configdrive')
+    def test_no_configdrive_partition(self, mock_configdrive, mock_unlink):
+        mock_configdrive.return_value = (10, 'fake-path')
+        swap_part = '/dev/fake-part1'
+        configdrive_part = '/dev/fake-part2'
+        root_part = '/dev/fake-part3'
+        configdrive_url = 'http://1.2.3.4/cd'
+        configdrive_mb = 10
+
+        self.mock_mp.return_value = {'swap': swap_part,
+                                     'configdrive': configdrive_part,
+                                     'root': root_part}
+        self.mock_ibd.side_effect = [True, True, True, False]
+        calls = [mock.call(self.dev),
+                 mock.call(root_part),
+                 mock.call(swap_part),
+                 mock.call(configdrive_part)]
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils.work_on_disk, self.dev, self.root_mb,
+                          self.swap_mb, self.ephemeral_mb,
+                          self.ephemeral_format, self.image_path, 'fake-uuid',
+                          preserve_ephemeral=False,
+                          configdrive=configdrive_url)
+        self.assertEqual(self.mock_ibd.call_args_list, calls)
+        self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
+                                             self.swap_mb, self.ephemeral_mb,
+                                             configdrive_mb, commit=True)
+        mock_unlink.assert_called_once_with('fake-path')
 
 
 @mock.patch.object(common_utils, 'execute')
@@ -589,13 +760,14 @@ class MakePartitionsTestCase(tests_base.TestCase):
         self.root_mb = 1024
         self.swap_mb = 512
         self.ephemeral_mb = 0
+        self.configdrive_mb = 0
         self.parted_static_cmd = ['parted', '-a', 'optimal', '-s', self.dev,
                                   '--', 'unit', 'MiB', 'mklabel', 'msdos']
 
     def test_make_partitions(self, mock_exc):
         mock_exc.return_value = (None, None)
         utils.make_partitions(self.dev, self.root_mb, self.swap_mb,
-                              self.ephemeral_mb)
+                              self.ephemeral_mb, self.configdrive_mb)
 
         expected_mkpart = ['mkpart', 'primary', 'linux-swap', '1', '513',
                            'mkpart', 'primary', '', '513', '1537']
@@ -615,7 +787,7 @@ class MakePartitionsTestCase(tests_base.TestCase):
         cmd = self.parted_static_cmd + expected_mkpart
         mock_exc.return_value = (None, None)
         utils.make_partitions(self.dev, self.root_mb, self.swap_mb,
-                              self.ephemeral_mb)
+                              self.ephemeral_mb, self.configdrive_mb)
 
         parted_call = mock.call(*cmd, run_as_root=True, check_exit_code=[0])
         mock_exc.assert_has_calls(parted_call)
@@ -810,3 +982,75 @@ class RealFilePartitioningTestCase(tests_base.TestCase):
                           [('uuid', 'path')])
         mock_clean_up_caches.assert_called_once_with(None, 'master_dir',
                                                      [('uuid', 'path')])
+
+
+@mock.patch.object(shutil, 'copyfileobj')
+@mock.patch.object(requests, 'get')
+class GetConfigdriveTestCase(tests_base.TestCase):
+
+    @mock.patch.object(gzip, 'GzipFile')
+    def test_get_configdrive(self, mock_gzip, mock_requests, mock_copy):
+        mock_requests.return_value = mock.MagicMock(content='Zm9vYmFy')
+        utils._get_configdrive('http://1.2.3.4/cd', 'fake-node-uuid')
+        mock_requests.assert_called_once_with('http://1.2.3.4/cd')
+        mock_gzip.assert_called_once_with('configdrive', 'rb',
+                                          fileobj=mock.ANY)
+        mock_copy.assert_called_once_with(mock.ANY, mock.ANY)
+
+    @mock.patch.object(gzip, 'GzipFile')
+    def test_get_configdrive_base64_string(self, mock_gzip, mock_requests,
+                                           mock_copy):
+        utils._get_configdrive('Zm9vYmFy', 'fake-node-uuid')
+        self.assertFalse(mock_requests.called)
+        mock_gzip.assert_called_once_with('configdrive', 'rb',
+                                          fileobj=mock.ANY)
+        mock_copy.assert_called_once_with(mock.ANY, mock.ANY)
+
+    def test_get_configdrive_bad_url(self, mock_requests, mock_copy):
+        mock_requests.side_effect = requests.exceptions.RequestException
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils._get_configdrive, 'http://1.2.3.4/cd',
+                          'fake-node-uuid')
+        self.assertFalse(mock_copy.called)
+
+    @mock.patch.object(base64, 'b64decode')
+    def test_get_configdrive_base64_error(self, mock_b64, mock_requests,
+                                          mock_copy):
+        mock_b64.side_effect = TypeError
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils._get_configdrive,
+                          'malformed', 'fake-node-uuid')
+        mock_b64.assert_called_once_with('malformed')
+        self.assertFalse(mock_copy.called)
+
+    @mock.patch.object(gzip, 'GzipFile')
+    def test_get_configdrive_gzip_error(self, mock_gzip, mock_requests,
+                                        mock_copy):
+        mock_requests.return_value = mock.MagicMock(content='Zm9vYmFy')
+        mock_copy.side_effect = IOError
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils._get_configdrive, 'http://1.2.3.4/cd',
+                          'fake-node-uuid')
+        mock_requests.assert_called_once_with('http://1.2.3.4/cd')
+        mock_gzip.assert_called_once_with('configdrive', 'rb',
+                                          fileobj=mock.ANY)
+        mock_copy.assert_called_once_with(mock.ANY, mock.ANY)
+
+
+class VirtualMediaDeployUtilsTestCase(db_base.DbTestCase):
+
+    def setUp(self):
+        super(VirtualMediaDeployUtilsTestCase, self).setUp()
+        mgr_utils.mock_the_extension_manager(driver="iscsi_ilo")
+        info_dict = db_utils.get_test_ilo_info()
+        self.node = obj_utils.create_test_node(self.context,
+        driver='iscsi_ilo', driver_info=info_dict)
+
+    def test_get_single_nic_with_vif_port_id(self):
+        obj_utils.create_test_port(self.context, node_id=self.node.id,
+                address='aa:bb:cc', uuid=common_utils.generate_uuid(),
+                extra={'vif_port_id': 'test-vif-A'}, driver='iscsi_ilo')
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            address = utils.get_single_nic_with_vif_port_id(task)
+            self.assertEqual('aa:bb:cc', address)

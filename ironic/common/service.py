@@ -18,9 +18,9 @@
 
 import socket
 
-from oslo.config import cfg
 from oslo import messaging
 from oslo.utils import importutils
+from oslo_config import cfg
 
 from ironic.common import config
 from ironic.common.i18n import _LE
@@ -64,12 +64,12 @@ class RPCService(service.Service):
     def start(self):
         super(RPCService, self).start()
         admin_context = context.RequestContext('admin', 'admin', is_admin=True)
+        self.manager.init_host()
         self.tg.add_dynamic_timer(
                 self.manager.periodic_tasks,
                 periodic_interval_max=cfg.CONF.periodic_interval,
                 context=admin_context)
 
-        self.manager.init_host()
         target = messaging.Target(topic=self.topic, server=self.host)
         endpoints = [self.manager]
         serializer = objects_base.IronicObjectSerializer()
@@ -80,7 +80,6 @@ class RPCService(service.Service):
                  {'service': self.topic, 'host': self.host})
 
     def stop(self):
-        super(RPCService, self).stop()
         try:
             self.rpcserver.stop()
             self.rpcserver.wait()
@@ -92,6 +91,8 @@ class RPCService(service.Service):
         except Exception as e:
             LOG.exception(_LE('Service error occurred when cleaning up '
                               'the RPC manager. Error: %s'), e)
+
+        super(RPCService, self).stop(graceful=True)
         LOG.info(_LI('Stopped RPC server for service %(service)s on host '
                      '%(host)s.'),
                  {'service': self.topic, 'host': self.host})
@@ -103,6 +104,7 @@ def prepare_service(argv=[]):
                      default_log_levels=['amqp=WARN',
                                          'amqplib=WARN',
                                          'qpid.messaging=INFO',
+                                         'oslo.messaging=INFO',
                                          'sqlalchemy=WARN',
                                          'keystoneclient=INFO',
                                          'stevedore=INFO',

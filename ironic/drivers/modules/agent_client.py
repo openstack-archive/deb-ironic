@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
 import requests
 
 from ironic.common import exception
@@ -39,11 +39,17 @@ class AgentClient(object):
         self.session = requests.Session()
 
     def _get_command_url(self, node):
-        if 'agent_url' not in node.driver_info:
+        agent_url = node.driver_internal_info.get('agent_url')
+        if not agent_url:
+            # (lintan) Keep backwards compatible with booted nodes before this
+            # change. Remove this after Kilo.
+            agent_url = node.driver_info.get('agent_url')
+        if not agent_url:
             raise exception.IronicException(_('Agent driver requires '
-                                              'agent_url in driver_info'))
+                                              'agent_url in '
+                                              'driver_internal_info'))
         return ('%(agent_url)s/%(api_version)s/commands' %
-                {'agent_url': node.driver_info['agent_url'],
+                {'agent_url': agent_url,
                  'api_version': CONF.agent.agent_api_version})
 
     def _get_command_body(self, method, params):

@@ -15,8 +15,8 @@
 import os
 import time
 
-from oslo.config import cfg
 from oslo.utils import excutils
+from oslo_config import cfg
 
 from ironic.common import dhcp_factory
 from ironic.common import exception
@@ -296,12 +296,13 @@ class AgentVendorInterface(base.VendorInterface):
         #             not by the operator.
         return {}
 
-    def validate(self, task, **kwargs):
+    def validate(self, task, method, **kwargs):
         """Validate the driver-specific Node deployment info.
 
         No validation necessary.
 
         :param task: a TaskManager instance
+        :param method: method to be validated
         """
         pass
 
@@ -334,20 +335,20 @@ class AgentVendorInterface(base.VendorInterface):
         AGENT_PORT defaults to 9999.
         """
         node = task.node
-        driver_info = node.driver_info
+        driver_internal_info = node.driver_internal_info
         LOG.debug(
             'Heartbeat from %(node)s, last heartbeat at %(heartbeat)s.',
             {'node': node.uuid,
-             'heartbeat': driver_info.get('agent_last_heartbeat')})
-        driver_info['agent_last_heartbeat'] = int(_time())
+             'heartbeat': driver_internal_info.get('agent_last_heartbeat')})
+        driver_internal_info['agent_last_heartbeat'] = int(_time())
         try:
-            driver_info['agent_url'] = kwargs['agent_url']
+            driver_internal_info['agent_url'] = kwargs['agent_url']
         except KeyError:
             raise exception.MissingParameterValue(_('For heartbeat operation, '
                                                     '"agent_url" must be '
                                                     'specified.'))
 
-        node.driver_info = driver_info
+        node.driver_internal_info = driver_internal_info
         node.save()
 
         # Async call backs don't set error state on their own
@@ -372,6 +373,7 @@ class AgentVendorInterface(base.VendorInterface):
 
     @task_manager.require_exclusive_lock
     def _continue_deploy(self, task, **kwargs):
+        task.process_event('resume')
         node = task.node
         image_source = node.instance_info.get('image_source')
         LOG.debug('Continuing deploy for %s', node.uuid)
@@ -393,9 +395,6 @@ class AgentVendorInterface(base.VendorInterface):
         res = self._client.prepare_image(node, image_info)
         LOG.debug('prepare_image got response %(res)s for node %(node)s',
                   {'res': res, 'node': node.uuid})
-
-        node.provision_state = states.DEPLOYING
-        node.save()
 
     def _check_deploy_success(self, node):
         # should only ever be called after we've validated that
@@ -423,9 +422,7 @@ class AgentVendorInterface(base.VendorInterface):
         manager_utils.node_set_boot_device(task, 'disk', persistent=True)
         manager_utils.node_power_action(task, states.REBOOT)
 
-        node.provision_state = states.ACTIVE
-        node.target_provision_state = states.NOSTATE
-        node.save()
+        task.process_event('done')
 
     @base.driver_passthru(['POST'], async=False)
     def lookup(self, context, **kwargs):

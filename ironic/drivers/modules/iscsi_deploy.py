@@ -15,8 +15,10 @@
 
 import os
 
-from oslo.config import cfg
 from oslo.utils import strutils
+from oslo_config import cfg
+import six
+from six.moves.urllib import parse
 
 from ironic.common import exception
 from ironic.common.i18n import _
@@ -24,7 +26,6 @@ from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.common import image_service as service
 from ironic.common import keystone
-from ironic.common import states
 from ironic.common import utils
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
@@ -125,6 +126,7 @@ def parse_instance_info(node):
     i_info['swap_mb'] = info.get('swap_mb', 0)
     i_info['ephemeral_gb'] = info.get('ephemeral_gb', 0)
     i_info['ephemeral_format'] = info.get('ephemeral_format')
+    i_info['configdrive'] = info.get('configdrive')
 
     err_msg_invalid = _("Cannot validate parameter for iSCSI deploy. "
                         "Invalid parameter %(param)s. Reason: %(reason)s")
@@ -236,8 +238,9 @@ def get_deploy_info(node, **kwargs):
                 "Parameters %s were not passed to ironic"
                 " for deploy.") % missing)
 
-    # ephemeral_format is nullable
+    # configdrive and ephemeral_format are nullable
     params['ephemeral_format'] = i_info.get('ephemeral_format')
+    params['configdrive'] = i_info.get('configdrive')
 
     return params
 
@@ -250,12 +253,11 @@ def continue_deploy(task, **kwargs):
 
     :param task: a TaskManager instance containing the node to act on.
     :param kwargs: the kwargs to be passed to deploy.
+    :raises: InvalidState if the event is not allowed by the associated
+             state machine.
     :returns: UUID of the root partition or None on error.
     """
     node = task.node
-
-    node.provision_state = states.DEPLOYING
-    node.save()
 
     params = get_deploy_info(node, **kwargs)
     ramdisk_error = kwargs.get('error')
@@ -282,6 +284,36 @@ def continue_deploy(task, **kwargs):
 
     destroy_images(node.uuid)
     return root_uuid
+
+
+def parse_root_device_hints(node):
+    """Parse the root_device property of a node.
+
+    Parse the root_device property of a node and make it a flat string
+    to be passed via the PXE config.
+
+    :param node: a single Node.
+    :returns: A flat string with the following format
+              opt1=value1,opt2=value2. Or None if the
+              Node contains no hints.
+
+    """
+    root_device = node.properties.get('root_device')
+    if not root_device:
+        return
+
+    hints = []
+    for key, value in root_device.items():
+        # NOTE(lucasagomes): We can't have spaces in the PXE config
+        # file, so we are going to url/percent encode the value here
+        # and decode on the other end.
+        if isinstance(value, six.string_types):
+            value = value.strip()
+            value = parse.quote(value)
+
+        hints.append("%s=%s" % (key, value))
+
+    return ','.join(hints)
 
 
 def build_deploy_ramdisk_options(node):
@@ -312,6 +344,11 @@ def build_deploy_ramdisk_options(node):
         'ironic_api_url': ironic_api,
         'disk': CONF.pxe.disk_devices,
     }
+
+    root_device = parse_root_device_hints(node)
+    if root_device:
+        deploy_options['root_device'] = root_device
+
     return deploy_options
 
 

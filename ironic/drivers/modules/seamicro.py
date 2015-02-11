@@ -21,8 +21,8 @@ Provides vendor passthru methods for SeaMicro specific functionality.
 import os
 import re
 
-from oslo.config import cfg
 from oslo.utils import importutils
+from oslo_config import cfg
 from six.moves.urllib import parse as urlparse
 
 from ironic.common import boot_devices
@@ -451,7 +451,7 @@ class VendorPassthru(base.VendorInterface):
     def get_properties(self):
         return COMMON_PROPERTIES
 
-    def validate(self, task, **kwargs):
+    def validate(self, task, method, **kwargs):
         _parse_driver_info(task.node)
 
     @base.passthru(['POST'])

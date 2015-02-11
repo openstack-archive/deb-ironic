@@ -18,8 +18,8 @@ Common functionalities shared between different iLO modules.
 
 import tempfile
 
-from oslo.config import cfg
 from oslo.utils import importutils
+from oslo_config import cfg
 
 from ironic.common import exception
 from ironic.common.i18n import _
@@ -83,54 +83,52 @@ BOOT_MODE_ILO_TO_GENERIC = dict((v, k)
 
 
 def parse_driver_info(node):
-    """Gets the driver specific Node deployment info.
+    """Gets the driver specific Node info.
 
     This method validates whether the 'driver_info' property of the
     supplied node contains the required information for this driver.
 
-    :param node: an ironic node object.
-    :returns: a dict containing information from driver_info
-        and default values.
-    :raises: InvalidParameterValue on invalid inputs.
+    :param node: an ironic Node object.
+    :returns: a dict containing information from driver_info (or where
+        applicable, config values).
+    :raises: InvalidParameterValue if any parameters are incorrect
     :raises: MissingParameterValue if some mandatory information
         is missing on the node
     """
     info = node.driver_info
     d_info = {}
 
-    error_msgs = []
+    missing_info = []
     for param in REQUIRED_PROPERTIES:
         try:
             d_info[param] = info[param]
         except KeyError:
-            error_msgs.append(_("'%s' not supplied to IloDriver.") % param)
-    if error_msgs:
-        msg = (_("The following parameters were mising while parsing "
-                 "driver_info:\n%s") % "\n".join(error_msgs))
-        raise exception.MissingParameterValue(msg)
+            missing_info.append(param)
+    if missing_info:
+        raise exception.MissingParameterValue(_(
+                "The following required iLO parameters are missing from the "
+                "node's driver_info: %s") % missing_info)
 
+    not_integers = []
     for param in OPTIONAL_PROPERTIES:
         value = info.get(param, CONF.ilo.get(param))
         try:
-            value = int(value)
+            d_info[param] = int(value)
         except ValueError:
-            error_msgs.append(_("'%s' is not an integer.") % param)
-            continue
-        d_info[param] = value
+            not_integers.append(param)
 
     for param in CONSOLE_PROPERTIES:
         value = info.get(param)
         if value:
             try:
-                value = int(value)
-                d_info[param] = value
+                d_info[param] = int(value)
             except ValueError:
-                error_msgs.append(_("'%s' is not an integer.") % param)
+                not_integers.append(param)
 
-    if error_msgs:
-        msg = (_("The following errors were encountered while parsing "
-                 "driver_info:\n%s") % "\n".join(error_msgs))
-        raise exception.InvalidParameterValue(msg)
+    if not_integers:
+        raise exception.InvalidParameterValue(_(
+                "The following iLO parameters from the node's driver_info "
+                "should be integers: %s") % not_integers)
 
     return d_info
 
@@ -231,6 +229,8 @@ def _prepare_floppy_image(task, params):
     :param task: a TaskManager instance containing the node to act on.
     :param params: a dictionary containing 'parameter name'->'value' mapping
         to be passed to the deploy ramdisk via the floppy image.
+    :raises: ImageCreationFailed, if it failed while creating the floppy image.
+    :raises: SwiftOperationError, if any operation with Swift fails.
     :returns: the Swift temp url for the floppy image.
     """
     with tempfile.NamedTemporaryFile() as vfat_image_tmpfile_obj:
@@ -365,6 +365,7 @@ def setup_vmedia_for_boot(task, boot_iso, parameters=None):
     :param parameters: the parameters to pass in the virtual floppy image
         in a dictionary.  This is optional.
     :raises: ImageCreationFailed, if it failed while creating the floppy image.
+    :raises: SwiftOperationError, if any operation with Swift fails.
     :raises: IloOperationError, if attaching virtual media failed.
     """
     LOG.info(_LI("Setting up node %s to boot from virtual media"),

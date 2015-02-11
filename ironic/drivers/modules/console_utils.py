@@ -24,8 +24,9 @@ import subprocess
 import tempfile
 import time
 
-from oslo.config import cfg
+from oslo.utils import netutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
 
 from ironic.common import exception
 from ironic.common.i18n import _
@@ -152,7 +153,7 @@ def get_shellinabox_console_url(port):
     """
 
     console_host = CONF.my_ip
-    if utils.is_valid_ipv6(console_host):
+    if netutils.is_valid_ipv6(console_host):
         console_host = '[%s]' % console_host
     console_url = "http://%s:%s" % (console_host, port)
     return console_url

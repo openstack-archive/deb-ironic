@@ -33,7 +33,7 @@ The Bare Metal Service includes the following components:
 - Ironic client. A command-line interface (CLI) for interacting with
   the Bare Metal Service.
 
-Additionally, the Bare Metal Servive has certain external dependencies, which are
+Additionally, the Bare Metal Service has certain external dependencies, which are
 very similar to other OpenStack Services:
 
 - A database to store hardware information and state. You can set the database
@@ -82,6 +82,13 @@ Configure Identity Service for Bare Metal
     --publicurl=http://IRONIC_NODE:6385 \
     --internalurl=http://IRONIC_NODE:6385 \
     --adminurl=http://IRONIC_NODE:6385
+
+.. error::
+    If the keystone endpoint-create operation returns an error about not being
+    able to find the region "regionOne", the error is due to this keystone bug:
+    https://bugs.launchpad.net/keystone/+bug/1400589. As a workaround until
+    that bug is fixed you can force the creation of "RegionOne" by passing
+    --region=RegionOne as an argument to the keystone endpoint-create command.
 
 Set up the Database for Bare Metal
 ----------------------------------
@@ -359,6 +366,11 @@ DHCP and PXE Boot configuration. An example of this is shown in the
     # Replace eth2 with the interface on the neutron node which you
     # are using to connect to the bare metal server
 
+#. If neutron-openvswitch-agent runs with ``ovs_neutron_plugin.ini`` as the input
+   config-file, edit ``ovs_neutron_plugin.ini`` to configure the bridge mappings
+   by adding the [ovs] section described in the previous step, and restart the
+   neutron-openvswitch-agent.
+
 #. Add the integration bridge to Open vSwitch::
 
     ovs-vsctl add-br br-int
@@ -383,27 +395,26 @@ DHCP and PXE Boot configuration. An example of this is shown in the
 
     ovs-vsctl show
 
-        Bridge br-ex
-            Port "eth1"
-                Interface "eth1"
-            Port br-ex
-                Interface br-ex
-                    type: internal
         Bridge br-int
+            fail_mode: secure
             Port "int-br-eth2"
                 Interface "int-br-eth2"
+                    type: patch
+                    options: {peer="phy-br-eth2"}
             Port br-int
                 Interface br-int
                     type: internal
         Bridge "br-eth2"
+            Port "phy-br-eth2"
+                Interface "phy-br-eth2"
+                    type: patch
+                    options: {peer="int-br-eth2"}
+            Port "eth2"
+                Interface "eth2"
             Port "br-eth2"
                 Interface "br-eth2"
                     type: internal
-            Port "phy-br-eth2"
-                Interface "phy-br-eth2"
-            Port "eth2"
-                Interface "eth2"
-        ovs_version: "2.0.1"
+        ovs_version: "2.3.0"
 
 #. Create the flat network on which you are going to launch the
    instances::
@@ -433,32 +444,26 @@ them to Glance service:
 
 .. _script: https://github.com/openstack/tripleo-incubator/blob/master/scripts/install-dependencies
 
-   - Clone the project and run the subsequent commands from the project
-     directory::
+   - Install diskimage-builder package (use virtualenv, if you don't
+     want to install anything globally)::
 
-       git clone https://github.com/openstack/diskimage-builder.git
-       cd diskimage-builder
+       sudo pip install diskimage-builder
 
    - Build the image your users will run (Ubuntu image has been taken as
      an example)::
 
-       bin/disk-image-create -u ubuntu -o my-image
+       disk-image-create ubuntu baremetal -o my-image
 
-     The above command creates *my-image.qcow2* file. If you want to use
-     Fedora image, replace *ubuntu* with *fedora* in the above command.
-
-   - Extract the kernel & ramdisk::
-
-       bin/disk-image-get-kernel -d ./ -o my \
-       -i $(pwd)/my-image.qcow2
-
-     The above command creates *my-vmlinuz* and *my-initrd* files. These
-     images are used while deploying the actual OS the users will run,
-     my-image in our case.
+     The above command creates *my-image.qcow2*, *my-image.vmlinuz* and
+     *my-image.initrd* files. If you want to use Fedora image, replace
+     *ubuntu* with *fedora* in the above command. *my-image.qcow2* is
+     used while deploying the actual OS the users will run. The images
+     *my-image.vmlinuz* and *my-image.initrd* are used for booting after
+     deploying the bare metal with my-image.qcow2.
 
    - Build the deploy image::
 
-       bin/ramdisk-image-create ubuntu deploy-ironic \
+       ramdisk-image-create ubuntu deploy-ironic \
        -o my-deploy-ramdisk
 
      The above command creates *my-deploy-ramdisk.kernel* and
@@ -474,16 +479,16 @@ them to Glance service:
 
    - Add the kernel and ramdisk images to glance::
 
-        glance image-create --name my-kernel --public \
-        --disk-format aki  < my-vmlinuz
+        glance image-create --name my-kernel --is-public True \
+        --disk-format aki  < my-image.vmlinuz
 
      Store the image uuid obtained from the above step as
      *$MY_VMLINUZ_UUID*.
 
      ::
 
-        glance image-create --name my-ramdisk --public \
-        --disk-format ari  < my-initrd
+        glance image-create --name my-image.initrd --is-public True \
+        --disk-format ari  < my-image.initrd
 
      Store the image UUID obtained from the above step as
      *$MY_INITRD_UUID*.
@@ -493,17 +498,17 @@ them to Glance service:
      images with this OS image. These two operations can be done by
      executing the following command::
 
-        glance image-create --name my-image --public \
+        glance image-create --name my-image --is-public True \
         --disk-format qcow2 --container-format bare --property \
         kernel_id=$MY_VMLINUZ_UUID --property \
-        ramdisk_id=$MY_INITRD_UUID < my-image
+        ramdisk_id=$MY_INITRD_UUID < my-image.qcow2
 
 3. Add the deploy images to glance
 
    Add the *my-deploy-ramdisk.kernel* and
    *my-deploy-ramdisk.initramfs* images to glance::
 
-        glance image-create --name deploy-vmlinuz --public \
+        glance image-create --name deploy-vmlinuz --is-public True \
         --disk-format aki < my-deploy-ramdisk.kernel
 
    Store the image UUID obtained from the above step as
@@ -511,7 +516,7 @@ them to Glance service:
 
    ::
 
-        glance image-create --name deploy-initrd --public \
+        glance image-create --name deploy-initrd --is-public True \
         --disk-format ari < my-deploy-ramdisk.initramfs
 
    Store the image UUID obtained from the above step as

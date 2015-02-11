@@ -58,53 +58,55 @@ class DracPowerInternalMethodsTestCase(base.DbTestCase):
             mock.ANY, resource_uris.DCIM_ComputerSystem)
 
     def test__set_power_state(self, mock_power_pywsman, mock_client_pywsman):
-        result_xml = test_utils.build_soap_xml([{'ReturnValue':
-                                                     drac_common.RET_SUCCESS}],
-                                             resource_uris.DCIM_ComputerSystem)
+        result_xml = test_utils.build_soap_xml(
+            [{'ReturnValue': drac_client.RET_SUCCESS}],
+            resource_uris.DCIM_ComputerSystem)
         mock_xml = test_utils.mock_wsman_root(result_xml)
         mock_pywsman_client = mock_client_pywsman.Client.return_value
         mock_pywsman_client.invoke.return_value = mock_xml
 
-        mock_pywsman_clientopts = mock_power_pywsman.ClientOptions.return_value
+        mock_pywsman_clientopts = (
+            mock_client_pywsman.ClientOptions.return_value)
 
         drac_power._set_power_state(self.node, states.POWER_ON)
 
         mock_pywsman_clientopts.add_selector.assert_has_calls([
             mock.call('CreationClassName', 'DCIM_ComputerSystem'),
             mock.call('Name', 'srv:system')
-        ])
+        ], any_order=True)
         mock_pywsman_clientopts.add_property.assert_called_once_with(
             'RequestedState', '2')
 
         mock_pywsman_client.invoke.assert_called_once_with(mock.ANY,
-            resource_uris.DCIM_ComputerSystem, 'RequestStateChange')
+            resource_uris.DCIM_ComputerSystem, 'RequestStateChange', None)
 
     def test__set_power_state_fail(self, mock_power_pywsman,
                                    mock_client_pywsman):
-        result_xml = test_utils.build_soap_xml([{'ReturnValue':
-                                                         drac_common.RET_ERROR,
-                                                'Message': 'error message'}],
-                                             resource_uris.DCIM_ComputerSystem)
+        result_xml = test_utils.build_soap_xml(
+            [{'ReturnValue': drac_client.RET_ERROR,
+              'Message': 'error message'}],
+            resource_uris.DCIM_ComputerSystem)
 
         mock_xml = test_utils.mock_wsman_root(result_xml)
         mock_pywsman_client = mock_client_pywsman.Client.return_value
         mock_pywsman_client.invoke.return_value = mock_xml
 
-        mock_pywsman_clientopts = mock_power_pywsman.ClientOptions.return_value
+        mock_pywsman_clientopts = (
+            mock_client_pywsman.ClientOptions.return_value)
 
-        self.assertRaises(exception.DracOperationError,
+        self.assertRaises(exception.DracOperationFailed,
                           drac_power._set_power_state, self.node,
                           states.POWER_ON)
 
         mock_pywsman_clientopts.add_selector.assert_has_calls([
             mock.call('CreationClassName', 'DCIM_ComputerSystem'),
             mock.call('Name', 'srv:system')
-        ])
+        ], any_order=True)
         mock_pywsman_clientopts.add_property.assert_called_once_with(
             'RequestedState', '2')
 
         mock_pywsman_client.invoke.assert_called_once_with(mock.ANY,
-            resource_uris.DCIM_ComputerSystem, 'RequestStateChange')
+            resource_uris.DCIM_ComputerSystem, 'RequestStateChange', None)
 
 
 class DracPowerTestCase(base.DbTestCase):

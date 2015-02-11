@@ -20,6 +20,7 @@ from xml.etree import ElementTree
 from oslo.utils import importutils
 
 from ironic.common import exception
+from ironic.drivers.modules.drac import common as drac_common
 
 pywsman = importutils.try_import('pywsman')
 
@@ -29,6 +30,27 @@ _SOAP_ENVELOPE_URI = 'http://www.w3.org/2003/05/soap-envelope'
 # http://en.community.dell.com/techcenter/extras/m/white_papers/20439105.aspx
 _FILTER_DIALECT_MAP = {'cql': 'http://schemas.dmtf.org/wbem/cql/1/dsp0202.pdf',
                        'wql': 'http://schemas.microsoft.com/wbem/wsman/1/WQL'}
+
+# ReturnValue constants
+RET_SUCCESS = '0'
+RET_ERROR = '2'
+RET_CREATED = '4096'
+
+
+def get_wsman_client(node):
+    """Return a DRAC client object.
+
+    Given an ironic node object, this method gives back a
+    Client object which is a wrapper for pywsman.Client.
+
+    :param node: an ironic node object.
+    :returns: a Client object.
+    :raises: InvalidParameterValue if some mandatory information
+             is missing on the node or on invalid inputs.
+    """
+    driver_info = drac_common.parse_driver_info(node)
+    client = Client(**driver_info)
+    return client
 
 
 class Client(object):
@@ -40,15 +62,15 @@ class Client(object):
                                         drac_password)
         # TODO(ifarkas): Add support for CACerts
         pywsman.wsman_transport_set_verify_peer(pywsman_client, False)
+        pywsman.wsman_transport_set_verify_host(pywsman_client, False)
 
         self.client = pywsman_client
 
-    def wsman_enumerate(self, resource_uri, options, filter_query=None,
+    def wsman_enumerate(self, resource_uri, filter_query=None,
                         filter_dialect='cql'):
         """Enumerates a remote WS-Man class.
 
         :param resource_uri: URI of the resource.
-        :param options: client options.
         :param filter_query: the query string.
         :param filter_dialect: the filter dialect. Valid options are:
                                'cql' and 'wql'. Defaults to 'cql'.
@@ -57,6 +79,8 @@ class Client(object):
                  was specified.
         :returns: an ElementTree object of the response received.
         """
+        options = pywsman.ClientOptions()
+
         filter_ = None
         if filter_query is not None:
             try:
@@ -88,17 +112,70 @@ class Client(object):
 
         return final_xml
 
-    def wsman_invoke(self, resource_uri, options, method):
+    def wsman_invoke(self, resource_uri, method, selectors=None,
+                     properties=None, expected_return_value=RET_SUCCESS):
         """Invokes a remote WS-Man method.
 
         :param resource_uri: URI of the resource.
-        :param options: client options.
         :param method: name of the method to invoke.
+        :param selectors: dictionary of selectors.
+        :param properties: dictionary of properties.
+        :param expected_return_value: expected return value.
         :raises: DracClientError on an error from pywsman library.
+        :raises: DracOperationFailed on error reported back by DRAC.
+        :raises: DracUnexpectedReturnValue on return value mismatch.
         :returns: an ElementTree object of the response received.
         """
-        doc = self.client.invoke(options, resource_uri, method)
-        return self._get_root(doc)
+        if selectors is None:
+            selectors = {}
+
+        if properties is None:
+            properties = {}
+
+        options = pywsman.ClientOptions()
+
+        for name, value in selectors.items():
+            options.add_selector(name, value)
+
+        # NOTE(ifarkas): manually constructing the XML doc should be deleted
+        #                once pywsman supports passing a list as a property.
+        #                For now this is only a fallback method: in case no
+        #                list provided, the supported pywsman API will be used.
+        list_included = any([isinstance(prop_item, list) for prop_item
+                             in properties.values()])
+        if list_included:
+            xml_doc = pywsman.XmlDoc('%s_INPUT' % method, resource_uri)
+            xml_root = xml_doc.root()
+
+            for name, value in properties.items():
+                if isinstance(value, list):
+                    for item in value:
+                        xml_root.add(resource_uri, name, item)
+                else:
+                    xml_root.add(resource_uri, name, value)
+
+        else:
+            xml_doc = None
+
+            for name, value in properties.items():
+                options.add_property(name, value)
+
+        doc = self.client.invoke(options, resource_uri, method, xml_doc)
+        root = self._get_root(doc)
+
+        return_value = drac_common.find_xml(root, 'ReturnValue',
+                                            resource_uri).text
+        if return_value != expected_return_value:
+            if return_value == RET_ERROR:
+                message = drac_common.find_xml(root, 'Message',
+                                               resource_uri).text
+                raise exception.DracOperationFailed(message=message)
+            else:
+                raise exception.DracUnexpectedReturnValue(
+                        expected_return_value=expected_return_value,
+                        actual_return_value=return_value)
+
+        return root
 
     def _get_root(self, doc):
         if doc is None or doc.root() is None:

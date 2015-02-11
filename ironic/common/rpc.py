@@ -27,9 +27,9 @@ __all__ = [
     'TRANSPORT_ALIASES',
 ]
 
-from oslo.config import cfg
 from oslo import messaging
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
 
 from ironic.common import context as ironic_context
 from ironic.common import exception

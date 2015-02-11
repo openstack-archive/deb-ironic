@@ -19,7 +19,7 @@ import os
 import tempfile
 
 import mock
-from oslo.config import cfg
+from oslo_config import cfg
 
 from ironic.common import exception
 from ironic.common import keystone
@@ -49,6 +49,7 @@ class IscsiDeployValidateParametersTestCase(db_base.DbTestCase):
         self.assertIsNotNone(info.get('image_source'))
         self.assertIsNotNone(info.get('root_gb'))
         self.assertEqual(0, info.get('ephemeral_gb'))
+        self.assertIsNone(info.get('configdrive'))
 
     def test_parse_instance_info_missing_instance_source(self):
         # make sure error is raised when info is missing
@@ -137,6 +138,13 @@ class IscsiDeployValidateParametersTestCase(db_base.DbTestCase):
                 iscsi_deploy.parse_instance_info,
                 node)
 
+    def test_parse_instance_info_configdrive(self):
+        info = dict(INST_INFO_DICT)
+        info['configdrive'] = 'http://1.2.3.4/cd'
+        node = obj_utils.create_test_node(self.context, instance_info=info)
+        instance_info = iscsi_deploy.parse_instance_info(node)
+        self.assertEqual('http://1.2.3.4/cd', instance_info['configdrive'])
+
 
 class IscsiDeployPrivateMethodsTestCase(db_base.DbTestCase):
 
@@ -205,7 +213,8 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         mock_unlink.assert_called_once_with('/path/uuid/disk')
         mock_rmtree.assert_called_once_with('/path/uuid')
 
-    def _test_build_deploy_ramdisk_options(self, mock_alnum, api_url):
+    def _test_build_deploy_ramdisk_options(self, mock_alnum, api_url,
+                                           expected_root_device=None):
         fake_key = '0123456789ABCDEFGHIJKLMNOPQRSTUV'
         fake_disk = 'fake-disk'
 
@@ -218,6 +227,9 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
                          'deployment_key': fake_key,
                          'disk': fake_disk,
                          'ironic_api_url': api_url}
+
+        if expected_root_device:
+            expected_opts['root_device'] = expected_root_device
 
         opts = iscsi_deploy.build_deploy_ramdisk_options(self.node)
 
@@ -248,3 +260,31 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         # As the Ironic api url is not specified in the config file
         # assert we are getting it from keystone
         mock_get_url.assert_called_once_with()
+
+    @mock.patch.object(keystone, 'get_service_url')
+    @mock.patch.object(utils, 'random_alnum')
+    def test_build_deploy_ramdisk_options_root_device(self, mock_alnum,
+                                                      mock_get_url):
+        self.node.properties['root_device'] = {'wwn': 123456}
+        expected = 'wwn=123456'
+        fake_api_url = 'http://127.0.0.1:6385'
+        self.config(api_url=fake_api_url, group='conductor')
+        self._test_build_deploy_ramdisk_options(mock_alnum, fake_api_url,
+                                                expected_root_device=expected)
+
+    def test_parse_root_device_hints(self):
+        self.node.properties['root_device'] = {'wwn': 123456}
+        expected = 'wwn=123456'
+        result = iscsi_deploy.parse_root_device_hints(self.node)
+        self.assertEqual(expected, result)
+
+    def test_parse_root_device_hints_string_space(self):
+        self.node.properties['root_device'] = {'model': 'fake model'}
+        expected = 'model=fake%20model'
+        result = iscsi_deploy.parse_root_device_hints(self.node)
+        self.assertEqual(expected, result)
+
+    def test_parse_root_device_hints_no_hints(self):
+        self.node.properties = {}
+        result = iscsi_deploy.parse_root_device_hints(self.node)
+        self.assertIsNone(result)

@@ -114,15 +114,15 @@ class DracManagementInternalMethodsTestCase(db_base.DbTestCase):
         mock_pywsman = mock_client_pywsman.Client.return_value
         mock_pywsman.enumerate.return_value = mock_xml
 
-        self.assertRaises(exception.DracConfigJobCreationError,
+        self.assertRaises(exception.DracPendingConfigJobExists,
                           drac_mgmt._check_for_config_job, self.node)
         mock_pywsman.enumerate.assert_called_once_with(mock.ANY, mock.ANY,
             resource_uris.DCIM_LifecycleJob)
 
     def test__create_config_job(self, mock_client_pywsman):
-        result_xml = test_utils.build_soap_xml([{'ReturnValue':
-                                                    drac_common.RET_SUCCESS}],
-                                               resource_uris.DCIM_BIOSService)
+        result_xml = test_utils.build_soap_xml(
+            [{'ReturnValue': drac_client.RET_CREATED}],
+            resource_uris.DCIM_BIOSService)
 
         mock_xml = test_utils.mock_wsman_root(result_xml)
         mock_pywsman = mock_client_pywsman.Client.return_value
@@ -132,22 +132,22 @@ class DracManagementInternalMethodsTestCase(db_base.DbTestCase):
 
         self.assertIsNone(result)
         mock_pywsman.invoke.assert_called_once_with(mock.ANY,
-            resource_uris.DCIM_BIOSService, 'CreateTargetedConfigJob')
+            resource_uris.DCIM_BIOSService, 'CreateTargetedConfigJob', None)
 
     def test__create_config_job_error(self, mock_client_pywsman):
-        result_xml = test_utils.build_soap_xml([{'ReturnValue':
-                                                    drac_common.RET_ERROR,
-                                                 'Message': 'E_FAKE'}],
-                                               resource_uris.DCIM_BIOSService)
+        result_xml = test_utils.build_soap_xml(
+            [{'ReturnValue': drac_client.RET_ERROR,
+              'Message': 'E_FAKE'}],
+            resource_uris.DCIM_BIOSService)
 
         mock_xml = test_utils.mock_wsman_root(result_xml)
         mock_pywsman = mock_client_pywsman.Client.return_value
         mock_pywsman.invoke.return_value = mock_xml
 
-        self.assertRaises(exception.DracConfigJobCreationError,
+        self.assertRaises(exception.DracOperationFailed,
                           drac_mgmt._create_config_job, self.node)
         mock_pywsman.invoke.assert_called_once_with(mock.ANY,
-            resource_uris.DCIM_BIOSService, 'CreateTargetedConfigJob')
+            resource_uris.DCIM_BIOSService, 'CreateTargetedConfigJob', None)
 
 
 @mock.patch.object(drac_client, 'pywsman')
@@ -221,16 +221,16 @@ class DracManagementTestCase(db_base.DbTestCase):
         self.assertRaises(exception.DracClientError,
                           self.driver.get_boot_device, self.task)
         mock_we.assert_called_once_with(resource_uris.DCIM_BootSourceSetting,
-                                        mock.ANY, filter_query=mock.ANY)
+                                        filter_query=mock.ANY)
 
     @mock.patch.object(drac_mgmt, '_check_for_config_job')
     @mock.patch.object(drac_mgmt, '_create_config_job')
     def test_set_boot_device(self, mock_ccj, mock_cfcj, mock_client_pywsman):
         result_xml_enum = test_utils.build_soap_xml([{'InstanceID': 'NIC'}],
                                       resource_uris.DCIM_BootSourceSetting)
-        result_xml_invk = test_utils.build_soap_xml([{'ReturnValue':
-                                                     drac_common.RET_SUCCESS}],
-                                      resource_uris.DCIM_BootConfigSetting)
+        result_xml_invk = test_utils.build_soap_xml(
+            [{'ReturnValue': drac_client.RET_SUCCESS}],
+            resource_uris.DCIM_BootConfigSetting)
 
         mock_xml_enum = test_utils.mock_wsman_root(result_xml_enum)
         mock_xml_invk = test_utils.mock_wsman_root(result_xml_invk)
@@ -248,7 +248,8 @@ class DracManagementTestCase(db_base.DbTestCase):
             resource_uris.DCIM_BootSourceSetting)
         mock_pywsman.invoke.assert_called_once_with(mock.ANY,
             resource_uris.DCIM_BootConfigSetting,
-            'ChangeBootOrderByInstanceID')
+            'ChangeBootOrderByInstanceID',
+            None)
         mock_cfcj.assert_called_once_with(self.node)
         mock_ccj.assert_called_once_with(self.node)
 
@@ -258,10 +259,9 @@ class DracManagementTestCase(db_base.DbTestCase):
                                   mock_client_pywsman):
         result_xml_enum = test_utils.build_soap_xml([{'InstanceID': 'NIC'}],
                                       resource_uris.DCIM_BootSourceSetting)
-        result_xml_invk = test_utils.build_soap_xml([{'ReturnValue':
-                                                         drac_common.RET_ERROR,
-                                                      'Message': 'E_FAKE'}],
-                                      resource_uris.DCIM_BootConfigSetting)
+        result_xml_invk = test_utils.build_soap_xml(
+            [{'ReturnValue': drac_client.RET_ERROR, 'Message': 'E_FAKE'}],
+            resource_uris.DCIM_BootConfigSetting)
 
         mock_xml_enum = test_utils.mock_wsman_root(result_xml_enum)
         mock_xml_invk = test_utils.mock_wsman_root(result_xml_invk)
@@ -271,7 +271,7 @@ class DracManagementTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             task.node = self.node
-            self.assertRaises(exception.DracOperationError,
+            self.assertRaises(exception.DracOperationFailed,
                               self.driver.set_boot_device, task,
                               boot_devices.PXE)
 
@@ -279,7 +279,8 @@ class DracManagementTestCase(db_base.DbTestCase):
             resource_uris.DCIM_BootSourceSetting)
         mock_pywsman.invoke.assert_called_once_with(mock.ANY,
             resource_uris.DCIM_BootConfigSetting,
-            'ChangeBootOrderByInstanceID')
+            'ChangeBootOrderByInstanceID',
+            None)
         mock_cfcj.assert_called_once_with(self.node)
         self.assertFalse(mock_ccj.called)
 
@@ -295,7 +296,7 @@ class DracManagementTestCase(db_base.DbTestCase):
                               self.driver.set_boot_device, task,
                               boot_devices.PXE)
         mock_we.assert_called_once_with(resource_uris.DCIM_BootSourceSetting,
-                                        mock.ANY, filter_query=mock.ANY)
+                                        filter_query=mock.ANY)
 
     def test_get_sensors_data(self, mock_client_pywsman):
         self.assertRaises(NotImplementedError,

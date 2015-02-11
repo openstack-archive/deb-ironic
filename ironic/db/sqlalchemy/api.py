@@ -19,15 +19,16 @@
 import collections
 import datetime
 
-from oslo.config import cfg
-from oslo.db import exception as db_exc
-from oslo.db.sqlalchemy import session as db_session
-from oslo.db.sqlalchemy import utils as db_utils
 from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_db import exception as db_exc
+from oslo_db.sqlalchemy import session as db_session
+from oslo_db.sqlalchemy import utils as db_utils
 from sqlalchemy.orm.exc import NoResultFound
 
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common.i18n import _LW
 from ironic.common import states
 from ironic.common import utils
 from ironic.db import api
@@ -252,12 +253,13 @@ class Connection(api.Connection):
 
     def create_node(self, values):
         # ensure defaults are present for new nodes
-        if not values.get('uuid'):
+        if 'uuid' not in values:
             values['uuid'] = utils.generate_uuid()
-        if not values.get('power_state'):
+        if 'power_state' not in values:
             values['power_state'] = states.NOSTATE
-        if not values.get('provision_state'):
-            values['provision_state'] = states.NOSTATE
+        if 'provision_state' not in values:
+            # TODO(deva): change this to ENROLL
+            values['provision_state'] = states.AVAILABLE
 
         node = models.Node()
         node.update(values)
@@ -550,6 +552,20 @@ class Connection(api.Connection):
                                   'online': True})
             if count == 0:
                 raise exception.ConductorNotFound(conductor=hostname)
+
+    def clear_node_reservations_for_conductor(self, hostname):
+        session = get_session()
+        nodes = []
+        with session.begin():
+            query = model_query(models.Node, session=session).filter_by(
+                    reservation=hostname)
+            nodes = [node['uuid'] for node in query]
+            query.update({'reservation': None})
+
+        if nodes:
+            nodes = ', '.join(nodes)
+            LOG.warn(_LW('Cleared reservations held by %(hostname)s: '
+                         '%(nodes)s'), {'hostname': hostname, 'nodes': nodes})
 
     def get_active_driver_dict(self, interval=None):
         if interval is None:

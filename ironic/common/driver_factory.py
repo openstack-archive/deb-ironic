@@ -13,8 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
 from oslo_concurrency import lockutils
+from oslo_config import cfg
 from stevedore import dispatch
 
 from ironic.common import exception
@@ -63,6 +63,12 @@ def get_driver(driver_name):
         return factory[driver_name].obj
     except KeyError:
         raise exception.DriverNotFound(driver_name=driver_name)
+
+
+def drivers():
+    """Get all drivers as a dict name -> driver object."""
+    factory = DriverFactory()
+    return {name: factory[name].obj for name in factory.names}
 
 
 class DriverFactory(object):
