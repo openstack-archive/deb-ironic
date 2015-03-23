@@ -16,8 +16,8 @@
 """Test class for IloPower module."""
 
 import mock
-from oslo.utils import importutils
 from oslo_config import cfg
+from oslo_utils import importutils
 
 from ironic.common import boot_devices
 from ironic.common import exception
@@ -25,21 +25,19 @@ from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules.ilo import common as ilo_common
-from ironic.drivers.modules.ilo import deploy as ilo_deploy
 from ironic.drivers.modules.ilo import power as ilo_power
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
 from ironic.tests.objects import utils as obj_utils
 
-ilo_client = importutils.try_import('proliantutils.ilo.ribcl')
+ilo_error = importutils.try_import('proliantutils.exception')
 
 INFO_DICT = db_utils.get_test_ilo_info()
 CONF = cfg.CONF
 
 
-@mock.patch.object(ilo_common, 'ilo_client')
-@mock.patch.object(ilo_power, 'ilo_client')
+@mock.patch.object(ilo_common, 'get_ilo_object')
 class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
 
     def setUp(self):
@@ -53,9 +51,8 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
         CONF.set_override('power_retry', 2, 'ilo')
         CONF.set_override('power_wait', 0, 'ilo')
 
-    def test__get_power_state(self, power_ilo_client_mock,
-                              common_ilo_client_mock):
-        ilo_mock_object = common_ilo_client_mock.IloClient.return_value
+    def test__get_power_state(self, get_ilo_object_mock):
+        ilo_mock_object = get_ilo_object_mock.return_value
         ilo_mock_object.get_host_power_status.return_value = 'ON'
 
         self.assertEqual(
@@ -68,32 +65,28 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
         ilo_mock_object.get_host_power_status.return_value = 'ERROR'
         self.assertEqual(states.ERROR, ilo_power._get_power_state(self.node))
 
-    def test__get_power_state_fail(self, power_ilo_client_mock,
-                                   common_ilo_client_mock):
-        power_ilo_client_mock.IloError = Exception
-        ilo_mock_object = common_ilo_client_mock.IloClient.return_value
-        ilo_mock_object.get_host_power_status.side_effect = [Exception()]
+    def test__get_power_state_fail(self, get_ilo_object_mock):
+        ilo_mock_object = get_ilo_object_mock.return_value
+        exc = ilo_error.IloError('error')
+        ilo_mock_object.get_host_power_status.side_effect = exc
 
         self.assertRaises(exception.IloOperationError,
-                         ilo_power._get_power_state,
-                         self.node)
+                          ilo_power._get_power_state,
+                          self.node)
         ilo_mock_object.get_host_power_status.assert_called_once_with()
 
-    def test__set_power_state_invalid_state(self, power_ilo_client_mock,
-                                            common_ilo_client_mock):
+    def test__set_power_state_invalid_state(self, get_ilo_object_mock):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
-            power_ilo_client_mock.IloError = Exception
-            self.assertRaises(exception.IloOperationError,
+            self.assertRaises(exception.InvalidParameterValue,
                               ilo_power._set_power_state,
                               task,
                               states.ERROR)
 
-    def test__set_power_state_reboot_fail(self, power_ilo_client_mock,
-                                          common_ilo_client_mock):
-        power_ilo_client_mock.IloError = Exception
-        ilo_mock_object = common_ilo_client_mock.IloClient.return_value
-        ilo_mock_object.reset_server.side_effect = Exception()
+    def test__set_power_state_reboot_fail(self, get_ilo_object_mock):
+        ilo_mock_object = get_ilo_object_mock.return_value
+        exc = ilo_error.IloError('error')
+        ilo_mock_object.reset_server.side_effect = exc
 
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
@@ -103,10 +96,8 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
                               states.REBOOT)
         ilo_mock_object.reset_server.assert_called_once_with()
 
-    def test__set_power_state_reboot_ok(self, power_ilo_client_mock,
-                                        common_ilo_client_mock):
-        power_ilo_client_mock.IloError = Exception
-        ilo_mock_object = common_ilo_client_mock.IloClient.return_value
+    def test__set_power_state_reboot_ok(self, get_ilo_object_mock):
+        ilo_mock_object = get_ilo_object_mock.return_value
         ilo_mock_object.get_host_power_status.side_effect = ['ON', 'OFF', 'ON']
 
         with task_manager.acquire(self.context, self.node.uuid,
@@ -115,10 +106,8 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
 
         ilo_mock_object.reset_server.assert_called_once_with()
 
-    def test__set_power_state_off_fail(self, power_ilo_client_mock,
-                                       common_ilo_client_mock):
-        power_ilo_client_mock.IloError = Exception
-        ilo_mock_object = common_ilo_client_mock.IloClient.return_value
+    def test__set_power_state_off_fail(self, get_ilo_object_mock):
+        ilo_mock_object = get_ilo_object_mock.return_value
         ilo_mock_object.get_host_power_status.return_value = 'ON'
 
         with task_manager.acquire(self.context, self.node.uuid,
@@ -131,10 +120,8 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
         ilo_mock_object.get_host_power_status.assert_called_with()
         ilo_mock_object.hold_pwr_btn.assert_called_once_with()
 
-    def test__set_power_state_on_ok(self, power_ilo_client_mock,
-                                    common_ilo_client_mock):
-        power_ilo_client_mock.IloError = Exception
-        ilo_mock_object = common_ilo_client_mock.IloClient.return_value
+    def test__set_power_state_on_ok(self, get_ilo_object_mock):
+        ilo_mock_object = get_ilo_object_mock.return_value
         ilo_mock_object.get_host_power_status.side_effect = ['OFF', 'ON']
 
         target_state = states.POWER_ON
@@ -147,7 +134,7 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
     @mock.patch.object(manager_utils, 'node_set_boot_device')
     @mock.patch.object(ilo_common, 'setup_vmedia_for_boot')
     def test__attach_boot_iso(self, setup_vmedia_mock, set_boot_device_mock,
-                              power_ilo_client_mock, common_ilo_client_mock):
+                              get_ilo_object_mock):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             task.node.instance_info['ilo_boot_iso'] = 'boot-iso'
@@ -169,10 +156,9 @@ class IloPowerTestCase(db_base.DbTestCase):
 
     def test_get_properties(self):
         expected = ilo_common.COMMON_PROPERTIES
-        expected.update(ilo_deploy.COMMON_PROPERTIES)
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
-            self.assertEqual(expected, task.driver.get_properties())
+            self.assertEqual(expected, task.driver.power.get_properties())
 
     @mock.patch.object(ilo_common, 'parse_driver_info')
     def test_validate(self, mock_drvinfo):

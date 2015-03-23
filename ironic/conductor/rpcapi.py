@@ -66,11 +66,14 @@ class ConductorAPI(object):
     |           get_driver_vendor_passthru_methods
     |    1.22 - Added configdrive parameter to do_node_deploy.
     |    1.23 - Added do_provisioning_action
+    |    1.24 - Added inspect_hardware method
+    |    1.25 - Added destroy_port
+    |    1.26 - Added continue_node_clean
 
     """
 
     # NOTE(rloo): This must be in sync with manager.ConductorManager's.
-    RPC_API_VERSION = '1.23'
+    RPC_API_VERSION = '1.26'
 
     def __init__(self, topic=None):
         super(ConductorAPI, self).__init__()
@@ -323,6 +326,23 @@ class ConductorAPI(object):
         return cctxt.call(context, 'do_provisioning_action',
                           node_id=node_id, action=action)
 
+    def continue_node_clean(self, context, node_id, topic=None):
+        """Signal to conductor service to start the next cleaning action.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param topic: RPC topic. Defaults to self.topic.
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                async task.
+        :raises: InvalidStateRequested if the requested action can not
+                 be performed.
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: NodeNotFound if the node no longer appears in the database
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.26')
+        return cctxt.call(context, 'continue_node_clean',
+                          node_id=node_id)
+
     def validate_driver_interfaces(self, context, node_id, topic=None):
         """Validate the `core` and `standardized` interfaces for drivers.
 
@@ -483,3 +503,35 @@ class ConductorAPI(object):
         cctxt = self.client.prepare(topic=topic or self.topic, version='1.17')
         return cctxt.call(context, 'get_supported_boot_devices',
                           node_id=node_id)
+
+    def inspect_hardware(self, context, node_id, topic=None):
+        """Signals the conductor service to perform hardware introspection.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param topic: RPC topic. Defaults to self.topic.
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: HardwareInspectionFailure
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task.
+        :raises: UnsupportedDriverExtension if the node's driver doesn't
+                 support inspection.
+        :raises: InvalidStateRequested if 'inspect' is not a valid
+                 action to do in the current state.
+
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.24')
+        return cctxt.call(context, 'inspect_hardware', node_id=node_id)
+
+    def destroy_port(self, context, port, topic=None):
+        """Delete a port.
+
+        :param context: request context.
+        :param port: port object
+        :param topic: RPC topic. Defaults to self.topic.
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: NodeNotFound if the node associated with the port does not
+                 exist.
+        """
+        cctxt = self.client.prepare(topic=topic or self.topic, version='1.25')
+        return cctxt.call(context, 'destroy_port', port=port)

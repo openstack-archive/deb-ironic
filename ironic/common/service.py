@@ -16,18 +16,19 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import signal
 import socket
 
 from oslo import messaging
-from oslo.utils import importutils
 from oslo_config import cfg
+from oslo_context import context
+from oslo_utils import importutils
 
 from ironic.common import config
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.common import rpc
 from ironic.objects import base as objects_base
-from ironic.openstack.common import context
 from ironic.openstack.common import log
 from ironic.openstack.common import service
 
@@ -60,21 +61,25 @@ class RPCService(service.Service):
         self.manager = manager_class(host, manager_module.MANAGER_TOPIC)
         self.topic = self.manager.topic
         self.rpcserver = None
+        self.deregister = True
 
     def start(self):
         super(RPCService, self).start()
         admin_context = context.RequestContext('admin', 'admin', is_admin=True)
-        self.manager.init_host()
-        self.tg.add_dynamic_timer(
-                self.manager.periodic_tasks,
-                periodic_interval_max=cfg.CONF.periodic_interval,
-                context=admin_context)
 
         target = messaging.Target(topic=self.topic, server=self.host)
         endpoints = [self.manager]
         serializer = objects_base.IronicObjectSerializer()
         self.rpcserver = rpc.get_server(target, endpoints, serializer)
         self.rpcserver.start()
+
+        self.handle_signal()
+        self.manager.init_host()
+        self.tg.add_dynamic_timer(
+                self.manager.periodic_tasks,
+                periodic_interval_max=cfg.CONF.periodic_interval,
+                context=admin_context)
+
         LOG.info(_LI('Created RPC server for service %(service)s on host '
                      '%(host)s.'),
                  {'service': self.topic, 'host': self.host})
@@ -87,7 +92,7 @@ class RPCService(service.Service):
             LOG.exception(_LE('Service error occurred when stopping the '
                               'RPC server. Error: %s'), e)
         try:
-            self.manager.del_host()
+            self.manager.del_host(deregister=self.deregister)
         except Exception as e:
             LOG.exception(_LE('Service error occurred when cleaning up '
                               'the RPC manager. Error: %s'), e)
@@ -96,6 +101,20 @@ class RPCService(service.Service):
         LOG.info(_LI('Stopped RPC server for service %(service)s on host '
                      '%(host)s.'),
                  {'service': self.topic, 'host': self.host})
+
+    def _handle_signal(self, signo, frame):
+        LOG.info(_LI('Got signal SIGUSR1. Not deregistering on next shutdown '
+                     'of service %(service)s on host %(host)s.'),
+                 {'service': self.topic, 'host': self.host})
+        self.deregister = False
+
+    def handle_signal(self):
+        """Add a signal handler for SIGUSR1.
+
+        The handler ensures that the manager is not deregistered when it is
+        shutdown.
+        """
+        signal.signal(signal.SIGUSR1, self._handle_signal)
 
 
 def prepare_service(argv=[]):
@@ -115,5 +134,6 @@ def prepare_service(argv=[]):
                                          'neutronclient=WARN',
                                          'glanceclient=WARN',
                                          'ironic.openstack.common=WARN',
+                                         'urllib3.connectionpool=WARN',
                                          ])
     log.setup('ironic')

@@ -19,11 +19,13 @@
 import collections
 import datetime
 
-from oslo.utils import timeutils
 from oslo_config import cfg
 from oslo_db import exception as db_exc
 from oslo_db.sqlalchemy import session as db_session
 from oslo_db.sqlalchemy import utils as db_utils
+from oslo_utils import strutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 from sqlalchemy.orm.exc import NoResultFound
 
 from ironic.common import exception
@@ -89,9 +91,9 @@ def add_identity_filter(query, value):
     :param value: Value for filtering results by.
     :return: Modified query.
     """
-    if utils.is_int_like(value):
+    if strutils.is_int_like(value):
         return query.filter_by(id=value)
-    elif utils.is_uuid_like(value):
+    elif uuidutils.is_uuid_like(value):
         return query.filter_by(uuid=value)
     else:
         raise exception.InvalidIdentity(identity=value)
@@ -114,7 +116,7 @@ def add_port_filter(query, value):
 
 
 def add_port_filter_by_node(query, value):
-    if utils.is_int_like(value):
+    if strutils.is_int_like(value):
         return query.filter_by(node_id=value)
     else:
         query = query.join(models.Node,
@@ -123,23 +125,12 @@ def add_port_filter_by_node(query, value):
 
 
 def add_node_filter_by_chassis(query, value):
-    if utils.is_int_like(value):
+    if strutils.is_int_like(value):
         return query.filter_by(chassis_id=value)
     else:
         query = query.join(models.Chassis,
                 models.Node.chassis_id == models.Chassis.id)
         return query.filter(models.Chassis.uuid == value)
-
-
-def _check_port_change_forbidden(port, session):
-    node_id = port['node_id']
-    if node_id is not None:
-        query = model_query(models.Node, session=session)
-        query = query.filter_by(id=node_id)
-        node_ref = query.one()
-        if node_ref['reservation'] is not None:
-            raise exception.NodeLocked(node=node_ref['uuid'],
-                                       host=node_ref['reservation'])
 
 
 def _paginate_query(model, limit=None, marker=None, sort_key=None,
@@ -189,6 +180,11 @@ class Connection(api.Connection):
             limit = timeutils.utcnow() - datetime.timedelta(
                                          seconds=filters['provisioned_before'])
             query = query.filter(models.Node.provision_updated_at < limit)
+        if 'inspection_started_before' in filters:
+            limit = ((timeutils.utcnow()) -
+                      (datetime.timedelta(
+                       seconds=filters['inspection_started_before'])))
+            query = query.filter(models.Node.inspection_started_at < limit)
 
         return query
 
@@ -254,7 +250,7 @@ class Connection(api.Connection):
     def create_node(self, values):
         # ensure defaults are present for new nodes
         if 'uuid' not in values:
-            values['uuid'] = utils.generate_uuid()
+            values['uuid'] = uuidutils.generate_uuid()
         if 'power_state' not in values:
             values['power_state'] = states.NOSTATE
         if 'provision_state' not in values:
@@ -266,7 +262,9 @@ class Connection(api.Connection):
         try:
             node.save()
         except db_exc.DBDuplicateEntry as exc:
-            if 'instance_uuid' in exc.columns:
+            if 'name' in exc.columns:
+                raise exception.DuplicateName(name=values['name'])
+            elif 'instance_uuid' in exc.columns:
                 raise exception.InstanceAssociated(
                     instance_uuid=values['instance_uuid'],
                     node=values['uuid'])
@@ -287,8 +285,15 @@ class Connection(api.Connection):
         except NoResultFound:
             raise exception.NodeNotFound(node=node_uuid)
 
+    def get_node_by_name(self, node_name):
+        query = model_query(models.Node).filter_by(name=node_name)
+        try:
+            return query.one()
+        except NoResultFound:
+            raise exception.NodeNotFound(node=node_name)
+
     def get_node_by_instance(self, instance):
-        if not utils.is_uuid_like(instance):
+        if not uuidutils.is_uuid_like(instance):
             raise exception.InvalidUUID(uuid=instance)
 
         query = (model_query(models.Node)
@@ -314,7 +319,7 @@ class Connection(api.Connection):
 
             # Get node ID, if an UUID was supplied. The ID is
             # required for deleting all ports, attached to the node.
-            if utils.is_uuid_like(node_id):
+            if uuidutils.is_uuid_like(node_id):
                 node_id = node_ref['id']
 
             port_query = model_query(models.Port, session=session)
@@ -331,10 +336,17 @@ class Connection(api.Connection):
 
         try:
             return self._do_update_node(node_id, values)
-        except db_exc.DBDuplicateEntry:
-            raise exception.InstanceAssociated(
-                instance_uuid=values['instance_uuid'],
-                node=node_id)
+        except db_exc.DBDuplicateEntry as e:
+            if 'name' in e.columns:
+                raise exception.DuplicateName(name=values['name'])
+            elif 'uuid' in e.columns:
+                raise exception.NodeAlreadyExists(uuid=values['uuid'])
+            elif 'instance_uuid' in e.columns:
+                raise exception.InstanceAssociated(
+                    instance_uuid=values['instance_uuid'],
+                    node=node_id)
+            else:
+                raise e
 
     def _do_update_node(self, node_id, values):
         session = get_session()
@@ -353,6 +365,16 @@ class Connection(api.Connection):
 
             if 'provision_state' in values:
                 values['provision_updated_at'] = timeutils.utcnow()
+                if values['provision_state'] == states.INSPECTING:
+                    values['inspection_started_at'] = timeutils.utcnow()
+                    values['inspection_finished_at'] = None
+                elif (ref.provision_state == states.INSPECTING and
+                      values['provision_state'] == states.MANAGEABLE):
+                    values['inspection_finished_at'] = timeutils.utcnow()
+                    values['inspection_started_at'] = None
+                elif (ref.provision_state == states.INSPECTING and
+                      values['provision_state'] == states.INSPECTFAIL):
+                    values['inspection_started_at'] = None
 
             ref.update(values)
         return ref
@@ -392,7 +414,7 @@ class Connection(api.Connection):
 
     def create_port(self, values):
         if not values.get('uuid'):
-            values['uuid'] = utils.generate_uuid()
+            values['uuid'] = uuidutils.generate_uuid()
         port = models.Port()
         port.update(values)
         try:
@@ -427,14 +449,9 @@ class Connection(api.Connection):
         with session.begin():
             query = model_query(models.Port, session=session)
             query = add_port_filter(query, port_id)
-
-            try:
-                ref = query.one()
-            except NoResultFound:
+            count = query.delete()
+            if count == 0:
                 raise exception.PortNotFound(port=port_id)
-            _check_port_change_forbidden(ref, session)
-
-            query.delete()
 
     def get_chassis_by_id(self, chassis_id):
         query = model_query(models.Chassis).filter_by(id=chassis_id)
@@ -457,7 +474,7 @@ class Connection(api.Connection):
 
     def create_chassis(self, values):
         if not values.get('uuid'):
-            values['uuid'] = utils.generate_uuid()
+            values['uuid'] = uuidutils.generate_uuid()
         chassis = models.Chassis()
         chassis.update(values)
         try:

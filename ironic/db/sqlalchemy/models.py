@@ -146,6 +146,7 @@ class Node(Base):
         schema.UniqueConstraint('uuid', name='uniq_nodes0uuid'),
         schema.UniqueConstraint('instance_uuid',
                                 name='uniq_nodes0instance_uuid'),
+        schema.UniqueConstraint('name', name='uniq_nodes0name'),
         table_args())
     id = Column(Integer, primary_key=True)
     uuid = Column(String(36))
@@ -153,6 +154,7 @@ class Node(Base):
     #             filter on it more efficiently, even though it is
     #             user-settable, and would otherwise be in node.properties.
     instance_uuid = Column(String(36), nullable=True)
+    name = Column(String(63), nullable=True)
     chassis_id = Column(Integer, ForeignKey('chassis.id'), nullable=True)
     power_state = Column(String(15), nullable=True)
     target_power_state = Column(String(15), nullable=True)
@@ -165,6 +167,7 @@ class Node(Base):
     driver = Column(String(15))
     driver_info = Column(JSONEncodedDict)
     driver_internal_info = Column(JSONEncodedDict)
+    clean_step = Column(JSONEncodedDict)
 
     # NOTE(deva): this is the host name of the conductor which has
     #             acquired a TaskManager lock on the node.
@@ -183,6 +186,8 @@ class Node(Base):
     maintenance = Column(Boolean, default=False)
     maintenance_reason = Column(Text, nullable=True)
     console_enabled = Column(Boolean, default=False)
+    inspection_finished_at = Column(DateTime, nullable=True)
+    inspection_started_at = Column(DateTime, nullable=True)
     extra = Column(JSONEncodedDict)
 
 

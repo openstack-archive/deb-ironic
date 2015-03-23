@@ -17,13 +17,13 @@ from oslo_config import cfg
 
 from ironic.common import dhcp_factory
 from ironic.common import exception
+from ironic.common import image_service
 from ironic.common import keystone
 from ironic.common import pxe_utils
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.drivers.modules import agent
-from ironic.drivers.modules import deploy_utils
-from ironic import objects
+from ironic.drivers.modules import agent_client
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
@@ -58,6 +58,75 @@ class TestAgentMethods(db_base.DbTestCase):
         self.assertEqual('api-url', options['ipa-api-url'])
         self.assertEqual('fake_agent', options['ipa-driver-name'])
 
+    def test_build_agent_options_root_device_hints(self):
+        self.config(api_url='api-url', group='conductor')
+        self.node.properties['root_device'] = {'model': 'fake_model'}
+        options = agent.build_agent_options(self.node)
+        self.assertEqual('api-url', options['ipa-api-url'])
+        self.assertEqual('fake_agent', options['ipa-driver-name'])
+        self.assertEqual('model=fake_model', options['root_device'])
+
+    @mock.patch.object(image_service, 'GlanceImageService')
+    def test_build_instance_info_for_deploy_glance_image(self, glance_mock):
+        i_info = self.node.instance_info
+        i_info['image_source'] = 'image-uuid'
+        self.node.instance_info = i_info
+        self.node.save()
+
+        image_info = {'checksum': 'aa', 'disk_format': 'qcow2',
+                      'container_format': 'bare'}
+        glance_mock.return_value.show = mock.Mock(return_value=image_info)
+
+        mgr_utils.mock_the_extension_manager(driver='fake_agent')
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+
+            agent.build_instance_info_for_deploy(task)
+
+            glance_mock.assert_called_once_with(version=2,
+                                                context=task.context)
+            glance_mock.return_value.show.assert_called_once_with(
+                self.node.instance_info['image_source'])
+            glance_mock.return_value.swift_temp_url.assert_called_once_with(
+                image_info)
+
+    @mock.patch.object(image_service.HttpImageService, 'validate_href')
+    def test_build_instance_info_for_deploy_nonglance_image(self,
+            validate_href_mock):
+        i_info = self.node.instance_info
+        i_info['image_source'] = 'http://image-ref'
+        i_info['image_checksum'] = 'aa'
+        self.node.instance_info = i_info
+        self.node.save()
+
+        mgr_utils.mock_the_extension_manager(driver='fake_agent')
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+
+            info = agent.build_instance_info_for_deploy(task)
+
+            self.assertEqual(self.node.instance_info['image_source'],
+                             info['image_url'])
+            validate_href_mock.assert_called_once_with('http://image-ref')
+
+    @mock.patch.object(image_service.HttpImageService, 'validate_href')
+    def test_build_instance_info_for_deploy_nonsupported_image(self,
+            validate_href_mock):
+        validate_href_mock.side_effect = exception.ImageRefValidationFailed(
+            image_href='file://img.qcow2', reason='fail')
+        i_info = self.node.instance_info
+        i_info['image_source'] = 'file://img.qcow2'
+        i_info['image_checksum'] = 'aa'
+        self.node.instance_info = i_info
+        self.node.save()
+
+        mgr_utils.mock_the_extension_manager(driver='fake_agent')
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+
+            self.assertRaises(exception.ImageRefValidationFailed,
+                              agent.build_instance_info_for_deploy, task)
+
 
 class TestAgentDeploy(db_base.DbTestCase):
     def setUp(self):
@@ -71,6 +140,12 @@ class TestAgentDeploy(db_base.DbTestCase):
             'driver_internal_info': DRIVER_INTERNAL_INFO,
         }
         self.node = object_utils.create_test_node(self.context, **n)
+        self.ports = [object_utils.create_test_port(self.context,
+                                                    node_id=self.node.id)]
+
+    def test_get_properties(self):
+        expected = agent.COMMON_PROPERTIES
+        self.assertEqual(expected, self.driver.get_properties())
 
     def test_validate(self):
         with task_manager.acquire(
@@ -96,6 +171,25 @@ class TestAgentDeploy(db_base.DbTestCase):
                                   self.driver.validate, task)
         self.assertIn('instance_info.image_source', str(e))
 
+    def test_validate_nonglance_image_no_checksum(self):
+        i_info = self.node.instance_info
+        i_info['image_source'] = 'http://image-ref'
+        del i_info['image_checksum']
+        self.node.instance_info = i_info
+        self.node.save()
+
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            self.assertRaises(exception.MissingParameterValue,
+                              self.driver.validate, task)
+
+    def test_validate_invalid_root_device_hints(self):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            task.node.properties['root_device'] = {'size': 'not-int'}
+            self.assertRaises(exception.InvalidParameterValue,
+                              task.driver.deploy.validate, task)
+
     @mock.patch.object(dhcp_factory.DHCPFactory, 'update_dhcp')
     @mock.patch('ironic.conductor.utils.node_set_boot_device')
     @mock.patch('ironic.conductor.utils.node_power_action')
@@ -105,7 +199,7 @@ class TestAgentDeploy(db_base.DbTestCase):
             dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
             driver_return = self.driver.deploy(task)
             self.assertEqual(driver_return, states.DEPLOYWAIT)
-            dhcp_mock.assert_called_once_with(task, dhcp_opts)
+            dhcp_mock.assert_called_once_with(task, dhcp_opts, None)
             bootdev_mock.assert_called_once_with(task, 'pxe', persistent=True)
             power_mock.assert_called_once_with(task,
                                                states.REBOOT)
@@ -118,22 +212,62 @@ class TestAgentDeploy(db_base.DbTestCase):
             power_mock.assert_called_once_with(task, states.POWER_OFF)
             self.assertEqual(driver_return, states.DELETED)
 
-    def test_prepare(self):
-        pass
-
-    def test_clean_up(self):
-        pass
-
-    @mock.patch.object(dhcp_factory.DHCPFactory, 'update_dhcp')
-    def test_take_over(self, update_dhcp_mock):
+    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports')
+    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.create_cleaning_ports')
+    @mock.patch('ironic.drivers.modules.agent._do_pxe_boot')
+    @mock.patch('ironic.drivers.modules.agent._prepare_pxe_boot')
+    def test_prepare_cleaning(self, prepare_mock, boot_mock, create_mock,
+                              delete_mock):
+        ports = [{'ports': self.ports}]
+        create_mock.return_value = ports
         with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            task.driver.deploy.take_over(task)
-            update_dhcp_mock.assert_called_once_with(
-                task, CONF.agent.agent_pxe_bootfile_name)
+                self.context, self.node['uuid'], shared=False) as task:
+            self.assertEqual(states.CLEANING,
+                             self.driver.prepare_cleaning(task))
+            prepare_mock.assert_called_once_with(task)
+            boot_mock.assert_called_once_with(task, ports)
+            create_mock.assert_called_once()
+            delete_mock.assert_called_once()
+
+    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports')
+    @mock.patch('ironic.drivers.modules.agent._clean_up_pxe')
+    @mock.patch('ironic.conductor.utils.node_power_action')
+    def test_tear_down_cleaning(self, power_mock, cleanup_mock, neutron_mock):
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            self.assertIsNone(self.driver.tear_down_cleaning(task))
+            power_mock.assert_called_once_with(task, states.POWER_OFF)
+            cleanup_mock.assert_called_once_with(task)
+            neutron_mock.assert_called_once()
+
+    @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps')
+    def test_get_clean_steps(self, mock_get_clean_steps):
+        # Test getting clean steps
+        mock_steps = [{'priority': 10, 'interface': 'deploy',
+                       'step': 'erase_devices'}]
+        mock_get_clean_steps.return_value = mock_steps
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            steps = self.driver.get_clean_steps(task)
+            mock_get_clean_steps.assert_called_once_with(task)
+        self.assertEqual(mock_steps, steps)
+
+    @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps')
+    def test_get_clean_steps_config_priority(self, mock_get_clean_steps):
+        # Test that we can override the priority of get clean steps
+        self.config(agent_erase_devices_priority=20, group='agent')
+        mock_steps = [{'priority': 10, 'interface': 'deploy',
+                       'step': 'erase_devices'}]
+        expected_steps = [{'priority': 20, 'interface': 'deploy',
+                           'step': 'erase_devices'}]
+        mock_get_clean_steps.return_value = mock_steps
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            steps = self.driver.get_clean_steps(task)
+            mock_get_clean_steps.assert_called_once_with(task)
+        self.assertEqual(expected_steps, steps)
 
 
 class TestAgentVendor(db_base.DbTestCase):
+
     def setUp(self):
         super(TestAgentVendor, self).setUp()
         mgr_utils.mock_the_extension_manager(driver="fake_agent")
@@ -145,30 +279,6 @@ class TestAgentVendor(db_base.DbTestCase):
               'driver_internal_info': DRIVER_INTERNAL_INFO,
         }
         self.node = object_utils.create_test_node(self.context, **n)
-
-    def test_validate(self):
-        with task_manager.acquire(self.context, self.node.uuid) as task:
-            method = 'heartbeat'
-            self.passthru.validate(task, method)
-
-    def test_driver_validate(self):
-        kwargs = {'version': '2'}
-        method = 'lookup'
-        self.passthru.driver_validate(method, **kwargs)
-
-    def test_driver_validate_invalid_paremeter(self):
-        method = 'lookup'
-        kwargs = {'version': '1'}
-        self.assertRaises(exception.InvalidParameterValue,
-                          self.passthru.driver_validate,
-                          method, **kwargs)
-
-    def test_driver_validate_missing_parameter(self):
-        method = 'lookup'
-        kwargs = {}
-        self.assertRaises(exception.MissingParameterValue,
-                          self.passthru.driver_validate,
-                          method, **kwargs)
 
     def test_continue_deploy(self):
         self.node.provision_state = states.DEPLOYWAIT
@@ -188,7 +298,7 @@ class TestAgentVendor(db_base.DbTestCase):
 
         with task_manager.acquire(self.context, self.node.uuid,
                                       shared=False) as task:
-            self.passthru._continue_deploy(task)
+            self.passthru.continue_deploy(task)
 
             client_mock.prepare_image.assert_called_with(task.node,
                 expected_image_info)
@@ -197,14 +307,13 @@ class TestAgentVendor(db_base.DbTestCase):
                              task.node.target_provision_state)
 
     def test_continue_deploy_image_source_is_url(self):
-        self.node.instance_info['image_source'] = 'glance://fake-image'
         self.node.provision_state = states.DEPLOYWAIT
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
         test_temp_url = 'http://image'
         expected_image_info = {
             'urls': [test_temp_url],
-            'id': 'fake-image',
+            'id': self.node.instance_info['image_source'],
             'checksum': 'checksum',
             'disk_format': 'qcow2',
             'container_format': 'bare',
@@ -215,7 +324,7 @@ class TestAgentVendor(db_base.DbTestCase):
 
         with task_manager.acquire(self.context, self.node.uuid,
                                       shared=False) as task:
-            self.passthru._continue_deploy(task)
+            self.passthru.continue_deploy(task)
 
             client_mock.prepare_image.assert_called_with(task.node,
                 expected_image_info)
@@ -227,7 +336,7 @@ class TestAgentVendor(db_base.DbTestCase):
     @mock.patch('ironic.conductor.utils.node_set_boot_device')
     @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
                 '._check_deploy_success')
-    def test__reboot_to_instance(self, check_deploy_mock, bootdev_mock,
+    def test_reboot_to_instance(self, check_deploy_mock, bootdev_mock,
                                  power_mock):
         check_deploy_mock.return_value = None
 
@@ -237,7 +346,7 @@ class TestAgentVendor(db_base.DbTestCase):
 
         with task_manager.acquire(self.context, self.node.uuid,
                                       shared=False) as task:
-            self.passthru._reboot_to_instance(task)
+            self.passthru.reboot_to_instance(task)
 
             check_deploy_mock.assert_called_once_with(task.node)
             bootdev_mock.assert_called_once_with(task, 'disk', persistent=True)
@@ -245,222 +354,60 @@ class TestAgentVendor(db_base.DbTestCase):
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
 
-    def test_lookup_version_not_found(self):
-        kwargs = {
-            'version': '999',
-        }
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    def test_deploy_is_done(self, mock_get_cmd):
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.passthru.lookup,
-                              task.context,
-                              **kwargs)
+            mock_get_cmd.return_value = [{'command_name': 'prepare_image',
+                                          'command_status': 'SUCCESS'}]
+            self.assertTrue(self.passthru.deploy_is_done(task))
 
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._find_node_by_macs')
-    def test_lookup_v2(self, find_mock):
-        kwargs = {
-            'version': '2',
-            'inventory': {
-                'interfaces': [
-                    {
-                        'mac_address': 'aa:bb:cc:dd:ee:ff',
-                        'name': 'eth0'
-                    },
-                    {
-                        'mac_address': 'ff:ee:dd:cc:bb:aa',
-                        'name': 'eth1'
-                    }
-
-                ]
-            }
-        }
-        find_mock.return_value = self.node
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    def test_deploy_is_done_empty_response(self, mock_get_cmd):
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            node = self.passthru.lookup(task.context, **kwargs)
-        self.assertEqual(self.node, node['node'])
+            mock_get_cmd.return_value = []
+            self.assertFalse(self.passthru.deploy_is_done(task))
 
-    def test_lookup_v2_missing_inventory(self):
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    def test_deploy_is_done_race(self, mock_get_cmd):
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.passthru.lookup,
-                              task.context)
+            mock_get_cmd.return_value = [{'command_name': 'some_other_command',
+                                          'command_status': 'SUCCESS'}]
+            self.assertFalse(self.passthru.deploy_is_done(task))
 
-    def test_lookup_v2_empty_inventory(self):
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    def test_deploy_is_done_still_running(self, mock_get_cmd):
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertRaises(exception.InvalidParameterValue,
-                              self.passthru.lookup,
-                              task.context,
-                              inventory={})
+            mock_get_cmd.return_value = [{'command_name': 'prepare_image',
+                                          'command_status': 'RUNNING'}]
+            self.assertFalse(self.passthru.deploy_is_done(task))
 
-    def test_lookup_v2_empty_interfaces(self):
-        with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertRaises(exception.NodeNotFound,
-                              self.passthru.lookup,
-                              task.context,
-                              version='2',
-                              inventory={'interfaces': []})
+    def _build_pxe_config_options(self, root_device_hints=False):
+        self.config(api_url='api-url', group='conductor')
+        self.config(agent_pxe_append_params='foo bar', group='agent')
 
-    @mock.patch.object(objects.Port, 'get_by_address')
-    def test_find_ports_by_macs(self, mock_get_port):
-        fake_port = object_utils.get_test_port(self.context)
-        mock_get_port.return_value = fake_port
+        if root_device_hints:
+            self.node.properties['root_device'] = {'model': 'FakeModel'}
 
-        macs = ['aa:bb:cc:dd:ee:ff']
-
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            ports = self.passthru._find_ports_by_macs(task, macs)
-        self.assertEqual(1, len(ports))
-        self.assertEqual(fake_port.uuid, ports[0].uuid)
-        self.assertEqual(fake_port.node_id, ports[0].node_id)
-
-    @mock.patch.object(objects.Port, 'get_by_address')
-    def test_find_ports_by_macs_bad_params(self, mock_get_port):
-        mock_get_port.side_effect = exception.PortNotFound(port="123")
-
-        macs = ['aa:bb:cc:dd:ee:ff']
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            empty_ids = self.passthru._find_ports_by_macs(task, macs)
-        self.assertEqual([], empty_ids)
-
-    @mock.patch('ironic.objects.node.Node.get_by_id')
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._get_node_id')
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._find_ports_by_macs')
-    def test_find_node_by_macs(self, ports_mock, node_id_mock, node_mock):
-        ports_mock.return_value = object_utils.get_test_port(self.context)
-        node_id_mock.return_value = '1'
-        node_mock.return_value = self.node
-
-        macs = ['aa:bb:cc:dd:ee:ff']
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            node = self.passthru._find_node_by_macs(task, macs)
-        self.assertEqual(node, node)
-
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._find_ports_by_macs')
-    def test_find_node_by_macs_no_ports(self, ports_mock):
-        ports_mock.return_value = []
-
-        macs = ['aa:bb:cc:dd:ee:ff']
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            self.assertRaises(exception.NodeNotFound,
-                              self.passthru._find_node_by_macs,
-                              task,
-                              macs)
-
-    @mock.patch('ironic.objects.node.Node.get_by_uuid')
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._get_node_id')
-    @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._find_ports_by_macs')
-    def test_find_node_by_macs_nodenotfound(self, ports_mock, node_id_mock,
-                                            node_mock):
-        port = object_utils.get_test_port(self.context)
-        ports_mock.return_value = [port]
-        node_id_mock.return_value = self.node['uuid']
-        node_mock.side_effect = [self.node,
-                                 exception.NodeNotFound(node=self.node)]
-
-        macs = ['aa:bb:cc:dd:ee:ff']
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            self.assertRaises(exception.NodeNotFound,
-                              self.passthru._find_node_by_macs,
-                              task,
-                              macs)
-
-    def test_get_node_id(self):
-        fake_port1 = object_utils.get_test_port(self.context,
-                                                node_id=123,
-                                                address="aa:bb:cc:dd:ee:fe")
-        fake_port2 = object_utils.get_test_port(self.context,
-                                                node_id=123,
-                                                id=42,
-                                                address="aa:bb:cc:dd:ee:fb",
-                                                uuid='1be26c0b-03f2-4d2e-ae87-'
-                                                     'c02d7f33c782')
-
-        node_id = self.passthru._get_node_id([fake_port1, fake_port2])
-        self.assertEqual(fake_port2.node_id, node_id)
-
-    def test_get_node_id_exception(self):
-        fake_port1 = object_utils.get_test_port(self.context,
-                                                node_id=123,
-                                                address="aa:bb:cc:dd:ee:fc")
-        fake_port2 = object_utils.get_test_port(self.context,
-                                                node_id=321,
-                                                id=42,
-                                                address="aa:bb:cc:dd:ee:fd",
-                                                uuid='1be26c0b-03f2-4d2e-ae87-'
-                                                     'c02d7f33c782')
-
-        self.assertRaises(exception.NodeNotFound,
-                          self.passthru._get_node_id,
-                          [fake_port1, fake_port2])
-
-    def test_get_interfaces(self):
-        fake_inventory = {
-            'interfaces': [
-                {
-                    'mac_address': 'aa:bb:cc:dd:ee:ff',
-                    'name': 'eth0'
-                }
-            ]
+        pxe_info = {
+            'deploy_kernel': ('glance://deploy-kernel',
+                              'fake-node/deploy_kernel'),
+            'deploy_ramdisk': ('glance://deploy-ramdisk',
+                               'fake-node/deploy_ramdisk'),
         }
-        interfaces = self.passthru._get_interfaces(fake_inventory)
-        self.assertEqual(fake_inventory['interfaces'], interfaces)
+        options = agent._build_pxe_config_options(self.node, pxe_info)
+        expected = {'deployment_aki_path': 'fake-node/deploy_kernel',
+                    'deployment_ari_path': 'fake-node/deploy_ramdisk',
+                    'ipa-api-url': 'api-url',
+                    'ipa-driver-name': u'fake_agent',
+                    'pxe_append_params': 'foo bar'}
 
-    def test_get_interfaces_bad(self):
-        self.assertRaises(exception.InvalidParameterValue,
-                          self.passthru._get_interfaces,
-                          inventory={})
+        if root_device_hints:
+            expected['root_device'] = 'model=FakeModel'
 
-    def test_heartbeat(self):
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            self.passthru.heartbeat(task, **kwargs)
+        self.assertEqual(expected, options)
 
-    def test_heartbeat_bad(self):
-        kwargs = {}
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            self.assertRaises(exception.MissingParameterValue,
-                              self.passthru.heartbeat, task, **kwargs)
+    def test__build_pxe_config_options(self):
+        self._build_pxe_config_options()
 
-    @mock.patch.object(deploy_utils, 'set_failed_state')
-    @mock.patch.object(agent.AgentVendorInterface, '_deploy_is_done')
-    def test_heartbeat_deploy_done_fails(self, done_mock, failed_mock):
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        done_mock.side_effect = Exception
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=True) as task:
-            task.node.provision_state = states.DEPLOYING
-            task.node.target_provision_state = states.ACTIVE
-            self.passthru.heartbeat(task, **kwargs)
-            failed_mock.assert_called_once_with(task, mock.ANY)
-
-    def test_vendor_passthru_vendor_routes(self):
-        expected = ['heartbeat']
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=True) as task:
-            vendor_routes = task.driver.vendor.vendor_routes
-            self.assertIsInstance(vendor_routes, dict)
-            self.assertEqual(expected, list(vendor_routes))
-
-    def test_vendor_passthru_driver_routes(self):
-        expected = ['lookup']
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=True) as task:
-            driver_routes = task.driver.vendor.driver_routes
-            self.assertIsInstance(driver_routes, dict)
-            self.assertEqual(expected, list(driver_routes))
+    def test__build_pxe_config_options_root_device_hints(self):
+        self._build_pxe_config_options(root_device_hints=True)

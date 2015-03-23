@@ -54,12 +54,20 @@ BASE_VERSION = 1
 # edf532db: Add logic to store the config drive passed by Nova
 
 # v1.1: API at the point in time when microversioning support was added
-MIN_VER = base.Version({base.Version.string: "1.1"})
+MIN_VER_STR = '1.1'
 
 # v1.2: Renamed NOSTATE ("None") to AVAILABLE ("available")
 # v1.3: Add node.driver_internal_info
 # v1.4: Add MANAGEABLE state
-MAX_VER = base.Version({base.Version.string: "1.4"})
+# v1.5: Add logical node names
+# v1.6: Add INSPECT* states
+MAX_VER_STR = '1.6'
+
+
+MIN_VER = base.Version({base.Version.string: MIN_VER_STR},
+                       MIN_VER_STR, MAX_VER_STR)
+MAX_VER = base.Version({base.Version.string: MAX_VER_STR},
+                       MIN_VER_STR, MAX_VER_STR)
 
 
 class MediaType(base.APIBase):
@@ -108,7 +116,7 @@ class V1(base.APIBase):
                                         'developer/ironic/dev',
                                         'api-spec-v1.html',
                                         bookmark=True, type='text/html')
-                   ]
+                    ]
         v1.media_types = [MediaType('application/json',
                           'application/vnd.openstack.ironic.v1+json')]
         v1.chassis = [link.Link.make_link('self', pecan.request.host_url,
@@ -117,28 +125,28 @@ class V1(base.APIBase):
                                            pecan.request.host_url,
                                            'chassis', '',
                                            bookmark=True)
-                     ]
+                      ]
         v1.nodes = [link.Link.make_link('self', pecan.request.host_url,
                                         'nodes', ''),
                     link.Link.make_link('bookmark',
                                         pecan.request.host_url,
                                         'nodes', '',
                                         bookmark=True)
-                   ]
+                    ]
         v1.ports = [link.Link.make_link('self', pecan.request.host_url,
                                         'ports', ''),
                     link.Link.make_link('bookmark',
                                         pecan.request.host_url,
                                         'ports', '',
                                         bookmark=True)
-                   ]
+                    ]
         v1.drivers = [link.Link.make_link('self', pecan.request.host_url,
                                           'drivers', ''),
                       link.Link.make_link('bookmark',
                                           pecan.request.host_url,
                                           'drivers', '',
                                           bookmark=True)
-                     ]
+                      ]
         return v1
 
 
@@ -157,31 +165,34 @@ class Controller(rest.RestController):
         #       the request object to make the links.
         return V1.convert()
 
-    def _check_version(self, version):
+    def _check_version(self, version, headers=None):
+        if headers is None:
+            headers = {}
         # ensure that major version in the URL matches the header
         if version.major != BASE_VERSION:
             raise exc.HTTPNotAcceptable(_(
                 "Mutually exclusive versions requested. Version %(ver)s "
-                "requested but not supported by this service.")
-                % {'ver': version})
+                "requested but not supported by this service. The supported "
+                "version range is: [%(min)s, %(max)s].") % {'ver': version,
+                'min': MIN_VER_STR, 'max': MAX_VER_STR}, headers=headers)
         # ensure the minor version is within the supported range
         if version < MIN_VER or version > MAX_VER:
             raise exc.HTTPNotAcceptable(_(
-                "Unsupported minor version requested. This API service "
-                "supports the following version range: "
-                "[%(min)s, %(max)s].") % {'min': MIN_VER,
-                                          'max': MAX_VER})
+                "Version %(ver)s was requested but the minor version is not "
+                "supported by this service. The supported version range is: "
+                "[%(min)s, %(max)s].") % {'ver': version, 'min': MIN_VER_STR,
+                                          'max': MAX_VER_STR}, headers=headers)
 
     @pecan.expose()
     def _route(self, args):
-        v = base.Version(pecan.request.headers)
+        v = base.Version(pecan.request.headers, MIN_VER_STR, MAX_VER_STR)
+
         # Always set the min and max headers
-        # FIXME: these are not being sent if _check_version raises an exception
-        pecan.response.headers[base.Version.min_string] = str(MIN_VER)
-        pecan.response.headers[base.Version.max_string] = str(MAX_VER)
+        pecan.response.headers[base.Version.min_string] = MIN_VER_STR
+        pecan.response.headers[base.Version.max_string] = MAX_VER_STR
 
         # assert that requested version is supported
-        self._check_version(v)
+        self._check_version(v, pecan.response.headers)
         pecan.response.headers[base.Version.string] = str(v)
         pecan.request.version = v
 

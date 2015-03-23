@@ -36,7 +36,7 @@ class DriverLoadTestCase(base.TestCase):
     def _fake_init_driver_err(self, *args, **kwargs):
         kwargs['on_load_failure_callback'](None, FakeEp,
                                            exception.DriverLoadError(
-                                           driver='aaa', reason='bbb'))
+                                               driver='aaa', reason='bbb'))
 
     def test_driver_load_error_if_driver_enabled(self):
         self.config(enabled_drivers=['fake'])
@@ -58,4 +58,4 @@ class DriverLoadTestCase(base.TestCase):
         with mock.patch.object(dispatch.NameDispatchExtensionManager,
                                '__init__', self._fake_init_driver_err):
             driver_factory.DriverFactory._init_extension_manager()
-            mock_em.assert_called_once_with()
+            self.assertEqual(2, mock_em.call_count)

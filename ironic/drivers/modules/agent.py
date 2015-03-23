@@ -15,14 +15,15 @@
 import os
 import time
 
-from oslo.utils import excutils
 from oslo_config import cfg
+from oslo_utils import excutils
 
+from ironic.common import boot_devices
 from ironic.common import dhcp_factory
 from ironic.common import exception
+from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
 from ironic.common import image_service
 from ironic.common import keystone
 from ironic.common import paths
@@ -32,10 +33,10 @@ from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
+from ironic.drivers.modules import agent_base_vendor
 from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
-from ironic import objects
 from ironic.openstack.common import fileutils
 from ironic.openstack.common import log
 
@@ -51,9 +52,12 @@ agent_opts = [
     cfg.StrOpt('agent_pxe_bootfile_name',
                default='pxelinux.0',
                help='Neutron bootfile DHCP parameter.'),
-    cfg.IntOpt('heartbeat_timeout',
-               default=300,
-               help='Maximum interval (in seconds) for agent heartbeats.'),
+    cfg.IntOpt('agent_erase_devices_priority',
+               help='Priority to run in-band erase devices via the Ironic '
+                    'Python Agent ramdisk. If unset, will use the priority '
+                    'set in the ramdisk (defaults to 10 for the '
+                    'GenericHardwareManager). If set to 0, will not run '
+                    'during cleaning.')
     ]
 
 CONF = cfg.CONF
@@ -61,6 +65,15 @@ CONF.import_opt('my_ip', 'ironic.netconf')
 CONF.register_opts(agent_opts, group='agent')
 
 LOG = log.getLogger(__name__)
+
+
+REQUIRED_PROPERTIES = {
+    'deploy_kernel': _('UUID (from Glance) of the deployment kernel. '
+                       'Required.'),
+    'deploy_ramdisk': _('UUID (from Glance) of the ramdisk with agent that is '
+                        'used at deploy time. Required.'),
+}
+COMMON_PROPERTIES = REQUIRED_PROPERTIES
 
 
 def _time():
@@ -82,10 +95,15 @@ def build_agent_options(node):
     """
     ironic_api = (CONF.conductor.api_url or
                   keystone.get_service_url()).rstrip('/')
-    return {
+    agent_config_opts = {
         'ipa-api-url': ironic_api,
         'ipa-driver-name': node.driver
     }
+    root_device = deploy_utils.parse_root_device_hints(node)
+    if root_device:
+        agent_config_opts['root_device'] = root_device
+
+    return agent_config_opts
 
 
 def _build_pxe_config_options(node, pxe_info):
@@ -141,21 +159,71 @@ def build_instance_info_for_deploy(task):
     :param task: a TaskManager object containing the node
     :returns: a dictionary containing the properties to be updated
         in instance_info
+    :raises: exception.ImageRefValidationFailed if image_source is not
+        Glance href and is not HTTP(S) URL.
     """
     node = task.node
     instance_info = node.instance_info
 
-    glance = image_service.Service(version=2, context=task.context)
-    image_info = glance.show(instance_info['image_source'])
-    swift_temp_url = glance.swift_temp_url(image_info)
-    LOG.debug('Got image info: %(info)s for node %(node)s.',
-              {'info': image_info, 'node': node.uuid})
+    image_source = instance_info['image_source']
+    if service_utils.is_glance_image(image_source):
+        glance = image_service.GlanceImageService(version=2,
+                                                  context=task.context)
+        image_info = glance.show(image_source)
+        swift_temp_url = glance.swift_temp_url(image_info)
+        LOG.debug('Got image info: %(info)s for node %(node)s.',
+                  {'info': image_info, 'node': node.uuid})
+        instance_info['image_url'] = swift_temp_url
+        instance_info['image_checksum'] = image_info['checksum']
+        instance_info['image_disk_format'] = image_info['disk_format']
+        instance_info['image_container_format'] = (
+            image_info['container_format'])
+    else:
+        try:
+            image_service.HttpImageService().validate_href(image_source)
+        except exception.ImageRefValidationFailed:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_LE("Agent deploy supports only HTTP(S) URLs as "
+                              "instance_info['image_source']. Either %s "
+                              "is not a valid HTTP(S) URL or "
+                              "is not reachable."), image_source)
+        instance_info['image_url'] = image_source
 
-    instance_info['image_url'] = swift_temp_url
-    instance_info['image_checksum'] = image_info['checksum']
-    instance_info['image_disk_format'] = image_info['disk_format']
-    instance_info['image_container_format'] = image_info['container_format']
     return instance_info
+
+
+def _prepare_pxe_boot(task):
+    """Prepare the files required for PXE booting the agent."""
+    pxe_info = _get_tftp_image_info(task.node)
+    pxe_options = _build_pxe_config_options(task.node, pxe_info)
+    pxe_utils.create_pxe_config(task,
+                                pxe_options,
+                                CONF.agent.agent_pxe_config_template)
+    _cache_tftp_images(task.context, task.node, pxe_info)
+
+
+def _do_pxe_boot(task, ports=None):
+    """Reboot the node into the PXE ramdisk.
+
+    :param ports: a list of Neutron port dicts to update DHCP options on. If
+        None, will get the list of ports from the Ironic port objects.
+    """
+    dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
+    provider = dhcp_factory.DHCPFactory()
+    provider.update_dhcp(task, dhcp_opts, ports)
+    manager_utils.node_set_boot_device(task, boot_devices.PXE, persistent=True)
+    manager_utils.node_power_action(task, states.REBOOT)
+
+
+def _clean_up_pxe(task):
+    """Clean up left over PXE and DHCP files."""
+    pxe_info = _get_tftp_image_info(task.node)
+    for label in pxe_info:
+        path = pxe_info[label][1]
+        utils.unlink_without_raise(path)
+    AgentTFTPImageCache().clean_up()
+
+    pxe_utils.clean_up_pxe_config(task)
 
 
 class AgentDeploy(base.DeployInterface):
@@ -166,7 +234,7 @@ class AgentDeploy(base.DeployInterface):
 
         :returns: dictionary of <property name>:<property description> entries.
         """
-        return {}
+        return COMMON_PROPERTIES
 
     def validate(self, task):
         """Validate the driver-specific Node deployment info.
@@ -184,11 +252,20 @@ class AgentDeploy(base.DeployInterface):
                                                               'deploy_kernel')
         params['driver_info.deploy_ramdisk'] = node.driver_info.get(
                                                               'deploy_ramdisk')
-        params['instance_info.image_source'] = node.instance_info.get(
-                                                               'image_source')
+        image_source = node.instance_info.get('image_source')
+        params['instance_info.image_source'] = image_source
         error_msg = _('Node %s failed to validate deploy image info. Some '
                       'parameters were missing') % node.uuid
         deploy_utils.check_for_missing_params(params, error_msg)
+
+        if not service_utils.is_glance_image(image_source):
+            if not node.instance_info.get('image_checksum'):
+                raise exception.MissingParameterValue(_(
+                    "image_source's image_checksum must be provided in "
+                    "instance_info for node %s") % node.uuid)
+
+        # Validate the root device hints
+        deploy_utils.parse_root_device_hints(node)
 
     @task_manager.require_exclusive_lock
     def deploy(self, task):
@@ -202,12 +279,7 @@ class AgentDeploy(base.DeployInterface):
         :param task: a TaskManager instance.
         :returns: status of the deploy. One of ironic.common.states.
         """
-        dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
-        provider = dhcp_factory.DHCPFactory()
-        provider.update_dhcp(task, dhcp_opts)
-        manager_utils.node_set_boot_device(task, 'pxe', persistent=True)
-        manager_utils.node_power_action(task, states.REBOOT)
-
+        _do_pxe_boot(task)
         return states.DEPLOYWAIT
 
     @task_manager.require_exclusive_lock
@@ -226,12 +298,7 @@ class AgentDeploy(base.DeployInterface):
         :param task: a TaskManager instance.
         """
         node = task.node
-        pxe_info = _get_tftp_image_info(task.node)
-        pxe_options = _build_pxe_config_options(task.node, pxe_info)
-        pxe_utils.create_pxe_config(task,
-                                    pxe_options,
-                                    CONF.agent.agent_pxe_config_template)
-        _cache_tftp_images(task.context, node, pxe_info)
+        _prepare_pxe_boot(task)
 
         node.instance_info = build_instance_info_for_deploy(task)
         node.save()
@@ -252,13 +319,7 @@ class AgentDeploy(base.DeployInterface):
 
         :param task: a TaskManager instance.
         """
-        pxe_info = _get_tftp_image_info(task.node)
-        for label in pxe_info:
-            path = pxe_info[label][1]
-            utils.unlink_without_raise(path)
-        AgentTFTPImageCache().clean_up()
-
-        pxe_utils.clean_up_pxe_config(task)
+        _clean_up_pxe(task)
 
     def take_over(self, task):
         """Take over management of this node from a dead conductor.
@@ -277,102 +338,83 @@ class AgentDeploy(base.DeployInterface):
 
         :param task: a TaskManager instance.
         """
-        provider = dhcp_factory.DHCPFactory()
-        provider.update_dhcp(task, CONF.agent.agent_pxe_bootfile_name)
-
-
-class AgentVendorInterface(base.VendorInterface):
-
-    def __init__(self):
-        self.supported_payload_versions = ['2']
-        self._client = _get_client()
-
-    def get_properties(self):
-        """Return the properties of the interface.
-
-        :returns: dictionary of <property name>:<property description> entries.
-        """
-        # NOTE(jroll) all properties are set by the driver,
-        #             not by the operator.
-        return {}
-
-    def validate(self, task, method, **kwargs):
-        """Validate the driver-specific Node deployment info.
-
-        No validation necessary.
-
-        :param task: a TaskManager instance
-        :param method: method to be validated
-        """
         pass
 
-    def driver_validate(self, method, **kwargs):
-        """Validate the driver deployment info.
+    def get_clean_steps(self, task):
+        """Get the list of clean steps from the agent.
 
-        :param method: method to be validated.
+        :param task: a TaskManager object containing the node
+
+        :returns: A list of clean step dictionaries
         """
-        version = kwargs.get('version')
+        steps = deploy_utils.agent_get_clean_steps(task)
+        if CONF.agent.agent_erase_devices_priority:
+            for step in steps:
+                if (step.get('step') == 'erase_devices' and
+                        step.get('interface') == 'deploy'):
+                    # Override with operator set priority
+                    step['priority'] = CONF.agent.agent_erase_devices_priority
+        return steps
 
-        if not version:
-            raise exception.MissingParameterValue(_('Missing parameter '
-                                                    'version'))
-        if version not in self.supported_payload_versions:
-            raise exception.InvalidParameterValue(_('Unknown lookup '
-                                                    'payload version: %s')
-                                                    % version)
+    def execute_clean_step(self, task, step):
+        """Execute a clean step asynchronously on the agent.
 
-    @base.passthru(['POST'])
-    def heartbeat(self, task, **kwargs):
-        """Method for agent to periodically check in.
-
-        The agent should be sending its agent_url (so Ironic can talk back)
-        as a kwarg. kwargs should have the following format::
-
-         {
-             'agent_url': 'http://AGENT_HOST:AGENT_PORT'
-         }
-
-        AGENT_PORT defaults to 9999.
+        :param task: a TaskManager object containing the node
+        :param step: a clean step dictionary to execute
+        :raises: NodeCleaningFailure if the agent does not return a command
+            status
+        :returns: states.CLEANING to signify the step will be completed async
         """
-        node = task.node
-        driver_internal_info = node.driver_internal_info
-        LOG.debug(
-            'Heartbeat from %(node)s, last heartbeat at %(heartbeat)s.',
-            {'node': node.uuid,
-             'heartbeat': driver_internal_info.get('agent_last_heartbeat')})
-        driver_internal_info['agent_last_heartbeat'] = int(_time())
-        try:
-            driver_internal_info['agent_url'] = kwargs['agent_url']
-        except KeyError:
-            raise exception.MissingParameterValue(_('For heartbeat operation, '
-                                                    '"agent_url" must be '
-                                                    'specified.'))
+        return deploy_utils.agent_execute_clean_step(task, step)
 
-        node.driver_internal_info = driver_internal_info
-        node.save()
+    def prepare_cleaning(self, task):
+        """Boot into the agent to prepare for cleaning."""
+        provider = dhcp_factory.DHCPFactory()
+        # If we have left over ports from a previous cleaning, remove them
+        if getattr(provider.provider, 'delete_cleaning_ports', None):
+            provider.provider.delete_cleaning_ports(task)
 
-        # Async call backs don't set error state on their own
-        # TODO(jimrollenhagen) improve error messages here
-        msg = _('Failed checking if deploy is done.')
-        try:
-            if node.provision_state == states.DEPLOYWAIT:
-                msg = _('Node failed to get image for deploy.')
-                self._continue_deploy(task, **kwargs)
-            elif (node.provision_state == states.DEPLOYING
-                    and self._deploy_is_done(node)):
-                msg = _('Node failed to move to active state.')
-                self._reboot_to_instance(task, **kwargs)
-        except Exception:
-            LOG.exception(_LE('Async exception for %(node)s: %(msg)s'),
-                          {'node': node,
-                           'msg': msg})
-            deploy_utils.set_failed_state(task, msg)
+        # Create cleaning ports if necessary
+        ports = None
+        if getattr(provider.provider, 'create_cleaning_ports', None):
+            ports = provider.provider.create_cleaning_ports(task)
+        _prepare_pxe_boot(task)
+        _do_pxe_boot(task, ports)
+        # Tell the conductor we are waiting for the agent to boot.
+        return states.CLEANING
 
-    def _deploy_is_done(self, node):
-        return self._client.deploy_is_done(node)
+    def tear_down_cleaning(self, task):
+        """Clean up the PXE and DHCP files after cleaning."""
+        manager_utils.node_power_action(task, states.POWER_OFF)
+        _clean_up_pxe(task)
+
+        # If we created cleaning ports, delete them
+        provider = dhcp_factory.DHCPFactory()
+        if getattr(provider.provider, 'delete_cleaning_ports', None):
+            provider.provider.delete_cleaning_ports(task)
+
+
+class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
+
+    def deploy_is_done(self, task):
+        commands = self._client.get_commands_status(task.node)
+        if not commands:
+            return False
+
+        last_command = commands[-1]
+
+        if last_command['command_name'] != 'prepare_image':
+            # catches race condition where prepare_image is still processing
+            # so deploy hasn't started yet
+            return False
+
+        if last_command['command_status'] != 'RUNNING':
+            return True
+
+        return False
 
     @task_manager.require_exclusive_lock
-    def _continue_deploy(self, task, **kwargs):
+    def continue_deploy(self, task, **kwargs):
         task.process_event('resume')
         node = task.node
         image_source = node.instance_info.get('image_source')
@@ -403,7 +445,7 @@ class AgentVendorInterface(base.VendorInterface):
         if command['command_status'] == 'FAILED':
             return command['command_error']
 
-    def _reboot_to_instance(self, task, **kwargs):
+    def reboot_to_instance(self, task, **kwargs):
         node = task.node
         LOG.debug('Preparing to reboot to instance for node %s',
                   node.uuid)
@@ -420,165 +462,4 @@ class AgentVendorInterface(base.VendorInterface):
         LOG.debug('Rebooting node %s to disk', node.uuid)
 
         manager_utils.node_set_boot_device(task, 'disk', persistent=True)
-        manager_utils.node_power_action(task, states.REBOOT)
-
-        task.process_event('done')
-
-    @base.driver_passthru(['POST'], async=False)
-    def lookup(self, context, **kwargs):
-        """Find a matching node for the agent.
-
-        Method to be called the first time a ramdisk agent checks in. This
-        can be because this is a node just entering decom or a node that
-        rebooted for some reason. We will use the mac addresses listed in the
-        kwargs to find the matching node, then return the node object to the
-        agent. The agent can that use that UUID to use the node vendor
-        passthru method.
-
-        Currently, we don't handle the instance where the agent doesn't have
-        a matching node (i.e. a brand new, never been in Ironic node).
-
-        kwargs should have the following format::
-
-         {
-             "version": "2"
-             "inventory": {
-                 "interfaces": [
-                     {
-                         "name": "eth0",
-                         "mac_address": "00:11:22:33:44:55",
-                         "switch_port_descr": "port24"
-                         "switch_chassis_descr": "tor1"
-                     }, ...
-                 ], ...
-             }
-         }
-
-        The interfaces list should include a list of the non-IPMI MAC addresses
-        in the form aa:bb:cc:dd:ee:ff.
-
-        This method will also return the timeout for heartbeats. The driver
-        will expect the agent to heartbeat before that timeout, or it will be
-        considered down. This will be in a root level key called
-        'heartbeat_timeout'
-
-        :raises: NotFound if no matching node is found.
-        :raises: InvalidParameterValue with unknown payload version
-        """
-        inventory = kwargs.get('inventory')
-        interfaces = self._get_interfaces(inventory)
-        mac_addresses = self._get_mac_addresses(interfaces)
-
-        node = self._find_node_by_macs(context, mac_addresses)
-
-        LOG.debug('Initial lookup for node %s succeeded.', node.uuid)
-
-        # Only support additional hardware in v2 and above. Grab all the
-        # top level keys in inventory that aren't interfaces and add them.
-        # Nest it in 'hardware' to avoid namespace issues
-        hardware = {
-            'hardware': {
-                'network': interfaces
-            }
-        }
-
-        for key, value in kwargs.items():
-            if key != 'interfaces':
-                hardware['hardware'][key] = value
-
-        return {
-            'heartbeat_timeout': CONF.agent.heartbeat_timeout,
-            'node': node
-        }
-
-    def _get_interfaces(self, inventory):
-        interfaces = []
-        try:
-            interfaces = inventory['interfaces']
-        except (KeyError, TypeError):
-            raise exception.InvalidParameterValue(_(
-                'Malformed network interfaces lookup: %s') % inventory)
-
-        return interfaces
-
-    def _get_mac_addresses(self, interfaces):
-        """Returns MACs for the network devices."""
-        mac_addresses = []
-
-        for interface in interfaces:
-            try:
-                mac_addresses.append(utils.validate_and_normalize_mac(
-                    interface.get('mac_address')))
-            except exception.InvalidMAC:
-                LOG.warning(_LW('Malformed MAC: %s'), interface.get(
-                    'mac_address'))
-        return mac_addresses
-
-    def _find_node_by_macs(self, context, mac_addresses):
-        """Get nodes for a given list of MAC addresses.
-
-        Given a list of MAC addresses, find the ports that match the MACs
-        and return the node they are all connected to.
-
-        :raises: NodeNotFound if the ports point to multiple nodes or no
-        nodes.
-        """
-        ports = self._find_ports_by_macs(context, mac_addresses)
-        if not ports:
-            raise exception.NodeNotFound(_(
-                'No ports matching the given MAC addresses %sexist in the '
-                'database.') % mac_addresses)
-        node_id = self._get_node_id(ports)
-        try:
-            node = objects.Node.get_by_id(context, node_id)
-        except exception.NodeNotFound:
-            with excutils.save_and_reraise_exception():
-                LOG.exception(_LE('Could not find matching node for the '
-                                  'provided MACs %s.'), mac_addresses)
-
-        return node
-
-    def _find_ports_by_macs(self, context, mac_addresses):
-        """Get ports for a given list of MAC addresses.
-
-        Given a list of MAC addresses, find the ports that match the MACs
-        and return them as a list of Port objects, or an empty list if there
-        are no matches
-        """
-        ports = []
-        for mac in mac_addresses:
-            # Will do a search by mac if the mac isn't malformed
-            try:
-                port_ob = objects.Port.get_by_address(context, mac)
-                ports.append(port_ob)
-
-            except exception.PortNotFound:
-                LOG.warning(_LW('MAC address %s not found in database'), mac)
-
-        return ports
-
-    def _get_node_id(self, ports):
-        """Get a node ID for a list of ports.
-
-        Given a list of ports, either return the node_id they all share or
-        raise a NotFound if there are multiple node_ids, which indicates some
-        ports are connected to one node and the remaining port(s) are connected
-        to one or more other nodes.
-
-        :raises: NodeNotFound if the MACs match multiple nodes. This
-        could happen if you swapped a NIC from one server to another and
-        don't notify Ironic about it or there is a MAC collision (since
-        they're not guaranteed to be unique).
-        """
-        # See if all the ports point to the same node
-        node_ids = set(port_ob.node_id for port_ob in ports)
-        if len(node_ids) > 1:
-            raise exception.NodeNotFound(_(
-                'Ports matching mac addresses match multiple nodes. MACs: '
-                '%(macs)s. Port ids: %(port_ids)s') %
-                {'macs': [port_ob.address for port_ob in ports], 'port_ids':
-                 [port_ob.uuid for port_ob in ports]}
-            )
-
-        # Only have one node_id left, return it.
-        return node_ids.pop()
+        self.reboot_and_finish_deploy(task)

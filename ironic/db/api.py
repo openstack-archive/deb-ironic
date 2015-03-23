@@ -133,7 +133,7 @@ class Connection(object):
                        ::
 
                         {
-                         'uuid': utils.generate_uuid(),
+                         'uuid': uuidutils.generate_uuid(),
                          'instance_uuid': None,
                          'power_state': states.POWER_OFF,
                          'provision_state': states.AVAILABLE,
@@ -158,6 +158,14 @@ class Connection(object):
         """Return a node.
 
         :param node_uuid: The uuid of a node.
+        :returns: A node.
+        """
+
+    @abc.abstractmethod
+    def get_node_by_name(self, node_name):
+        """Return a node.
+
+        :param node_name: The logical name of a node.
         :returns: A node.
         """
 

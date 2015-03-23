@@ -15,13 +15,14 @@
 iLO Driver for managing HP Proliant Gen8 and above servers.
 """
 
-from oslo.utils import importutils
+from oslo_utils import importutils
 
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.drivers import base
 from ironic.drivers.modules import agent
 from ironic.drivers.modules.ilo import deploy
+from ironic.drivers.modules.ilo import inspect
 from ironic.drivers.modules.ilo import management
 from ironic.drivers.modules.ilo import power
 
@@ -47,6 +48,7 @@ class IloVirtualMediaIscsiDriver(base.BaseDriver):
         self.console = deploy.IloConsoleInterface()
         self.management = management.IloManagement()
         self.vendor = deploy.VendorPassthru()
+        self.inspect = inspect.IloInspect()
 
 
 class IloVirtualMediaAgentDriver(base.BaseDriver):
@@ -70,3 +72,4 @@ class IloVirtualMediaAgentDriver(base.BaseDriver):
         self.console = deploy.IloConsoleInterface()
         self.management = management.IloManagement()
         self.vendor = agent.AgentVendorInterface()
+        self.inspect = inspect.IloInspect()

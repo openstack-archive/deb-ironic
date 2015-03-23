@@ -17,22 +17,29 @@
 PXE Driver and supporting meta-classes.
 """
 
-from oslo.utils import importutils
+from oslo_utils import importutils
 
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.drivers import base
+from ironic.drivers.modules.amt import management as amt_management
+from ironic.drivers.modules.amt import power as amt_power
+from ironic.drivers.modules.amt import vendor as amt_vendor
+from ironic.drivers.modules import discoverd
 from ironic.drivers.modules import iboot
 from ironic.drivers.modules.ilo import deploy as ilo_deploy
+from ironic.drivers.modules.ilo import inspect as ilo_inspect
 from ironic.drivers.modules.ilo import management as ilo_management
 from ironic.drivers.modules.ilo import power as ilo_power
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
+from ironic.drivers.modules.irmc import management as irmc_management
 from ironic.drivers.modules.irmc import power as irmc_power
 from ironic.drivers.modules import pxe
 from ironic.drivers.modules import seamicro
 from ironic.drivers.modules import snmp
 from ironic.drivers.modules import ssh
+from ironic.drivers.modules import virtualbox
 from ironic.drivers import utils
 
 
@@ -51,6 +58,8 @@ class PXEAndIPMIToolDriver(base.BaseDriver):
         self.deploy = pxe.PXEDeploy()
         self.management = ipmitool.IPMIManagement()
         self.vendor = pxe.VendorPassthru()
+        self.inspect = discoverd.DiscoverdInspect.create_if_enabled(
+            'PXEAndIPMIToolDriver')
 
 
 class PXEAndSSHDriver(base.BaseDriver):
@@ -70,6 +79,8 @@ class PXEAndSSHDriver(base.BaseDriver):
         self.deploy = pxe.PXEDeploy()
         self.management = ssh.SSHManagement()
         self.vendor = pxe.VendorPassthru()
+        self.inspect = discoverd.DiscoverdInspect.create_if_enabled(
+            'PXEAndSSHDriver')
 
 
 class PXEAndIPMINativeDriver(base.BaseDriver):
@@ -93,6 +104,8 @@ class PXEAndIPMINativeDriver(base.BaseDriver):
         self.deploy = pxe.PXEDeploy()
         self.management = ipminative.NativeIPMIManagement()
         self.vendor = pxe.VendorPassthru()
+        self.inspect = discoverd.DiscoverdInspect.create_if_enabled(
+            'PXEAndIPMINativeDriver')
 
 
 class PXEAndSeaMicroDriver(base.BaseDriver):
@@ -164,6 +177,7 @@ class PXEAndIloDriver(base.BaseDriver):
         self.vendor = ilo_deploy.IloPXEVendorPassthru()
         self.console = ilo_deploy.IloConsoleInterface()
         self.management = ilo_management.IloManagement()
+        self.inspect = ilo_inspect.IloInspect()
 
 
 class PXEAndSNMPDriver(base.BaseDriver):
@@ -207,5 +221,48 @@ class PXEAndIRMCDriver(base.BaseDriver):
         self.power = irmc_power.IRMCPower()
         self.console = ipmitool.IPMIShellinaboxConsole()
         self.deploy = pxe.PXEDeploy()
-        self.management = ipmitool.IPMIManagement()
+        self.management = irmc_management.IRMCManagement()
         self.vendor = pxe.VendorPassthru()
+
+
+class PXEAndVirtualBoxDriver(base.BaseDriver):
+    """PXE + VirtualBox driver.
+
+    NOTE: This driver is meant only for testing environments.
+
+    This driver implements the `core` functionality, combining
+    :class:`ironic.drivers.virtualbox.VirtualBoxPower` for power on/off and
+    reboot of VirtualBox virtual machines, with :class:`ironic.driver.pxe.PXE`
+    for image deployment. Implementations are in those respective classes;
+    this class is merely the glue between them.
+    """
+
+    def __init__(self):
+        if not importutils.try_import('pyremotevbox'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason=_("Unable to import pyremotevbox library"))
+        self.power = virtualbox.VirtualBoxPower()
+        self.deploy = pxe.PXEDeploy()
+        self.management = virtualbox.VirtualBoxManagement()
+        self.vendor = pxe.VendorPassthru()
+
+
+class PXEAndAMTDriver(base.BaseDriver):
+    """PXE + AMT driver.
+
+    This driver implements the `core` functionality, combining
+    :class:`ironic.drivers.amt.AMTPower` for power on/off and reboot with
+    :class:`ironic.driver.pxe.PXE` for image deployment. Implementations are in
+    those respective classes; this class is merely the glue between them.
+    """
+
+    def __init__(self):
+        if not importutils.try_import('pywsman'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason=_("Unable to import pywsman library"))
+        self.power = amt_power.AMTPower()
+        self.deploy = pxe.PXEDeploy()
+        self.management = amt_management.AMTManagement()
+        self.vendor = amt_vendor.AMTPXEVendorPassthru()

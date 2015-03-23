@@ -12,8 +12,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
-
 # Server Specific Configurations
 # See https://pecan.readthedocs.org/en/latest/configuration.html#server-configuration # noqa
 server = {
@@ -32,7 +30,7 @@ app = {
     'acl_public_routes': [
         '/',
         '/v1',
-        '/v1/drivers/agent_[a-z]*/vendor_passthru/lookup',
+        '/v1/drivers/[a-z_]*/vendor_passthru/lookup',
         '/v1/nodes/[a-z0-9\-]+/vendor_passthru/heartbeat'
     ],
 }
@@ -40,5 +38,5 @@ app = {
 # WSME Configurations
 # See https://wsme.readthedocs.org/en/latest/integrate.html#configuration
 wsme = {
-    'debug': cfg.CONF.debug,
+    'debug': False,
 }

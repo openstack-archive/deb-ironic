@@ -150,8 +150,20 @@ class InstanceAssociated(Conflict):
                 " it cannot be associated with this other node %(node)s")
 
 
+class DuplicateName(Conflict):
+    message = _("A node with name %(name)s already exists.")
+
+
 class InvalidUUID(Invalid):
     message = _("Expected a uuid but received %(uuid)s.")
+
+
+class InvalidUuidOrName(Invalid):
+    message = _("Expected a logical name or uuid but received %(name)s.")
+
+
+class InvalidName(Invalid):
+    message = _("Expected a logical name but received %(name)s.")
 
 
 class InvalidIdentity(Invalid):
@@ -207,7 +219,7 @@ class DHCPNotFound(NotFound):
 
 
 class DriverNotFound(NotFound):
-    message = _("Failed to load driver %(driver_name)s.")
+    message = _("Could not find the following driver(s): %(driver_name)s.")
 
 
 class ImageNotFound(NotFound):
@@ -304,6 +316,14 @@ class IPMIFailure(IronicException):
     message = _("IPMI call failed: %(cmd)s.")
 
 
+class AMTConnectFailure(IronicException):
+    message = _("Failed to connect to AMT service.")
+
+
+class AMTFailure(IronicException):
+    message = _("AMT call failed: %(cmd)s.")
+
+
 class SSHConnectFailed(IronicException):
     message = _("Failed to establish SSH connection to host %(host)s.")
 
@@ -321,7 +341,8 @@ class OrphanedObjectError(IronicException):
 
 
 class UnsupportedDriverExtension(Invalid):
-    message = _('Driver %(driver)s does not support %(extension)s.')
+    message = _('Driver %(driver)s does not support %(extension)s '
+                '(disabled or not implemented).')
 
 
 class IncompatibleObjectVersion(IronicException):
@@ -339,6 +360,15 @@ class ImageNotAuthorized(NotAuthorized):
 
 class InvalidImageRef(Invalid):
     message = _("Invalid image href %(image_href)s.")
+
+
+class ImageRefValidationFailed(IronicException):
+    message = _("Validation of image href %(image_href)s failed, "
+                "reason: %(reason)s")
+
+
+class ImageDownloadFailed(IronicException):
+    message = _("Failed to download image %(image_href)s, reason: %(reason)s")
 
 
 class KeystoneUnauthorized(IronicException):
@@ -446,6 +476,10 @@ class IloOperationError(IronicException):
     message = _("%(operation)s failed, error: %(error)s")
 
 
+class IloOperationNotSupported(IronicException):
+    message = _("%(operation)s not supported. error: %(error)s")
+
+
 class DracRequestFailed(IronicException):
     pass
 
@@ -512,3 +546,16 @@ class FileSystemNotSupported(IronicException):
 
 class IRMCOperationError(IronicException):
     message = _('iRMC %(operation)s failed. Reason: %(error)s')
+
+
+class VirtualBoxOperationFailed(IronicException):
+    message = _("VirtualBox operation '%(operation)s' failed. "
+                "Error: %(error)s")
+
+
+class HardwareInspectionFailure(IronicException):
+    message = _("Failed to inspect hardware. Reason: %(error)s")
+
+
+class NodeCleaningFailure(IronicException):
+    message = _("Failed to clean node %(node)s: %(reason)s")

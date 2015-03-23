@@ -1,6 +1,3 @@
-# Copyright (c) 2012 Intel Corporation.
-# All Rights Reserved.
-#
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
 #    a copy of the License at
@@ -13,25 +10,28 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+"""add_logical_name
+
+Revision ID: 3ae36a5f5131
+Revises: bb59b63f55a
+Create Date: 2014-12-10 14:27:26.323540
+
 """
-UUID related utilities and helper functions.
-"""
 
-import uuid
+# revision identifiers, used by Alembic.
+revision = '3ae36a5f5131'
+down_revision = 'bb59b63f55a'
+
+from alembic import op
+import sqlalchemy as sa
 
 
-def generate_uuid():
-    return str(uuid.uuid4())
+def upgrade():
+    op.add_column('nodes', sa.Column('name', sa.String(length=63),
+                  nullable=True))
+    op.create_unique_constraint('uniq_nodes0name', 'nodes', ['name'])
 
 
-def is_uuid_like(val):
-    """Returns validation of a value as a UUID.
-
-    For our purposes, a UUID is a canonical form string:
-    aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
-
-    """
-    try:
-        return str(uuid.UUID(val)) == val
-    except (TypeError, ValueError, AttributeError):
-        return False
+def downgrade():
+    op.drop_constraint('uniq_nodes0name', 'nodes', type_='unique')
+    op.drop_column('nodes', 'name')

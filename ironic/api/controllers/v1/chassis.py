@@ -81,7 +81,7 @@ class Chassis(base.APIBase):
                                                  'chassis',
                                                  chassis.uuid + "/nodes",
                                                  bookmark=True)
-                            ]
+                             ]
         chassis.links = [link.Link.make_link('self',
                                              url,
                                              'chassis', chassis.uuid),
@@ -89,7 +89,7 @@ class Chassis(base.APIBase):
                                              url,
                                              'chassis', chassis.uuid,
                                              bookmark=True)
-                        ]
+                         ]
         return chassis
 
     @classmethod
@@ -186,7 +186,7 @@ class ChassisController(rest.RestController):
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         """
-        # /detail should only work agaist collections
+        # /detail should only work against collections
         parent = pecan.request.path.split('/')[:-1][-1]
         if parent != "chassis":
             raise exception.HTTPNotFound

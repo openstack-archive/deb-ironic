@@ -43,7 +43,8 @@ VERBS = {
         'deleted': 'delete',
         'manage': 'manage',
         'provide': 'provide',
-    }
+        'inspect': 'inspect',
+}
 """ Mapping of state-changing events that are PUT to the REST API
 
 This is a mapping of target states which are PUT to the API, eg,
@@ -118,7 +119,11 @@ In Kilo, this will be a transitory value of provision_state, and never
 represented in target_provision_state.
 """
 
-# TODO(deva): add CLEAN* states
+CLEANING = 'cleaning'
+""" Node is being automatically cleaned to prepare it for provisioning. """
+
+CLEANFAIL = 'clean failed'
+""" Node failed cleaning. This requires operator intervention to resolve. """
 
 ERROR = 'error'
 """ An error occurred during node processing.
@@ -132,6 +137,21 @@ REBUILD = 'rebuild'
 This is not used as a state, but rather as a "verb" when changing the node's
 provision_state via the REST API.
 """
+
+INSPECTING = 'inspecting'
+""" Node is under inspection.
+
+This is the provision state used when inspection is started. A successfully
+inspected node shall transition to MANAGEABLE status.
+"""
+
+
+INSPECTFAIL = 'inspect failed'
+""" Node inspection failed. """
+
+
+UPDATE_ALLOWED_STATES = (DEPLOYFAIL, INSPECTING, INSPECTFAIL)
+"""Transitional states in which we allow updating a node."""
 
 
 ##############
@@ -169,17 +189,10 @@ watchers['on_enter'] = on_enter
 machine = fsm.FSM()
 
 # Add stable states
-machine.add_state(MANAGEABLE, **watchers)
-machine.add_state(AVAILABLE, **watchers)
-machine.add_state(ACTIVE, **watchers)
-machine.add_state(ERROR, **watchers)
-
-# From MANAGEABLE, a node may be made available
-# TODO(deva): add CLEAN* states to this path
-machine.add_transition(MANAGEABLE, AVAILABLE, 'provide')
-
-# From AVAILABLE, a node may be made unavailable by managing it
-machine.add_transition(AVAILABLE, MANAGEABLE, 'manage')
+machine.add_state(MANAGEABLE, stable=True, **watchers)
+machine.add_state(AVAILABLE, stable=True, **watchers)
+machine.add_state(ACTIVE, stable=True, **watchers)
+machine.add_state(ERROR, stable=True, **watchers)
 
 # Add deploy* states
 # NOTE(deva): Juno shows a target_provision_state of DEPLOYDONE
@@ -188,13 +201,19 @@ machine.add_state(DEPLOYING, target=ACTIVE, **watchers)
 machine.add_state(DEPLOYWAIT, target=ACTIVE, **watchers)
 machine.add_state(DEPLOYFAIL, target=ACTIVE, **watchers)
 
+# Add clean* states
+machine.add_state(CLEANING, target=AVAILABLE, **watchers)
+machine.add_state(CLEANFAIL, target=AVAILABLE, **watchers)
+
 # Add delete* states
-# NOTE(deva): Juno shows a target_provision_state of DELETED
-#             this is changed in Kilo to AVAILABLE
 machine.add_state(DELETING, target=AVAILABLE, **watchers)
 
 # From AVAILABLE, a deployment may be started
 machine.add_transition(AVAILABLE, DEPLOYING, 'deploy')
+
+# Add inspect* states.
+machine.add_state(INSPECTING, target=MANAGEABLE, **watchers)
+machine.add_state(INSPECTFAIL, target=MANAGEABLE, **watchers)
 
 # A deployment may fail
 machine.add_transition(DEPLOYING, DEPLOYFAIL, 'fail')
@@ -231,11 +250,30 @@ machine.add_transition(DEPLOYWAIT, DELETING, 'delete')
 # ironic/conductor/manager.py:do_node_tear_down()
 machine.add_transition(DEPLOYFAIL, DELETING, 'delete')
 
-# A delete may complete
-machine.add_transition(DELETING, AVAILABLE, 'done')
-
 # This state can also transition to error
 machine.add_transition(DELETING, ERROR, 'error')
+
+# When finished deleting, a node will begin cleaning
+machine.add_transition(DELETING, CLEANING, 'clean')
+
+# If cleaning succeeds, it becomes available for scheduling
+machine.add_transition(CLEANING, AVAILABLE, 'done')
+
+# If cleaning fails, wait for operator intervention
+machine.add_transition(CLEANING, CLEANFAIL, 'fail')
+
+# A node that fails cleaning may be put back through cleaning
+machine.add_transition(CLEANFAIL, CLEANING, 'clean')
+
+# An operator may want to hold a CLEANFAIL node in operator for zapping or
+# outside-of-Ironic operations (like replacing hardware)
+machine.add_transition(CLEANFAIL, MANAGEABLE, 'manage')
+
+# From MANAGEABLE, a node may move to available after going through cleaning
+machine.add_transition(MANAGEABLE, CLEANING, 'provide')
+
+# From AVAILABLE, a node may be made unavailable by managing it
+machine.add_transition(AVAILABLE, MANAGEABLE, 'manage')
 
 # An errored instance can be rebuilt
 # ironic/conductor/manager.py:do_node_deploy()
@@ -243,3 +281,20 @@ machine.add_transition(ERROR, DEPLOYING, 'rebuild')
 # or deleted
 # ironic/conductor/manager.py:do_node_tear_down()
 machine.add_transition(ERROR, DELETING, 'delete')
+
+# Added transitions for inspection.
+# Initiate inspection.
+machine.add_transition(MANAGEABLE, INSPECTING, 'inspect')
+
+# ironic/conductor/manager.py:inspect_hardware().
+machine.add_transition(INSPECTING, MANAGEABLE, 'done')
+
+# Inspection may fail.
+machine.add_transition(INSPECTING, INSPECTFAIL, 'fail')
+
+# Move the node to manageable state for any other
+# action.
+machine.add_transition(INSPECTFAIL, MANAGEABLE, 'manage')
+
+# Reinitiate the inspect after inspectfail.
+machine.add_transition(INSPECTFAIL, INSPECTING, 'inspect')

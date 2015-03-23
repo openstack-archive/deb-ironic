@@ -18,12 +18,12 @@
 import datetime
 
 import mock
-from oslo.utils import timeutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 import six
 
 from ironic.common import exception
 from ironic.common import states
-from ironic.common import utils as ironic_utils
 from ironic.tests.db import base
 from ironic.tests.db import utils
 
@@ -42,13 +42,19 @@ class DbNodeTestCase(base.DbTestCase):
                           utils.create_test_node)
 
     def test_create_node_instance_already_associated(self):
-        instance = ironic_utils.generate_uuid()
-        utils.create_test_node(uuid=ironic_utils.generate_uuid(),
+        instance = uuidutils.generate_uuid()
+        utils.create_test_node(uuid=uuidutils.generate_uuid(),
                                instance_uuid=instance)
         self.assertRaises(exception.InstanceAssociated,
                           utils.create_test_node,
-                          uuid=ironic_utils.generate_uuid(),
+                          uuid=uuidutils.generate_uuid(),
                           instance_uuid=instance)
+
+    def test_create_node_name_duplicate(self):
+        node = utils.create_test_node(name='spam')
+        self.assertRaises(exception.DuplicateName,
+                          utils.create_test_node,
+                          name=node.name)
 
     def test_get_node_by_id(self):
         node = utils.create_test_node()
@@ -62,17 +68,27 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertEqual(node.id, res.id)
         self.assertEqual(node.uuid, res.uuid)
 
+    def test_get_node_by_name(self):
+        node = utils.create_test_node()
+        res = self.dbapi.get_node_by_name(node.name)
+        self.assertEqual(node.id, res.id)
+        self.assertEqual(node.uuid, res.uuid)
+        self.assertEqual(node.name, res.name)
+
     def test_get_node_that_does_not_exist(self):
         self.assertRaises(exception.NodeNotFound,
                           self.dbapi.get_node_by_id, 99)
         self.assertRaises(exception.NodeNotFound,
                           self.dbapi.get_node_by_uuid,
                           '12345678-9999-0000-aaaa-123456789012')
+        self.assertRaises(exception.NodeNotFound,
+                          self.dbapi.get_node_by_name,
+                          'spam-eggs-bacon-spam')
 
     def test_get_nodeinfo_list_defaults(self):
         node_id_list = []
         for i in range(1, 6):
-            node = utils.create_test_node(uuid=ironic_utils.generate_uuid())
+            node = utils.create_test_node(uuid=uuidutils.generate_uuid())
             node_id_list.append(node.id)
         res = [i[0] for i in self.dbapi.get_nodeinfo_list()]
         self.assertEqual(sorted(res), sorted(node_id_list))
@@ -81,7 +97,7 @@ class DbNodeTestCase(base.DbTestCase):
         uuids = {}
         extras = {}
         for i in range(1, 6):
-            uuid = ironic_utils.generate_uuid()
+            uuid = uuidutils.generate_uuid()
             extra = {'foo': i}
             node = utils.create_test_node(extra=extra, uuid=uuid)
             uuids[node.id] = uuid
@@ -92,11 +108,11 @@ class DbNodeTestCase(base.DbTestCase):
 
     def test_get_nodeinfo_list_with_filters(self):
         node1 = utils.create_test_node(driver='driver-one',
-            instance_uuid=ironic_utils.generate_uuid(),
+            instance_uuid=uuidutils.generate_uuid(),
             reservation='fake-host',
-            uuid=ironic_utils.generate_uuid())
+            uuid=uuidutils.generate_uuid())
         node2 = utils.create_test_node(driver='driver-two',
-            uuid=ironic_utils.generate_uuid(),
+            uuid=uuidutils.generate_uuid(),
             maintenance=True)
 
         res = self.dbapi.get_nodeinfo_list(filters={'driver': 'driver-one'})
@@ -131,13 +147,13 @@ class DbNodeTestCase(base.DbTestCase):
         mock_utcnow.return_value = past
 
         # node with provision_updated timeout
-        node1 = utils.create_test_node(uuid=ironic_utils.generate_uuid(),
+        node1 = utils.create_test_node(uuid=uuidutils.generate_uuid(),
                                        provision_updated_at=past)
         # node with None in provision_updated_at
-        node2 = utils.create_test_node(uuid=ironic_utils.generate_uuid(),
+        node2 = utils.create_test_node(uuid=uuidutils.generate_uuid(),
                                        provision_state=states.DEPLOYWAIT)
         # node without timeout
-        utils.create_test_node(uuid=ironic_utils.generate_uuid(),
+        utils.create_test_node(uuid=uuidutils.generate_uuid(),
                             provision_updated_at=next)
 
         mock_utcnow.return_value = present
@@ -148,28 +164,54 @@ class DbNodeTestCase(base.DbTestCase):
                                                     states.DEPLOYWAIT})
         self.assertEqual([node2.id], [r[0] for r in res])
 
+    @mock.patch.object(timeutils, 'utcnow')
+    def test_get_nodeinfo_list_inspection(self, mock_utcnow):
+        past = datetime.datetime(2000, 1, 1, 0, 0)
+        next = past + datetime.timedelta(minutes=8)
+        present = past + datetime.timedelta(minutes=10)
+        mock_utcnow.return_value = past
+
+        # node with provision_updated timeout
+        node1 = utils.create_test_node(uuid=uuidutils.generate_uuid(),
+                                       inspection_started_at=past)
+        # node with None in provision_updated_at
+        node2 = utils.create_test_node(uuid=uuidutils.generate_uuid(),
+                                       provision_state=states.INSPECTING)
+        # node without timeout
+        utils.create_test_node(uuid=uuidutils.generate_uuid(),
+                               inspection_started_at=next)
+
+        mock_utcnow.return_value = present
+        res = self.dbapi.get_nodeinfo_list(
+                  filters={'inspection_started_before': 300})
+        self.assertEqual([node1.id], [r[0] for r in res])
+
+        res = self.dbapi.get_nodeinfo_list(filters={'provision_state':
+                                                    states.INSPECTING})
+        self.assertEqual([node2.id], [r[0] for r in res])
+
     def test_get_node_list(self):
         uuids = []
         for i in range(1, 6):
-            node = utils.create_test_node(uuid=ironic_utils.generate_uuid())
+            node = utils.create_test_node(uuid=uuidutils.generate_uuid())
             uuids.append(six.text_type(node['uuid']))
         res = self.dbapi.get_node_list()
         res_uuids = [r.uuid for r in res]
         self.assertEqual(uuids.sort(), res_uuids.sort())
 
     def test_get_node_list_with_filters(self):
-        ch1 = utils.get_test_chassis(id=1, uuid=ironic_utils.generate_uuid())
-        ch2 = utils.get_test_chassis(id=2, uuid=ironic_utils.generate_uuid())
+        ch1 = utils.get_test_chassis(id=1, uuid=uuidutils.generate_uuid())
+        ch2 = utils.get_test_chassis(id=2, uuid=uuidutils.generate_uuid())
         self.dbapi.create_chassis(ch1)
         self.dbapi.create_chassis(ch2)
 
         node1 = utils.create_test_node(driver='driver-one',
-            instance_uuid=ironic_utils.generate_uuid(),
+            instance_uuid=uuidutils.generate_uuid(),
             reservation='fake-host',
-            uuid=ironic_utils.generate_uuid(),
+            uuid=uuidutils.generate_uuid(),
             chassis_id=ch1['id'])
         node2 = utils.create_test_node(driver='driver-two',
-            uuid=ironic_utils.generate_uuid(),
+            uuid=uuidutils.generate_uuid(),
             chassis_id=ch2['id'],
             maintenance=True)
 
@@ -206,7 +248,7 @@ class DbNodeTestCase(base.DbTestCase):
     def test_get_node_list_chassis_not_found(self):
         self.assertRaises(exception.ChassisNotFound,
                           self.dbapi.get_node_list,
-                          {'chassis_uuid': ironic_utils.generate_uuid()})
+                          {'chassis_uuid': uuidutils.generate_uuid()})
 
     def test_get_node_by_instance(self):
         node = utils.create_test_node(
@@ -278,7 +320,7 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertEqual(new_extra, res.extra)
 
     def test_update_node_not_found(self):
-        node_uuid = ironic_utils.generate_uuid()
+        node_uuid = uuidutils.generate_uuid()
         new_extra = {'foo': 'bar'}
         self.assertRaises(exception.NodeNotFound, self.dbapi.update_node,
                           node_uuid, {'extra': new_extra})
@@ -291,7 +333,7 @@ class DbNodeTestCase(base.DbTestCase):
 
     def test_update_node_associate_and_disassociate(self):
         node = utils.create_test_node()
-        new_i_uuid = ironic_utils.generate_uuid()
+        new_i_uuid = uuidutils.generate_uuid()
         res = self.dbapi.update_node(node.id, {'instance_uuid': new_i_uuid})
         self.assertEqual(new_i_uuid, res.instance_uuid)
         res = self.dbapi.update_node(node.id, {'instance_uuid': None})
@@ -299,19 +341,19 @@ class DbNodeTestCase(base.DbTestCase):
 
     def test_update_node_already_associated(self):
         node = utils.create_test_node()
-        new_i_uuid_one = ironic_utils.generate_uuid()
+        new_i_uuid_one = uuidutils.generate_uuid()
         self.dbapi.update_node(node.id, {'instance_uuid': new_i_uuid_one})
-        new_i_uuid_two = ironic_utils.generate_uuid()
+        new_i_uuid_two = uuidutils.generate_uuid()
         self.assertRaises(exception.NodeAssociated,
                           self.dbapi.update_node,
                           node.id,
                           {'instance_uuid': new_i_uuid_two})
 
     def test_update_node_instance_already_associated(self):
-        node1 = utils.create_test_node(uuid=ironic_utils.generate_uuid())
-        new_i_uuid = ironic_utils.generate_uuid()
+        node1 = utils.create_test_node(uuid=uuidutils.generate_uuid())
+        new_i_uuid = uuidutils.generate_uuid()
         self.dbapi.update_node(node1.id, {'instance_uuid': new_i_uuid})
-        node2 = utils.create_test_node(uuid=ironic_utils.generate_uuid())
+        node2 = utils.create_test_node(uuid=uuidutils.generate_uuid())
         self.assertRaises(exception.InstanceAssociated,
                           self.dbapi.update_node,
                           node2.id,
@@ -326,10 +368,44 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertEqual(mocked_time,
                          timeutils.normalize_time(res['provision_updated_at']))
 
+    def test_update_node_name_duplicate(self):
+        node1 = utils.create_test_node(uuid=uuidutils.generate_uuid(),
+                                       name='spam')
+        node2 = utils.create_test_node(uuid=uuidutils.generate_uuid())
+        self.assertRaises(exception.DuplicateName,
+                          self.dbapi.update_node,
+                          node2.id,
+                          {'name': node1.name})
+
     def test_update_node_no_provision(self):
         node = utils.create_test_node()
         res = self.dbapi.update_node(node.id, {'extra': {'foo': 'bar'}})
         self.assertIsNone(res['provision_updated_at'])
+        self.assertIsNone(res['inspection_started_at'])
+
+    @mock.patch.object(timeutils, 'utcnow')
+    def test_update_node_inspection_started_at(self, mock_utcnow):
+        mocked_time = datetime.datetime(2000, 1, 1, 0, 0)
+        mock_utcnow.return_value = mocked_time
+        node = utils.create_test_node(uuid=uuidutils.generate_uuid(),
+                                      inspection_started_at=mocked_time)
+        res = self.dbapi.update_node(node.id, {'provision_state': 'fake'})
+        result = res['inspection_started_at']
+        self.assertEqual(mocked_time,
+                         timeutils.normalize_time(result))
+        self.assertIsNone(res['inspection_finished_at'])
+
+    @mock.patch.object(timeutils, 'utcnow')
+    def test_update_node_inspection_finished_at(self, mock_utcnow):
+        mocked_time = datetime.datetime(2000, 1, 1, 0, 0)
+        mock_utcnow.return_value = mocked_time
+        node = utils.create_test_node(uuid=uuidutils.generate_uuid(),
+                                      inspection_finished_at=mocked_time)
+        res = self.dbapi.update_node(node.id, {'provision_state': 'fake'})
+        result = res['inspection_finished_at']
+        self.assertEqual(mocked_time,
+                         timeutils.normalize_time(result))
+        self.assertIsNone(res['inspection_started_at'])
 
     def test_reserve_node(self):
         node = utils.create_test_node()

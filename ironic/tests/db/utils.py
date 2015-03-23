@@ -15,7 +15,7 @@
 """Ironic test utilities."""
 
 
-from oslo.utils import timeutils
+from oslo_utils import timeutils
 
 from ironic.common import states
 from ironic.db import api as db_api
@@ -64,8 +64,14 @@ def get_test_ssh_info(auth_type='password'):
 
 def get_test_pxe_driver_info():
     return {
-        "pxe_deploy_kernel": "glance://deploy_kernel_uuid",
-        "pxe_deploy_ramdisk": "glance://deploy_ramdisk_uuid",
+        "deploy_kernel": "glance://deploy_kernel_uuid",
+        "deploy_ramdisk": "glance://deploy_ramdisk_uuid",
+    }
+
+
+def get_test_pxe_driver_internal_info():
+    return {
+        "is_whole_disk_image": False,
     }
 
 
@@ -111,6 +117,15 @@ def get_test_irmc_info():
         "irmc_password": "fake0",
         "irmc_port": 80,
         "irmc_auth_method": "digest",
+    }
+
+
+def get_test_amt_info():
+    return {
+        "amt_address": "1.2.3.4",
+        "amt_protocol": "http",
+        "amt_username": "admin",
+        "amt_password": "fake",
     }
 
 
@@ -170,6 +185,7 @@ def get_test_node(**kw):
     fake_info = {"foo": "bar", "fake_password": "fakepass"}
     return {
         'id': kw.get('id', 123),
+        'name': kw.get('name', None),
         'uuid': kw.get('uuid', '1be26c0b-03f2-4d2e-ae87-c02d7f33c123'),
         'chassis_id': kw.get('chassis_id', 42),
         'conductor_affinity': kw.get('conductor_affinity', None),
@@ -185,6 +201,7 @@ def get_test_node(**kw):
         'driver': kw.get('driver', 'fake'),
         'driver_info': kw.get('driver_info', fake_info),
         'driver_internal_info': kw.get('driver_internal_info', fake_info),
+        'clean_step': kw.get('clean_step'),
         'properties': kw.get('properties', properties),
         'reservation': kw.get('reservation'),
         'maintenance': kw.get('maintenance', False),
@@ -193,6 +210,8 @@ def get_test_node(**kw):
         'extra': kw.get('extra', {}),
         'updated_at': kw.get('updated_at'),
         'created_at': kw.get('created_at'),
+        'inspection_finished_at': kw.get('inspection_finished_at'),
+        'inspection_started_at': kw.get('inspection_started_at'),
     }
 
 

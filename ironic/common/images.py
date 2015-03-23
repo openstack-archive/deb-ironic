@@ -27,6 +27,7 @@ from oslo_concurrency import processutils
 from oslo_config import cfg
 
 from ironic.common import exception
+from ironic.common.glance_service import service_utils as glance_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common import image_service as service
@@ -48,7 +49,11 @@ image_opts = [
     cfg.StrOpt('isolinux_config_template',
                 default=paths.basedir_def('common/isolinux_config.template'),
                 help='Template file for isolinux configuration file.'),
+    cfg.StrOpt('grub_config_template',
+                default=paths.basedir_def('common/grub_conf.template'),
+                help='Template file for grub configuration file.'),
 ]
+
 
 CONF = cfg.CONF
 CONF.register_opts(image_opts)
@@ -78,6 +83,14 @@ def _create_root_fs(root_directory, files_info):
             os.makedirs(dirname)
 
         shutil.copyfile(src_file, target_file)
+
+
+def _umount_without_raise(mount_dir):
+    """Helper method to umount without raise."""
+    try:
+        utils.umount(mount_dir)
+    except processutils.ProcessExecutionError:
+        pass
 
 
 def create_vfat_image(output_file, files_info=None, parameters=None,
@@ -112,7 +125,10 @@ def create_vfat_image(output_file, files_info=None, parameters=None,
     with utils.tempdir() as tmpdir:
 
         try:
-            utils.mkfs('vfat', output_file)
+            # The label helps ramdisks to find the partition containing
+            # the parameters (by using /dev/disk/by-label/ir-vfd-dev).
+            # NOTE: FAT filesystem label can be up to 11 characters long.
+            utils.mkfs('vfat', output_file, label="ir-vfd-dev")
             utils.mount(output_file, tmpdir, '-o', 'umask=0')
         except processutils.ProcessExecutionError as e:
             raise exception.ImageCreationFailed(image_type='vfat', error=e)
@@ -139,14 +155,17 @@ def create_vfat_image(output_file, files_info=None, parameters=None,
                 raise exception.ImageCreationFailed(image_type='vfat', error=e)
 
 
-def _generate_isolinux_cfg(kernel_params):
-    """Generates a isolinux configuration file.
+def _generate_cfg(kernel_params, template, options):
+    """Generates a isolinux or grub configuration file.
 
     Given a given a list of strings containing kernel parameters, this method
     returns the kernel cmdline string.
     :param kernel_params: a list of strings(each element being a string like
         'K=V' or 'K' or combination of them like 'K1=V1 K2 K3=V3') to be added
         as the kernel cmdline.
+    :param template: the path of the config template file.
+    :param options: a dictionary of keywords which need to be replaced in
+                    template file to generate a proper config file.
     :returns: a string containing the contents of the isolinux configuration
         file.
     """
@@ -154,19 +173,18 @@ def _generate_isolinux_cfg(kernel_params):
         kernel_params = []
     kernel_params_str = ' '.join(kernel_params)
 
-    template = CONF.isolinux_config_template
     tmpl_path, tmpl_file = os.path.split(template)
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(tmpl_path))
     template = env.get_template(tmpl_file)
 
-    options = {'kernel': '/vmlinuz', 'ramdisk': '/initrd',
-               'kernel_params': kernel_params_str}
+    options.update({'kernel_params': kernel_params_str})
 
     cfg = template.render(options)
     return cfg
 
 
-def create_isolinux_image(output_file, kernel, ramdisk, kernel_params=None):
+def create_isolinux_image_for_bios(output_file, kernel, ramdisk,
+                                   kernel_params=None):
     """Creates an isolinux image on the specified file.
 
     Copies the provided kernel, ramdisk to a directory, generates the isolinux
@@ -186,30 +204,108 @@ def create_isolinux_image(output_file, kernel, ramdisk, kernel_params=None):
     ISOLINUX_BIN = 'isolinux/isolinux.bin'
     ISOLINUX_CFG = 'isolinux/isolinux.cfg'
 
-    with utils.tempdir() as tmpdir:
+    options = {'kernel': '/vmlinuz', 'ramdisk': '/initrd'}
 
+    with utils.tempdir() as tmpdir:
         files_info = {
                       kernel: 'vmlinuz',
                       ramdisk: 'initrd',
                       CONF.isolinux_bin: ISOLINUX_BIN,
                      }
-
         try:
             _create_root_fs(tmpdir, files_info)
         except (OSError, IOError) as e:
             LOG.exception(_LE("Creating the filesystem root failed."))
             raise exception.ImageCreationFailed(image_type='iso', error=e)
 
-        cfg = _generate_isolinux_cfg(kernel_params)
+        cfg = _generate_cfg(kernel_params,
+                            CONF.isolinux_config_template, options)
 
         isolinux_cfg = os.path.join(tmpdir, ISOLINUX_CFG)
         utils.write_to_file(isolinux_cfg, cfg)
 
         try:
-            utils.execute('mkisofs', '-r', '-V', "BOOT IMAGE",
+            utils.execute('mkisofs', '-r', '-V', "VMEDIA_BOOT_ISO",
                           '-cache-inodes', '-J', '-l', '-no-emul-boot',
                           '-boot-load-size', '4', '-boot-info-table',
                           '-b', ISOLINUX_BIN, '-o', output_file, tmpdir)
+        except processutils.ProcessExecutionError as e:
+            LOG.exception(_LE("Creating ISO image failed."))
+            raise exception.ImageCreationFailed(image_type='iso', error=e)
+
+
+def create_isolinux_image_for_uefi(output_file, deploy_iso, kernel, ramdisk,
+                                   kernel_params=None):
+    """Creates an isolinux image on the specified file.
+
+    Copies the provided kernel, ramdisk, efiboot.img to a directory, creates
+    the path for grub config file, generates the isolinux configuration file
+    using the kernel parameters provided, generates the grub configuration
+    file using kernel parameters and then generates a bootable ISO image
+    for uefi.
+
+    :param output_file: the path to the file where the iso image needs to be
+        created.
+    :param deploy_iso: deploy iso used to initiate the deploy.
+    :param kernel: the kernel to use.
+    :param ramdisk: the ramdisk to use.
+    :param kernel_params: a list of strings(each element being a string like
+        'K=V' or 'K' or combination of them like 'K1=V1,K2,...') to be added
+        as the kernel cmdline.
+    :raises: ImageCreationFailed, if image creation failed while copying files
+        or while running command to generate iso.
+    """
+    ISOLINUX_BIN = 'isolinux/isolinux.bin'
+    ISOLINUX_CFG = 'isolinux/isolinux.cfg'
+
+    isolinux_options = {'kernel': '/vmlinuz', 'ramdisk': '/initrd'}
+    grub_options = {'linux': '/vmlinuz', 'initrd': '/initrd'}
+
+    with utils.tempdir() as tmpdir:
+        files_info = {
+                      kernel: 'vmlinuz',
+                      ramdisk: 'initrd',
+                      CONF.isolinux_bin: ISOLINUX_BIN,
+                     }
+
+        # Open the deploy iso used to initiate deploy and copy the
+        # efiboot.img i.e. boot loader to the current temporary
+        # directory.
+        with utils.tempdir() as mountdir:
+            uefi_path_info, e_img_rel_path, grub_rel_path = (
+                _mount_deploy_iso(deploy_iso, mountdir))
+
+            # if either of these variables are not initialized then the
+            # uefi efiboot.img cannot be created.
+            files_info.update(uefi_path_info)
+            try:
+                _create_root_fs(tmpdir, files_info)
+            except (OSError, IOError) as e:
+                LOG.exception(_LE("Creating the filesystem root failed."))
+                raise exception.ImageCreationFailed(image_type='iso', error=e)
+            finally:
+                _umount_without_raise(mountdir)
+
+        cfg = _generate_cfg(kernel_params,
+                            CONF.isolinux_config_template, isolinux_options)
+
+        isolinux_cfg = os.path.join(tmpdir, ISOLINUX_CFG)
+        utils.write_to_file(isolinux_cfg, cfg)
+
+        # Generate and copy grub config file.
+        grub_cfg = os.path.join(tmpdir, grub_rel_path)
+        grub_conf = _generate_cfg(kernel_params,
+                                  CONF.grub_config_template, grub_options)
+        utils.write_to_file(grub_cfg, grub_conf)
+
+        # Create the boot_iso.
+        try:
+            utils.execute('mkisofs', '-r', '-V', "VMEDIA_BOOT_ISO",
+                          '-cache-inodes', '-J', '-l', '-no-emul-boot',
+                          '-boot-load-size', '4', '-boot-info-table',
+                          '-b', ISOLINUX_BIN, '-eltorito-alt-boot',
+                          '-e', e_img_rel_path, '-no-emul-boot',
+                          '-o', output_file, tmpdir)
         except processutils.ProcessExecutionError as e:
             LOG.exception(_LE("Creating ISO image failed."))
             raise exception.ImageCreationFailed(image_type='iso', error=e)
@@ -237,7 +333,11 @@ def fetch(context, image_href, path, image_service=None, force_raw=False):
     #             auth checking in glance, so we assume that access was
     #             checked before we got here.
     if not image_service:
-        image_service = service.Service(version=1, context=context)
+        image_service = service.get_image_service(image_href,
+            context=context)
+        LOG.debug("Using %(image_service)s to download image %(image_href)s." %
+                  {'image_service': image_service.__class__,
+                   'image_href': image_href})
 
     with fileutils.remove_path_on_error(path):
         with open(path, "wb") as image_file:
@@ -285,7 +385,7 @@ def image_to_raw(image_href, path, path_tmp):
 
 def download_size(context, image_href, image_service=None):
     if not image_service:
-        image_service = service.Service(version=1, context=context)
+        image_service = service.get_image_service(image_href, context=context)
     return image_service.show(image_href)['size']
 
 
@@ -303,19 +403,19 @@ def converted_size(path):
     return data.virtual_size
 
 
-def get_glance_image_properties(context, image_uuid, properties="all"):
-    """Returns the values of several properties of a glance image
+def get_image_properties(context, image_href, properties="all"):
+    """Returns the values of several properties of an image
 
     :param context: context
-    :param image_uuid: the UUID of the image in glance
+    :param image_href: href of the image
     :param properties: the properties whose values are required.
         This argument is optional, default value is "all", so if not specified
         all properties will be returned.
     :returns: a dict of the values of the properties. A property not on the
         glance metadata will have a value of None.
     """
-    glance_service = service.Service(version=1, context=context)
-    iproperties = glance_service.show(image_uuid)['properties']
+    img_service = service.get_image_service(image_href, context=context)
+    iproperties = img_service.show(image_href)['properties']
 
     if properties == "all":
         return iproperties
@@ -331,36 +431,39 @@ def get_temp_url_for_glance_image(context, image_uuid):
     :returns: the tmp url for the glance image.
     """
     # Glance API version 2 is required for getting direct_url of the image.
-    glance_service = service.Service(version=2, context=context)
+    glance_service = service.GlanceImageService(version=2, context=context)
     image_properties = glance_service.show(image_uuid)
     LOG.debug('Got image info: %(info)s for image %(image_uuid)s.',
               {'info': image_properties, 'image_uuid': image_uuid})
     return glance_service.swift_temp_url(image_properties)
 
 
-def create_boot_iso(context, output_filename, kernel_uuid,
-        ramdisk_uuid, root_uuid=None, kernel_params=None):
+def create_boot_iso(context, output_filename, kernel_href,
+                    ramdisk_href, deploy_iso_uuid, root_uuid=None,
+                    kernel_params=None, boot_mode=None):
     """Creates a bootable ISO image for a node.
 
-    Given the glance UUID of kernel, ramdisk, root partition's UUID and
-    kernel cmdline arguments, this method fetches the kernel, ramdisk from
-    glance, and builds a bootable ISO image that can be used to boot up the
+    Given the hrefs for kernel, ramdisk, root partition's UUID and
+    kernel cmdline arguments, this method fetches the kernel and ramdisk,
+    and builds a bootable ISO image that can be used to boot up the
     baremetal node.
 
     :param context: context
     :param output_filename: the absolute path of the output ISO file
-    :param kernel_uuid: glance uuid of the kernel to use
-    :param ramdisk_uuid: glance uuid of the ramdisk to use
+    :param kernel_href: URL or glance uuid of the kernel to use
+    :param ramdisk_href: URL or glance uuid of the ramdisk to use
+    :param deploy_iso_uuid: URL or glance uuid of the deploy iso used
     :param root_uuid: uuid of the root filesystem (optional)
     :param kernel_params: a string containing whitespace separated values
         kernel cmdline arguments of the form K=V or K (optional).
+    :boot_mode: the boot mode in which the deploy is to happen.
     :raises: ImageCreationFailed, if creating boot ISO failed.
     """
     with utils.tempdir() as tmpdir:
-        kernel_path = os.path.join(tmpdir, kernel_uuid)
-        ramdisk_path = os.path.join(tmpdir, ramdisk_uuid)
-        fetch(context, kernel_uuid, kernel_path)
-        fetch(context, ramdisk_uuid, ramdisk_path)
+        kernel_path = os.path.join(tmpdir, kernel_href.split('/')[-1])
+        ramdisk_path = os.path.join(tmpdir, ramdisk_href.split('/')[-1])
+        fetch(context, kernel_href, kernel_path)
+        fetch(context, ramdisk_href, ramdisk_path)
 
         params = []
         if root_uuid:
@@ -368,5 +471,105 @@ def create_boot_iso(context, output_filename, kernel_uuid,
         if kernel_params:
             params.append(kernel_params)
 
-        create_isolinux_image(output_filename, kernel_path,
-                              ramdisk_path, params)
+        if boot_mode == 'uefi':
+            deploy_iso = os.path.join(tmpdir, deploy_iso_uuid)
+            fetch(context, deploy_iso_uuid, deploy_iso)
+            create_isolinux_image_for_uefi(output_filename,
+                                           deploy_iso,
+                                           kernel_path,
+                                           ramdisk_path,
+                                           params)
+        else:
+            create_isolinux_image_for_bios(output_filename,
+                                           kernel_path,
+                                           ramdisk_path,
+                                           params)
+
+
+def is_whole_disk_image(ctx, instance_info):
+    """Find out if the image is a partition image or a whole disk image.
+
+    :param ctx: an admin context
+    :param instance_info: a node's instance info dict
+
+    :returns True for whole disk images and False for partition images
+        and None on no image_source or Error.
+    """
+    image_source = instance_info.get('image_source')
+    if not image_source:
+        return
+
+    is_whole_disk_image = False
+    if glance_utils.is_glance_image(image_source):
+        try:
+            iproperties = get_image_properties(ctx, image_source)
+        except Exception:
+            return
+        is_whole_disk_image = (not iproperties.get('kernel_id') and
+                               not iproperties.get('ramdisk_id'))
+    else:
+        # Non glance image ref
+        if (not instance_info.get('kernel') and
+            not instance_info.get('ramdisk')):
+            is_whole_disk_image = True
+
+    return is_whole_disk_image
+
+
+def _mount_deploy_iso(deploy_iso, mountdir):
+    """This function opens up the deploy iso used for deploy.
+
+    :param: deploy_iso: path to the deploy iso where its
+                        contents are fetched to.
+    :raises: ImageCreationFailed if mount fails.
+    :returns: a tuple consisting of - 1. a dictionary containing
+                                         the values as required
+                                         by create_isolinux_image,
+                                      2. efiboot.img relative path, and
+                                      3. grub.cfg relative path.
+
+    """
+    e_img_rel_path = None
+    e_img_path = None
+    grub_rel_path = None
+    grub_path = None
+
+    try:
+        utils.mount(deploy_iso, mountdir, '-o', 'loop')
+    except processutils.ProcessExecutionError as e:
+        LOG.exception(_LE("mounting the deploy iso failed."))
+        raise exception.ImageCreationFailed(image_type='iso', error=e)
+
+    try:
+        for (dir, subdir, files) in os.walk(mountdir):
+            if 'efiboot.img' in files:
+                e_img_path = os.path.join(dir, 'efiboot.img')
+                e_img_rel_path = os.path.relpath(e_img_path,
+                                                 mountdir)
+            if 'grub.cfg' in files:
+                grub_path = os.path.join(dir, 'grub.cfg')
+                grub_rel_path = os.path.relpath(grub_path,
+                                                mountdir)
+    except (OSError, IOError) as e:
+        LOG.exception(_LE("examining the deploy iso failed."))
+        _umount_without_raise(mountdir)
+        raise exception.ImageCreationFailed(image_type='iso', error=e)
+
+    # check if the variables are assigned some values or not during
+    # walk of the mountdir.
+    if not (e_img_path and e_img_rel_path and grub_path and grub_rel_path):
+        error = (_("Deploy iso didn't contain efiboot.img or grub.cfg"))
+        _umount_without_raise(mountdir)
+        raise exception.ImageCreationFailed(image_type='iso', error=error)
+
+    uefi_path_info = {e_img_path: e_img_rel_path,
+                      grub_path: grub_rel_path}
+
+    # Returning a tuple as it makes the code simpler and clean.
+    # uefi_path_info: is needed by the caller for _create_root_fs to create
+    # appropriate directory structures for uefi boot iso.
+    # grub_rel_path: is needed to copy the new grub.cfg generated using
+    # generate_cfg() to the same directory path structure where it was
+    # present in deploy iso. This path varies for different OS vendors.
+    # e_img_rel_path: is required by mkisofs to generate boot iso.
+    return uefi_path_info, e_img_rel_path, grub_rel_path

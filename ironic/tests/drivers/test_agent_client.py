@@ -36,9 +36,18 @@ class MockNode(object):
         self.uuid = 'uuid'
         self.driver_info = {}
         self.driver_internal_info = {
-            'agent_url': "http://127.0.0.1:9999"
+            'agent_url': "http://127.0.0.1:9999",
+            'clean_version': {'generic': '1'}
         }
         self.instance_info = {}
+
+    def as_dict(self):
+        return {
+            'uuid': self.uuid,
+            'driver_info': self.driver_info,
+            'driver_internal_info': self.driver_internal_info,
+            'instance_info': self.instance_info
+        }
 
 
 class TestAgentClient(base.TestCase):
@@ -90,35 +99,6 @@ class TestAgentClient(base.TestCase):
             mock_get.return_value = res
             self.assertEqual([], self.client.get_commands_status(self.node))
 
-    def test_deploy_is_done(self):
-        with mock.patch.object(self.client, 'get_commands_status') as mock_s:
-            mock_s.return_value = [{
-                'command_name': 'prepare_image',
-                'command_status': 'SUCCESS'
-            }]
-            self.assertTrue(self.client.deploy_is_done(self.node))
-
-    def test_deploy_is_done_empty_response(self):
-        with mock.patch.object(self.client, 'get_commands_status') as mock_s:
-            mock_s.return_value = []
-            self.assertFalse(self.client.deploy_is_done(self.node))
-
-    def test_deploy_is_done_race(self):
-        with mock.patch.object(self.client, 'get_commands_status') as mock_s:
-            mock_s.return_value = [{
-                'command_name': 'some_other_command',
-                'command_status': 'SUCCESS'
-            }]
-            self.assertFalse(self.client.deploy_is_done(self.node))
-
-    def test_deploy_is_done_still_running(self):
-        with mock.patch.object(self.client, 'get_commands_status') as mock_s:
-            mock_s.return_value = [{
-                'command_name': 'prepare_image',
-                'command_status': 'RUNNING'
-            }]
-            self.assertFalse(self.client.deploy_is_done(self.node))
-
     @mock.patch('uuid.uuid4', mock.MagicMock(return_value='uuid'))
     def test_prepare_image(self):
         self.client._command = mock.Mock()
@@ -150,4 +130,64 @@ class TestAgentClient(base.TestCase):
         self.client._command.assert_called_once_with(node=self.node,
                                          method='standby.prepare_image',
                                          params=params,
+                                         wait=False)
+
+    @mock.patch('uuid.uuid4', mock.MagicMock(return_value='uuid'))
+    def test_start_iscsi_target(self):
+        self.client._command = mock.Mock()
+        iqn = 'fake-iqn'
+        params = {'iqn': iqn}
+
+        self.client.start_iscsi_target(self.node, iqn)
+        self.client._command.assert_called_once_with(node=self.node,
+                                         method='iscsi.start_iscsi_target',
+                                         params=params,
+                                         wait=True)
+
+    @mock.patch('uuid.uuid4', mock.MagicMock(return_value='uuid'))
+    def test_install_bootloader(self):
+        self.client._command = mock.Mock()
+        root_uuid = 'fake-root-uuid'
+        efi_system_part_uuid = 'fake-efi-system-part-uuid'
+        params = {'root_uuid': root_uuid,
+                  'efi_system_part_uuid': efi_system_part_uuid}
+
+        self.client.install_bootloader(
+            self.node, root_uuid, efi_system_part_uuid=efi_system_part_uuid)
+        self.client._command.assert_called_once_with(
+            node=self.node, method='image.install_bootloader', params=params,
+            wait=True)
+
+    def test_get_clean_steps(self):
+        self.client._command = mock.Mock()
+        ports = []
+        expected_params = {
+            'node': self.node.as_dict(),
+            'ports': []
+        }
+
+        self.client.get_clean_steps(self.node,
+                                    ports)
+        self.client._command.assert_called_once_with(node=self.node,
+                                         method='clean.get_clean_steps',
+                                         params=expected_params,
+                                         wait=True)
+
+    def test_execute_clean_step(self):
+        self.client._command = mock.Mock()
+        ports = []
+        step = {'priority': 10, 'step': 'erase_devices', 'interface': 'deploy'}
+        expected_params = {
+            'step': step,
+            'node': self.node.as_dict(),
+            'ports': [],
+            'clean_version': self.node.driver_internal_info.get(
+                'hardware_manager_version')
+        }
+        self.client.execute_clean_step(step,
+                                       self.node,
+                                       ports)
+        self.client._command.assert_called_once_with(node=self.node,
+                                         method='clean.execute_clean_step',
+                                         params=expected_params,
                                          wait=False)

@@ -18,15 +18,15 @@ Tests for the API /ports/ methods.
 import datetime
 
 import mock
-from oslo.utils import timeutils
 from oslo_config import cfg
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 from six.moves.urllib import parse as urlparse
 from testtools.matchers import HasLength
 from wsme import types as wtypes
 
 from ironic.api.controllers.v1 import port as api_port
 from ironic.common import exception
-from ironic.common import utils
 from ironic.conductor import rpcapi
 from ironic.tests.api import base as api_base
 from ironic.tests.api import utils as apiutils
@@ -102,7 +102,7 @@ class TestListPorts(api_base.FunctionalTest):
         for id_ in range(5):
             port = obj_utils.create_test_port(self.context,
                                             node_id=self.node.id,
-                                            uuid=utils.generate_uuid(),
+                                            uuid=uuidutils.generate_uuid(),
                                             address='52:54:00:cf:2d:3%s' % id_)
             ports.append(port.uuid)
         data = self.get_json('/ports')
@@ -112,7 +112,7 @@ class TestListPorts(api_base.FunctionalTest):
         self.assertEqual(ports.sort(), uuids.sort())
 
     def test_links(self):
-        uuid = utils.generate_uuid()
+        uuid = uuidutils.generate_uuid()
         obj_utils.create_test_port(self.context,
                                    uuid=uuid,
                                    node_id=self.node.id)
@@ -129,7 +129,7 @@ class TestListPorts(api_base.FunctionalTest):
         for id_ in range(5):
             port = obj_utils.create_test_port(self.context,
                                             node_id=self.node.id,
-                                            uuid=utils.generate_uuid(),
+                                            uuid=uuidutils.generate_uuid(),
                                             address='52:54:00:cf:2d:3%s' % id_)
             ports.append(port.uuid)
         data = self.get_json('/ports/?limit=3')
@@ -144,7 +144,7 @@ class TestListPorts(api_base.FunctionalTest):
         for id_ in range(5):
             port = obj_utils.create_test_port(self.context,
                                             node_id=self.node.id,
-                                            uuid=utils.generate_uuid(),
+                                            uuid=uuidutils.generate_uuid(),
                                             address='52:54:00:cf:2d:3%s' % id_)
             ports.append(port.uuid)
         data = self.get_json('/ports')
@@ -158,7 +158,7 @@ class TestListPorts(api_base.FunctionalTest):
         for id_ in range(3):
             obj_utils.create_test_port(self.context,
                                        node_id=self.node.id,
-                                       uuid=utils.generate_uuid(),
+                                       uuid=uuidutils.generate_uuid(),
                                        address=address_template % id_)
 
         target_address = address_template % 1
@@ -225,7 +225,7 @@ class TestPatch(api_base.FunctionalTest):
         self.assertFalse(mock_upd.called)
 
     def test_update_not_found(self, mock_upd):
-        uuid = utils.generate_uuid()
+        uuid = uuidutils.generate_uuid()
         response = self.patch_json('/ports/%s' % uuid,
                                    [{'path': '/extra/foo',
                                      'value': 'bar',
@@ -524,7 +524,7 @@ class TestPost(api_base.FunctionalTest):
         response = self.post_json('/ports', pdict)
         result = self.get_json('/ports/%s' % response.json['uuid'])
         self.assertEqual(pdict['address'], result['address'])
-        self.assertTrue(utils.is_uuid_like(result['uuid']))
+        self.assertTrue(uuidutils.is_uuid_like(result['uuid']))
 
     def test_create_port_valid_extra(self):
         pdict = post_get_test_port(extra={'str': 'foo', 'int': 123,
@@ -601,7 +601,7 @@ class TestPost(api_base.FunctionalTest):
         address = 'AA:AA:AA:11:22:33'
         pdict = post_get_test_port(address=address)
         self.post_json('/ports', pdict)
-        pdict['uuid'] = utils.generate_uuid()
+        pdict['uuid'] = uuidutils.generate_uuid()
         response = self.post_json('/ports', pdict, expect_errors=True)
         self.assertEqual(409, response.status_int)
         self.assertEqual('application/json', response.content_type)
@@ -610,6 +610,7 @@ class TestPost(api_base.FunctionalTest):
         self.assertIn(address, error_msg.upper())
 
 
+@mock.patch.object(rpcapi.ConductorAPI, 'destroy_port')
 class TestDelete(api_base.FunctionalTest):
 
     def setUp(self):
@@ -618,25 +619,28 @@ class TestDelete(api_base.FunctionalTest):
         self.port = obj_utils.create_test_port(self.context,
                                                node_id=self.node.id)
 
-    def test_delete_port_byid(self):
-        self.delete('/ports/%s' % self.port.uuid)
-        response = self.get_json('/ports/%s' % self.port.uuid,
-                                 expect_errors=True)
-        self.assertEqual(404, response.status_int)
-        self.assertEqual('application/json', response.content_type)
-        self.assertIn(self.port.uuid, response.json['error_message'])
+        gtf = mock.patch.object(rpcapi.ConductorAPI, 'get_topic_for')
+        self.mock_gtf = gtf.start()
+        self.mock_gtf.return_value = 'test-topic'
+        self.addCleanup(gtf.stop)
 
-    def test_delete_port_byaddress(self):
+    def test_delete_port_byaddress(self, mock_dpt):
         response = self.delete('/ports/%s' % self.port.address,
                                expect_errors=True)
         self.assertEqual(400, response.status_int)
         self.assertEqual('application/json', response.content_type)
         self.assertIn(self.port.address, response.json['error_message'])
 
-    def test_delete_port_node_locked(self):
-        self.node.reserve(self.context, 'fake', self.node.uuid)
-        response = self.delete('/ports/%s' % self.port.uuid,
+    def test_delete_port_byid(self, mock_dpt):
+        self.delete('/ports/%s' % self.port.uuid,
                                expect_errors=True)
-        self.assertEqual(409, response.status_int)
-        self.assertEqual('application/json', response.content_type)
-        self.assertIn(self.node.uuid, response.json['error_message'])
+        self.assertTrue(mock_dpt.called)
+
+    def test_delete_port_node_locked(self, mock_dpt):
+        self.node.reserve(self.context, 'fake', self.node.uuid)
+        mock_dpt.side_effect = exception.NodeLocked(node='fake-node',
+                                                    host='fake-host')
+        ret = self.delete('/ports/%s' % self.port.uuid, expect_errors=True)
+        self.assertEqual(409, ret.status_code)
+        self.assertTrue(ret.json['error_message'])
+        self.assertTrue(mock_dpt.called)

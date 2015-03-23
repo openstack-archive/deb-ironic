@@ -12,7 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.utils import excutils
+from oslo_utils import excutils
 
 from ironic.common import exception
 from ironic.common.i18n import _
@@ -121,7 +121,7 @@ def node_power_action(task, new_state):
     else:
         # success!
         node['power_state'] = target_state
-        LOG.info(_LI('Succesfully set node %(node)s power state to '
+        LOG.info(_LI('Successfully set node %(node)s power state to '
                      '%(state)s.'),
                  {'node': node.uuid, 'state': target_state})
     finally:

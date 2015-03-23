@@ -4,123 +4,6 @@
 # Options defined in oslo.messaging
 #
 
-# Use durable queues in AMQP. (boolean value)
-# Deprecated group/name - [DEFAULT]/rabbit_durable_queues
-#amqp_durable_queues=false
-
-# Auto-delete queues in AMQP. (boolean value)
-#amqp_auto_delete=false
-
-# Size of RPC connection pool. (integer value)
-#rpc_conn_pool_size=30
-
-# Qpid broker hostname. (string value)
-#qpid_hostname=localhost
-
-# Qpid broker port. (integer value)
-#qpid_port=5672
-
-# Qpid HA cluster host:port pairs. (list value)
-#qpid_hosts=$qpid_hostname:$qpid_port
-
-# Username for Qpid connection. (string value)
-#qpid_username=
-
-# Password for Qpid connection. (string value)
-#qpid_password=
-
-# Space separated list of SASL mechanisms to use for auth.
-# (string value)
-#qpid_sasl_mechanisms=
-
-# Seconds between connection keepalive heartbeats. (integer
-# value)
-#qpid_heartbeat=60
-
-# Transport to use, either 'tcp' or 'ssl'. (string value)
-#qpid_protocol=tcp
-
-# Whether to disable the Nagle algorithm. (boolean value)
-#qpid_tcp_nodelay=true
-
-# The number of prefetched messages held by receiver. (integer
-# value)
-#qpid_receiver_capacity=1
-
-# The qpid topology version to use.  Version 1 is what was
-# originally used by impl_qpid.  Version 2 includes some
-# backwards-incompatible changes that allow broker federation
-# to work.  Users should update to version 2 when they are
-# able to take everything down, as it requires a clean break.
-# (integer value)
-#qpid_topology_version=1
-
-# SSL version to use (valid only if SSL enabled). Valid values
-# are TLSv1 and SSLv23. SSLv2, SSLv3, TLSv1_1, and TLSv1_2 may
-# be available on some distributions. (string value)
-#kombu_ssl_version=
-
-# SSL key file (valid only if SSL enabled). (string value)
-#kombu_ssl_keyfile=
-
-# SSL cert file (valid only if SSL enabled). (string value)
-#kombu_ssl_certfile=
-
-# SSL certification authority file (valid only if SSL
-# enabled). (string value)
-#kombu_ssl_ca_certs=
-
-# How long to wait before reconnecting in response to an AMQP
-# consumer cancel notification. (floating point value)
-#kombu_reconnect_delay=1.0
-
-# The RabbitMQ broker address where a single node is used.
-# (string value)
-#rabbit_host=localhost
-
-# The RabbitMQ broker port where a single node is used.
-# (integer value)
-#rabbit_port=5672
-
-# RabbitMQ HA cluster host:port pairs. (list value)
-#rabbit_hosts=$rabbit_host:$rabbit_port
-
-# Connect over SSL for RabbitMQ. (boolean value)
-#rabbit_use_ssl=false
-
-# The RabbitMQ userid. (string value)
-#rabbit_userid=guest
-
-# The RabbitMQ password. (string value)
-#rabbit_password=guest
-
-# The RabbitMQ login method. (string value)
-#rabbit_login_method=AMQPLAIN
-
-# The RabbitMQ virtual host. (string value)
-#rabbit_virtual_host=/
-
-# How frequently to retry connecting with RabbitMQ. (integer
-# value)
-#rabbit_retry_interval=1
-
-# How long to backoff for between retries when connecting to
-# RabbitMQ. (integer value)
-#rabbit_retry_backoff=2
-
-# Maximum number of RabbitMQ connection retries. Default is 0
-# (infinite retry count). (integer value)
-#rabbit_max_retries=0
-
-# Use HA queues in RabbitMQ (x-ha-policy: all). If you change
-# this option, you must wipe the RabbitMQ database. (boolean
-# value)
-#rabbit_ha_queues=false
-
-# Deprecated, use rpc_backend=kombu+memory or rpc_backend=fake
-# (boolean value)
-#fake_rabbit=false
-
 # ZeroMQ bind address. Should be a wildcard (*), an ethernet
 # interface, or IP. The "host" option should point or resolve
 # to this address. (string value)
@@ -191,7 +74,7 @@
 #
 
 # IP address of this host. (string value)
-#my_ip=192.168.122.1
+#my_ip=10.0.0.1
 
 
 #
@@ -201,6 +84,10 @@
 # Method to use for authentication: noauth or keystone.
 # (string value)
 #auth_strategy=keystone
+
+# Enable pecan debug mode. WARNING: this is insecure and
+# should not be used in production. (boolean value)
+#pecan_debug=false
 
 
 #
@@ -265,6 +152,9 @@
 # Template file for isolinux configuration file. (string
 # value)
 #isolinux_config_template=$pybasedir/common/isolinux_config.template
+
+# Template file for grub configuration file. (string value)
+#grub_config_template=$pybasedir/common/grub_conf.template
 
 
 #
@@ -440,27 +330,13 @@
 
 
 #
-# Options defined in ironic.openstack.common.policy
+# Options defined in ironic.openstack.common.versionutils
 #
 
-# The JSON file that defines policies. (string value)
-#policy_file=policy.json
+# Enables or disables fatal status of deprecations. (boolean
+# value)
+#fatal_deprecations=false
 
-# Default rule. Enforced when a requested rule is not found.
-# (string value)
-#policy_default_rule=default
-
-# Directories where policy configuration files are stored.
-# They can be relative to any directory in the search path
-# defined by the config_dir option, or absolute paths. The
-# file defined by policy_file must exist for these directories
-# to be searched. (multi valued)
-#policy_dirs=policy.d
-
-[keystone]
-
-#The region used for getting endpoints of OpenStack services.
-#region_name =
 
 [agent]
 
@@ -478,6 +354,17 @@
 # Neutron bootfile DHCP parameter. (string value)
 #agent_pxe_bootfile_name=pxelinux.0
 
+# Priority to run in-band erase devices via the Ironic Python
+# Agent ramdisk. If unset, will use the priority set in the
+# ramdisk (defaults to 10 for the GenericHardwareManager). If
+# set to 0, will not run during cleaning. (integer value)
+#agent_erase_devices_priority=<None>
+
+
+#
+# Options defined in ironic.drivers.modules.agent_base_vendor
+#
+
 # Maximum interval (in seconds) for agent heartbeats. (integer
 # value)
 #heartbeat_timeout=300
@@ -490,6 +377,30 @@
 # API version to use for communicating with the ramdisk agent.
 # (string value)
 #agent_api_version=v1
+
+
+[amt]
+
+#
+# Options defined in ironic.drivers.modules.amt.common
+#
+
+# Protocol used for AMT endpoint, support http/https (string
+# value)
+#protocol=http
+
+
+#
+# Options defined in ironic.drivers.modules.amt.power
+#
+
+# Maximum number of times to attempt an AMT operation, before
+# failing (integer value)
+#max_attempts=3
+
+# Amount of time (in seconds) to wait, before retrying an AMT
+# operation (integer value)
+#action_wait=10
 
 
 [api]
@@ -591,6 +502,26 @@
 # Name of the Swift container to store config drive data. Used
 # when configdrive_use_swift is True. (string value)
 #configdrive_swift_container=ironic_configdrive_container
+
+# Timeout (seconds) for waiting for node inspection. 0 -
+# unlimited. (integer value)
+#inspect_timeout=1800
+
+# Cleaning is a configurable set of steps, such as erasing
+# disk drives, that are performed on the node to ensure it is
+# in a baseline state and ready to be deployed to. This is
+# done after instance deletion, and during the transition from
+# a "managed" to "available" state. When enabled, the
+# particular steps performed to clean a node depend on which
+# driver that node is managed by; see the individual driver's
+# documentation for details. NOTE: The introduction of the
+# cleaning operation causes instance deletion to take
+# significantly longer. While this provides a better and more
+# secure user experience, it does impact the service behavior,
+# and as such IS DISABLED BY DEFAULT until consuming services
+# (eg, Nova) have been updated to accomodate the additional
+# time for deletion. (boolean value)
+#clean_nodes=false
 
 
 [console]
@@ -710,20 +641,22 @@
 # connection lost. (boolean value)
 #use_db_reconnect=false
 
-# Seconds between database connection retries. (integer value)
+# Seconds between retries of a database transaction. (integer
+# value)
 #db_retry_interval=1
 
-# If True, increases the interval between database connection
-# retries up to db_max_retry_interval. (boolean value)
+# If True, increases the interval between retries of a
+# database operation up to db_max_retry_interval. (boolean
+# value)
 #db_inc_retry_interval=true
 
 # If db_inc_retry_interval is set, the maximum seconds between
-# database connection retries. (integer value)
+# retries of a database operation. (integer value)
 #db_max_retry_interval=10
 
-# Maximum database connection retries before error is raised.
-# Set to -1 to specify an infinite retry count. (integer
-# value)
+# Maximum retries in case of connection error or deadlock
+# error before error is raised. Set to -1 to specify an
+# infinite retry count. (integer value)
 #db_max_retries=20
 
 
@@ -740,6 +673,10 @@
 #
 # Options defined in ironic.drivers.modules.deploy_utils
 #
+
+# Size of EFI system partition in MiB when configuring UEFI
+# systems for local boot. (integer value)
+#efi_system_partition_size=200
 
 # Block size to use when writing to the nodes disk. (string
 # value)
@@ -759,6 +696,26 @@
 # DHCP provider to use. "neutron" uses Neutron, and "none"
 # uses a no-op provider. (string value)
 #dhcp_provider=neutron
+
+
+[discoverd]
+
+#
+# Options defined in ironic.drivers.modules.discoverd
+#
+
+# whether to enable inspection using ironic-discoverd (boolean
+# value)
+#enabled=false
+
+# ironic-discoverd HTTP endpoint. If this is not set, the
+# ironic-discoverd client default (http://127.0.0.1:5050) will
+# be used. (string value)
+#service_url=<None>
+
+# period (in seconds) to check status of nodes on inspection
+# (integer value)
+#status_check_period=60
 
 
 [disk_partitioner]
@@ -895,6 +852,43 @@
 
 
 #
+# Options defined in ironic.drivers.modules.ilo.deploy
+#
+
+# Priority for erase devices clean step. If unset, it defaults
+# to 10. If set to 0, the step will be disabled and will not
+# run during cleaning. (integer value)
+#clean_priority_erase_devices=<None>
+
+
+#
+# Options defined in ironic.drivers.modules.ilo.management
+#
+
+# Priority for reset_ilo clean step. (integer value)
+#clean_priority_reset_ilo=1
+
+# Priority for reset_bios_to_default clean step. (integer
+# value)
+#clean_priority_reset_bios_to_default=10
+
+# Priority for reset_secure_boot_keys clean step. This step
+# will reset the secure boot keys to manufacturing  defaults.
+# (integer value)
+#clean_priority_reset_secure_boot_keys_to_default=20
+
+# Priority for clear_secure_boot_keys clean step. This step is
+# not enabled by default. It can be enabled to to clear all
+# secure boot keys enrolled with iLO. (integer value)
+#clean_priority_clear_secure_boot_keys=0
+
+# Priority for reset_ilo_credential clean step. This step
+# requires "ilo_change_password" parameter to be updated in
+# nodes's driver_info with the new password. (integer value)
+#clean_priority_reset_ilo_credential=30
+
+
+#
 # Options defined in ironic.drivers.modules.ilo.power
 #
 
@@ -913,8 +907,12 @@
 # Options defined in ironic.drivers.modules.ipminative
 #
 
-# Maximum time in seconds to retry IPMI operations. (integer
-# value)
+# Maximum time in seconds to retry IPMI operations. There is a
+# tradeoff when setting this value. Setting this too low may
+# cause older BMCs to crash and require a hard reset. However,
+# setting too high can cause the sync power state periodic
+# task to hang when there are slow or unresponsive BMCs.
+# (integer value)
 #retry_timeout=60
 
 # Minimum time, in seconds, between IPMI operations sent to a
@@ -940,6 +938,21 @@
 
 # Timeout (in seconds) for iRMC operations (integer value)
 #client_timeout=60
+
+# Sensor data retrieval method, either "ipmitool" or "scci"
+# (string value)
+#sensor_method=ipmitool
+
+
+[keystone]
+
+#
+# Options defined in ironic.common.keystone
+#
+
+# The region used for getting endpoints of OpenStackservices.
+# (string value)
+#region_name=<None>
 
 
 [keystone_authtoken]
@@ -1083,6 +1096,44 @@
 # (list value)
 #hash_algorithms=md5
 
+# Prefix to prepend at the beginning of the path. Deprecated,
+# use identity_uri. (string value)
+#auth_admin_prefix=
+
+# Host providing the admin Identity API endpoint. Deprecated,
+# use identity_uri. (string value)
+#auth_host=127.0.0.1
+
+# Port of the admin Identity API endpoint. Deprecated, use
+# identity_uri. (integer value)
+#auth_port=35357
+
+# Protocol of the admin Identity API endpoint (http or https).
+# Deprecated, use identity_uri. (string value)
+#auth_protocol=https
+
+# Complete admin Identity API endpoint. This should specify
+# the unversioned root endpoint e.g. https://localhost:35357/
+# (string value)
+#identity_uri=<None>
+
+# This option is deprecated and may be removed in a future
+# release. Single shared secret with the Keystone
+# configuration used for bootstrapping a Keystone
+# installation, or otherwise bypassing the normal
+# authentication process. This option should not be used, use
+# `admin_user` and `admin_password` instead. (string value)
+#admin_token=<None>
+
+# Service username. (string value)
+#admin_user=<None>
+
+# Service user password. (string value)
+#admin_password=<None>
+
+# Service tenant name. (string value)
+#admin_tenant_name=admin
+
 
 [matchmaker_redis]
 
@@ -1135,6 +1186,11 @@
 # (string value)
 #auth_strategy=keystone
 
+# UUID of the network to create Neutron ports on when booting
+# to a ramdisk for cleaning/zapping using Neutron DHCP (string
+# value)
+#cleaning_network_uuid=<None>
+
 
 [oslo_messaging_amqp]
 
@@ -1182,6 +1238,147 @@
 
 # Accept clients using either SSL or plain TCP (boolean value)
 #allow_insecure_clients=false
+
+
+[oslo_messaging_qpid]
+
+#
+# Options defined in oslo.messaging
+#
+
+# Use durable queues in AMQP. (boolean value)
+# Deprecated group/name - [DEFAULT]/rabbit_durable_queues
+#amqp_durable_queues=false
+
+# Auto-delete queues in AMQP. (boolean value)
+#amqp_auto_delete=false
+
+# Size of RPC connection pool. (integer value)
+#rpc_conn_pool_size=30
+
+# Qpid broker hostname. (string value)
+#qpid_hostname=localhost
+
+# Qpid broker port. (integer value)
+#qpid_port=5672
+
+# Qpid HA cluster host:port pairs. (list value)
+#qpid_hosts=$qpid_hostname:$qpid_port
+
+# Username for Qpid connection. (string value)
+#qpid_username=
+
+# Password for Qpid connection. (string value)
+#qpid_password=
+
+# Space separated list of SASL mechanisms to use for auth.
+# (string value)
+#qpid_sasl_mechanisms=
+
+# Seconds between connection keepalive heartbeats. (integer
+# value)
+#qpid_heartbeat=60
+
+# Transport to use, either 'tcp' or 'ssl'. (string value)
+#qpid_protocol=tcp
+
+# Whether to disable the Nagle algorithm. (boolean value)
+#qpid_tcp_nodelay=true
+
+# The number of prefetched messages held by receiver. (integer
+# value)
+#qpid_receiver_capacity=1
+
+# The qpid topology version to use.  Version 1 is what was
+# originally used by impl_qpid.  Version 2 includes some
+# backwards-incompatible changes that allow broker federation
+# to work.  Users should update to version 2 when they are
+# able to take everything down, as it requires a clean break.
+# (integer value)
+#qpid_topology_version=1
+
+
+[oslo_messaging_rabbit]
+
+#
+# Options defined in oslo.messaging
+#
+
+# Use durable queues in AMQP. (boolean value)
+# Deprecated group/name - [DEFAULT]/rabbit_durable_queues
+#amqp_durable_queues=false
+
+# Auto-delete queues in AMQP. (boolean value)
+#amqp_auto_delete=false
+
+# Size of RPC connection pool. (integer value)
+#rpc_conn_pool_size=30
+
+# SSL version to use (valid only if SSL enabled). Valid values
+# are TLSv1 and SSLv23. SSLv2, SSLv3, TLSv1_1, and TLSv1_2 may
+# be available on some distributions. (string value)
+#kombu_ssl_version=
+
+# SSL key file (valid only if SSL enabled). (string value)
+#kombu_ssl_keyfile=
+
+# SSL cert file (valid only if SSL enabled). (string value)
+#kombu_ssl_certfile=
+
+# SSL certification authority file (valid only if SSL
+# enabled). (string value)
+#kombu_ssl_ca_certs=
+
+# How long to wait before reconnecting in response to an AMQP
+# consumer cancel notification. (floating point value)
+#kombu_reconnect_delay=1.0
+
+# The RabbitMQ broker address where a single node is used.
+# (string value)
+#rabbit_host=localhost
+
+# The RabbitMQ broker port where a single node is used.
+# (integer value)
+#rabbit_port=5672
+
+# RabbitMQ HA cluster host:port pairs. (list value)
+#rabbit_hosts=$rabbit_host:$rabbit_port
+
+# Connect over SSL for RabbitMQ. (boolean value)
+#rabbit_use_ssl=false
+
+# The RabbitMQ userid. (string value)
+#rabbit_userid=guest
+
+# The RabbitMQ password. (string value)
+#rabbit_password=guest
+
+# The RabbitMQ login method. (string value)
+#rabbit_login_method=AMQPLAIN
+
+# The RabbitMQ virtual host. (string value)
+#rabbit_virtual_host=/
+
+# How frequently to retry connecting with RabbitMQ. (integer
+# value)
+#rabbit_retry_interval=1
+
+# How long to backoff for between retries when connecting to
+# RabbitMQ. (integer value)
+#rabbit_retry_backoff=2
+
+# Maximum number of RabbitMQ connection retries. Default is 0
+# (infinite retry count). (integer value)
+#rabbit_max_retries=0
+
+# Use HA queues in RabbitMQ (x-ha-policy: all). If you change
+# this option, you must wipe the RabbitMQ database. (boolean
+# value)
+#rabbit_ha_queues=false
+
+# Deprecated, use rpc_backend=kombu+memory or rpc_backend=fake
+# (boolean value)
+#fake_rabbit=false
 
 
 [pxe]
@@ -1304,5 +1501,16 @@
 # Maximum number of times to retry a Swift request, before
 # failing. (integer value)
 #swift_max_retries=2
+
+
+[virtualbox]
+
+#
+# Options defined in ironic.drivers.modules.virtualbox
+#
+
+# Port on which VirtualBox web service is listening. (integer
+# value)
+#port=18083
 
 

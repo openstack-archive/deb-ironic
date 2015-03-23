@@ -17,25 +17,31 @@
 Fake drivers used in testing.
 """
 
-from oslo.utils import importutils
+from oslo_utils import importutils
 
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.drivers import base
 from ironic.drivers.modules import agent
+from ironic.drivers.modules.amt import management as amt_mgmt
+from ironic.drivers.modules.amt import power as amt_power
+from ironic.drivers.modules import discoverd
 from ironic.drivers.modules.drac import management as drac_mgmt
 from ironic.drivers.modules.drac import power as drac_power
 from ironic.drivers.modules import fake
 from ironic.drivers.modules import iboot
+from ironic.drivers.modules.ilo import inspect as ilo_inspect
 from ironic.drivers.modules.ilo import management as ilo_management
 from ironic.drivers.modules.ilo import power as ilo_power
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
+from ironic.drivers.modules.irmc import management as irmc_management
 from ironic.drivers.modules.irmc import power as irmc_power
 from ironic.drivers.modules import pxe
 from ironic.drivers.modules import seamicro
 from ironic.drivers.modules import snmp
 from ironic.drivers.modules import ssh
+from ironic.drivers.modules import virtualbox
 from ironic.drivers import utils
 
 
@@ -54,6 +60,7 @@ class FakeDriver(base.BaseDriver):
         self.vendor = utils.MixinVendorInterface(self.mapping)
         self.console = fake.FakeConsole()
         self.management = fake.FakeManagement()
+        self.inspect = fake.FakeInspect()
 
 
 class FakeIPMIToolDriver(base.BaseDriver):
@@ -146,6 +153,7 @@ class FakeIloDriver(base.BaseDriver):
         self.power = ilo_power.IloPower()
         self.deploy = fake.FakeDeploy()
         self.management = ilo_management.IloManagement()
+        self.inspect = ilo_inspect.IloInspect()
 
 
 class FakeDracDriver(base.BaseDriver):
@@ -184,3 +192,45 @@ class FakeIRMCDriver(base.BaseDriver):
                     reason=_("Unable to import python-scciclient library"))
         self.power = irmc_power.IRMCPower()
         self.deploy = fake.FakeDeploy()
+        self.management = irmc_management.IRMCManagement()
+
+
+class FakeVirtualBoxDriver(base.BaseDriver):
+    """Fake VirtualBox driver."""
+
+    def __init__(self):
+        if not importutils.try_import('pyremotevbox'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason=_("Unable to import pyremotevbox library"))
+        self.power = virtualbox.VirtualBoxPower()
+        self.deploy = fake.FakeDeploy()
+        self.management = virtualbox.VirtualBoxManagement()
+
+
+class FakeIPMIToolDiscoverdDriver(base.BaseDriver):
+    """Fake Discoverd driver."""
+
+    def __init__(self):
+        self.power = ipmitool.IPMIPower()
+        self.console = ipmitool.IPMIShellinaboxConsole()
+        self.deploy = fake.FakeDeploy()
+        self.vendor = ipmitool.VendorPassthru()
+        self.management = ipmitool.IPMIManagement()
+        # NOTE(dtantsur): unlike other uses of DiscoverdInspect, this one is
+        # unconditional, as this driver is designed for testing discoverd
+        # integration.
+        self.inspect = discoverd.DiscoverdInspect()
+
+
+class FakeAMTDriver(base.BaseDriver):
+    """Fake AMT driver."""
+
+    def __init__(self):
+        if not importutils.try_import('pywsman'):
+            raise exception.DriverLoadError(
+                    driver=self.__class__.__name__,
+                    reason=_("Unable to import pywsman library"))
+        self.power = amt_power.AMTPower()
+        self.deploy = fake.FakeDeploy()
+        self.management = amt_mgmt.AMTManagement()

@@ -32,7 +32,7 @@ Current list of mocked libraries:
 import sys
 
 import mock
-from oslo.utils import importutils
+from oslo_utils import importutils
 
 from ironic.drivers.modules import ipmitool
 
@@ -84,24 +84,30 @@ if 'ironic.drivers.modules.ipminative' in sys.modules:
 
 proliantutils = importutils.try_import('proliantutils')
 if not proliantutils:
-    mock_proliant_utils = mock.MagicMock()
-    sys.modules['proliantutils'] = mock_proliant_utils
-
-if 'ironic.drivers.ilo' in sys.modules:
-    reload(sys.modules['ironic.drivers.ilo'])
+    proliantutils = mock.MagicMock()
+    sys.modules['proliantutils'] = proliantutils
+    sys.modules['proliantutils.ilo'] = proliantutils.ilo
+    sys.modules['proliantutils.ilo.client'] = proliantutils.ilo.client
+    sys.modules['proliantutils.exception'] = proliantutils.exception
+    proliantutils.exception.IloError = type('IloError', (Exception,), {})
+    command_exception = type('IloCommandNotSupportedError', (Exception,), {})
+    proliantutils.exception.IloCommandNotSupportedError = command_exception
+    if 'ironic.drivers.ilo' in sys.modules:
+        reload(sys.modules['ironic.drivers.ilo'])
 
 
 # attempt to load the external 'pywsman' library, which is required by
-# the optional drivers.modules.drac module
+# the optional drivers.modules.drac and drivers.modules.amt module
 pywsman = importutils.try_import('pywsman')
 if not pywsman:
     pywsman = mock.Mock()
     sys.modules['pywsman'] = pywsman
-
-# if anything has loaded the drac driver yet, reload it now that the
-# external library has been mocked
-if 'ironic.drivers.modules.drac' in sys.modules:
-    reload(sys.modules['ironic.drivers.modules.drac'])
+    # Now that the external library has been mocked, if anything had already
+    # loaded any of the drivers, reload them.
+    if 'ironic.drivers.modules.drac' in sys.modules:
+        reload(sys.modules['ironic.drivers.modules.drac'])
+    if 'ironic.drivers.modules.amt' in sys.modules:
+        reload(sys.modules['ironic.drivers.modules.amt'])
 
 
 # attempt to load the external 'iboot' library, which is required by
@@ -161,3 +167,24 @@ if not scciclient:
 # external library has been mocked
 if 'ironic.drivers.modules.irmc' in sys.modules:
     reload(sys.modules['ironic.drivers.modules.irmc'])
+
+pyremotevbox = importutils.try_import('pyremotevbox')
+if not pyremotevbox:
+    pyremotevbox = mock.MagicMock()
+    pyremotevbox.exception = mock.MagicMock()
+    pyremotevbox.exception.PyRemoteVBoxException = Exception
+    pyremotevbox.exception.VmInWrongPowerState = Exception
+    sys.modules['pyremotevbox'] = pyremotevbox
+    if 'ironic.drivers.modules.virtualbox' in sys.modules:
+        reload(sys.modules['ironic.drivers.modules.virtualbox'])
+
+
+ironic_discoverd = importutils.try_import('ironic_discoverd')
+if not ironic_discoverd:
+    ironic_discoverd = mock.MagicMock()
+    ironic_discoverd.__version_info__ = (1, 0, 0)
+    ironic_discoverd.__version__ = "1.0.0"
+    sys.modules['ironic_discoverd'] = ironic_discoverd
+    sys.modules['ironic_discoverd.client'] = ironic_discoverd.client
+    if 'ironic.drivers.modules.discoverd' in sys.modules:
+        reload(sys.modules['ironic.drivers.modules.discoverd'])

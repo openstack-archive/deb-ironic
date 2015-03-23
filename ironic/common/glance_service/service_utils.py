@@ -19,9 +19,9 @@ import itertools
 import logging
 import random
 
-from oslo.utils import timeutils
 from oslo_config import cfg
 from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 import six
 import six.moves.urllib.parse as urlparse
 
@@ -237,3 +237,9 @@ def is_image_available(context, image):
         return False
 
     return str(user_id) == str(context.user_id)
+
+
+def is_glance_image(image_href):
+    if not isinstance(image_href, six.string_types):
+        return False
+    return image_href.startswith('glance://') or '/' not in image_href

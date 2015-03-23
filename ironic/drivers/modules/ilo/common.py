@@ -18,10 +18,12 @@ Common functionalities shared between different iLO modules.
 
 import tempfile
 
-from oslo.utils import importutils
 from oslo_config import cfg
+from oslo_utils import importutils
+import six.moves.urllib.parse as urlparse
 
 from ironic.common import exception
+from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
@@ -31,7 +33,8 @@ from ironic.common import utils
 from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import log as logging
 
-ilo_client = importutils.try_import('proliantutils.ilo.ribcl')
+ilo_client = importutils.try_import('proliantutils.ilo.client')
+ilo_error = importutils.try_import('proliantutils.exception')
 
 STANDARD_LICENSE = 1
 ESSENTIALS_LICENSE = 2
@@ -66,11 +69,24 @@ REQUIRED_PROPERTIES = {
 }
 OPTIONAL_PROPERTIES = {
     'client_port': _("port to be used for iLO operations. Optional."),
-    'client_timeout': _("timeout (in seconds) for iLO operations. Optional.")
+    'client_timeout': _("timeout (in seconds) for iLO operations. Optional."),
 }
 CONSOLE_PROPERTIES = {
     'console_port': _("node's UDP port to connect to. Only required for "
                       "console access.")
+}
+INSPECT_PROPERTIES = {
+    'inspect_ports': _("Comma-separated values of ethernet ports "
+                       "to be identified for creating node "
+                       "ports. Valid values may be "
+                       "inspect_ports = '1,2,...n' or "
+                       "inspect_ports = 'all' or "
+                       "inspect_ports = 'none'. "
+                       "Required only for inspection.")
+}
+CLEAN_PROPERTIES = {
+    'ilo_change_password': _("new password for iLO. Required if the clean "
+                             "step 'reset_ilo_credential' is enabled.")
 }
 
 COMMON_PROPERTIES = REQUIRED_PROPERTIES.copy()
@@ -125,6 +141,11 @@ def parse_driver_info(node):
             except ValueError:
                 not_integers.append(param)
 
+    for param in INSPECT_PROPERTIES:
+        value = info.get(param)
+        if value:
+            d_info[param] = value
+
     if not_integers:
         raise exception.InvalidParameterValue(_(
                 "The following iLO parameters from the node's driver_info "
@@ -173,7 +194,7 @@ def get_ilo_license(node):
     ilo_object = get_ilo_object(node)
     try:
         license_info = ilo_object.get_all_licenses()
-    except ilo_client.IloError as ilo_exception:
+    except ilo_error.IloError as ilo_exception:
         raise exception.IloOperationError(operation=_('iLO license check'),
                                           error=str(ilo_exception))
 
@@ -285,7 +306,7 @@ def attach_vmedia(node, device, url):
         ilo_object.insert_virtual_media(url, device=device)
         ilo_object.set_vm_status(device=device, boot_option='CONNECT',
                 write_protect='YES')
-    except ilo_client.IloError as ilo_exception:
+    except ilo_error.IloError as ilo_exception:
         operation = _("Inserting virtual media %s") % device
         raise exception.IloOperationError(operation=operation,
                 error=ilo_exception)
@@ -304,7 +325,7 @@ def set_boot_mode(node, boot_mode):
 
     try:
         p_boot_mode = ilo_object.get_pending_boot_mode()
-    except ilo_client.IloCommandNotSupportedError:
+    except ilo_error.IloCommandNotSupportedError:
         p_boot_mode = DEFAULT_BOOT_MODE
 
     if BOOT_MODE_ILO_TO_GENERIC[p_boot_mode.lower()] == boot_mode:
@@ -315,7 +336,7 @@ def set_boot_mode(node, boot_mode):
     try:
         ilo_object.set_pending_boot_mode(
                         BOOT_MODE_GENERIC_TO_ILO[boot_mode].upper())
-    except ilo_client.IloError as ilo_exception:
+    except ilo_error.IloError as ilo_exception:
         operation = _("Setting %s as boot mode") % boot_mode
         raise exception.IloOperationError(operation=operation,
                 error=ilo_exception)
@@ -324,12 +345,25 @@ def set_boot_mode(node, boot_mode):
              {'uuid': node.uuid, 'boot_mode': boot_mode})
 
 
-def update_boot_mode_capability(task):
+def update_boot_mode(task):
     """Update 'boot_mode' capability value of node's 'capabilities' property.
 
-    :param task: Task object.
+    This method updates the 'boot_mode' capability in node's 'capabilities'
+    property if not set.
+    It also sets the boot mode to be used in the next boot.
 
+    :param task: Task object.
+    :raises: IloOperationError if setting boot mode failed.
     """
+    node = task.node
+
+    boot_mode = driver_utils.get_node_capability(node, 'boot_mode')
+    if boot_mode is not None:
+        LOG.debug("Node %(uuid)s boot mode is being set to %(boot_mode)s",
+                  {'uuid': node.uuid, 'boot_mode': boot_mode})
+        set_boot_mode(node, boot_mode)
+        return
+
     ilo_object = get_ilo_object(task.node)
 
     try:
@@ -341,7 +375,7 @@ def update_boot_mode_capability(task):
             # and if it fails then we fall back to BIOS boot mode.
             ilo_object.set_pending_boot_mode('UEFI')
             p_boot_mode = 'UEFI'
-    except ilo_client.IloCommandNotSupportedError:
+    except ilo_error.IloCommandNotSupportedError:
         p_boot_mode = DEFAULT_BOOT_MODE
 
     driver_utils.rm_node_capability(task, 'boot_mode')
@@ -357,11 +391,14 @@ def setup_vmedia_for_boot(task, boot_iso, parameters=None):
     the required parameters to it via virtual floppy image.
 
     :param task: a TaskManager instance containing the node to act on.
-    :param boot_iso: a bootable ISO image to attach to.  The boot iso
-        should be present in either Glance or in Swift. If present in
-        Glance, it should be of format 'glance:<glance-image-uuid>'.
-        If present in Swift, it should be of format 'swift:<object-name>'.
-        It is assumed that object is present in CONF.ilo.swift_ilo_container.
+    :param boot_iso: a bootable ISO image to attach to. Should be either
+        of below:
+        * A Swift object - It should be of format 'swift:<object-name>'.
+          It is assumed that the image object is present in
+          CONF.ilo.swift_ilo_container;
+        * A Glance image - It should be format 'glance://<glance-image-uuid>'
+          or just <glance-image-uuid>;
+        * An HTTP(S) URL.
     :param parameters: the parameters to pass in the virtual floppy image
         in a dictionary.  This is optional.
     :raises: ImageCreationFailed, if it failed while creating the floppy image.
@@ -375,21 +412,20 @@ def setup_vmedia_for_boot(task, boot_iso, parameters=None):
         floppy_image_temp_url = _prepare_floppy_image(task, parameters)
         attach_vmedia(task.node, 'FLOPPY', floppy_image_temp_url)
 
-    boot_iso_temp_url = None
-    scheme, boot_iso_ref = boot_iso.split(':')
-    if scheme == 'swift':
+    boot_iso_url = None
+    parsed_ref = urlparse.urlparse(boot_iso)
+    if parsed_ref.scheme == 'swift':
         swift_api = swift.SwiftAPI()
         container = CONF.ilo.swift_ilo_container
-        object_name = boot_iso_ref
+        object_name = parsed_ref.path
         timeout = CONF.ilo.swift_object_expiry_timeout
-        boot_iso_temp_url = swift_api.get_temp_url(container, object_name,
+        boot_iso_url = swift_api.get_temp_url(container, object_name,
                 timeout)
-    elif scheme == 'glance':
-        glance_uuid = boot_iso_ref
-        boot_iso_temp_url = images.get_temp_url_for_glance_image(task.context,
-                glance_uuid)
+    elif service_utils.is_glance_image(boot_iso):
+        boot_iso_url = images.get_temp_url_for_glance_image(task.context,
+                boot_iso)
 
-    attach_vmedia(task.node, 'CDROM', boot_iso_temp_url)
+    attach_vmedia(task.node, 'CDROM', boot_iso_url or boot_iso)
 
 
 def cleanup_vmedia_boot(task):
@@ -418,8 +454,71 @@ def cleanup_vmedia_boot(task):
     for device in ('FLOPPY', 'CDROM'):
         try:
             ilo_object.eject_virtual_media(device)
-        except ilo_client.IloError as ilo_exception:
+        except ilo_error.IloError as ilo_exception:
             LOG.exception(_LE("Error while ejecting virtual media %(device)s "
                               "from node %(uuid)s. Error: %(error)s"),
                           {'device': device, 'uuid': task.node.uuid,
                            'error': ilo_exception})
+
+
+def get_secure_boot_mode(task):
+    """Retrieves current enabled state of UEFI secure boot on the node
+
+    Returns the current enabled state of UEFI secure boot on the node.
+
+    :param task: a task from TaskManager.
+    :raises: MissingParameterValue if a required iLO parameter is missing.
+    :raises: IloOperationError on an error from IloClient library.
+    :raises: IloOperationNotSupported if UEFI secure boot is not supported.
+    :returns: Boolean value indicating current state of UEFI secure boot
+              on the node.
+    """
+
+    operation = _("Get secure boot mode for node %s.") % task.node.uuid
+    secure_boot_state = False
+    ilo_object = get_ilo_object(task.node)
+
+    try:
+        current_boot_mode = ilo_object.get_current_boot_mode()
+        if current_boot_mode == 'UEFI':
+            secure_boot_state = ilo_object.get_secure_boot_mode()
+
+    except ilo_error.IloCommandNotSupportedError as ilo_exception:
+        raise exception.IloOperationNotSupported(operation=operation,
+                                                 error=ilo_exception)
+    except ilo_error.IloError as ilo_exception:
+        raise exception.IloOperationError(operation=operation,
+                                          error=ilo_exception)
+
+    LOG.debug("Get secure boot mode for node %(node)s returned %(value)s",
+              {'value': secure_boot_state, 'node': task.node.uuid})
+    return secure_boot_state
+
+
+def set_secure_boot_mode(task, flag):
+    """Enable or disable UEFI Secure Boot for the next boot
+
+    Enable or disable UEFI Secure Boot for the next boot
+
+    :param task: a task from TaskManager.
+    :param flag: Boolean value. True if the secure boot to be
+                       enabled in next boot.
+    :raises: IloOperationError on an error from IloClient library.
+    :raises: IloOperationNotSupported if UEFI secure boot is not supported.
+    """
+
+    operation = (_("Setting secure boot to %(flag)s for node %(node)s.") %
+                   {'flag': flag, 'node': task.node.uuid})
+    ilo_object = get_ilo_object(task.node)
+
+    try:
+        ilo_object.set_secure_boot_mode(flag)
+        LOG.debug(operation)
+
+    except ilo_error.IloCommandNotSupportedError as ilo_exception:
+        raise exception.IloOperationNotSupported(operation=operation,
+                                                 error=ilo_exception)
+
+    except ilo_error.IloError as ilo_exception:
+        raise exception.IloOperationError(operation=operation,
+                                          error=ilo_exception)

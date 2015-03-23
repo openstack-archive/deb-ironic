@@ -15,10 +15,12 @@
 
 """Test class for Ironic SSH power driver."""
 
-import fixtures
+import tempfile
+
 import mock
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_utils import uuidutils
 import paramiko
 
 from ironic.common import boot_devices
@@ -73,8 +75,8 @@ class SSHValidateParametersTestCase(db_base.DbTestCase):
     def test__parse_driver_info_good_file(self):
         # make sure we get back the expected things
         d_info = db_utils.get_test_ssh_info('file')
-        tempdir = self.useFixture(fixtures.TempDir())
-        key_path = tempdir.path + '/foo'
+        tempdir = tempfile.mkdtemp()
+        key_path = tempdir + '/foo'
         open(key_path, 'wt').close()
         d_info['ssh_key_filename'] = key_path
         node = obj_utils.get_test_node(
@@ -947,7 +949,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
     def test_management_interface_validate_fail(self):
         # Missing SSH driver_info information
         node = obj_utils.create_test_node(self.context,
-                                          uuid=utils.generate_uuid(),
+                                          uuid=uuidutils.generate_uuid(),
                                           driver='fake_ssh')
         with task_manager.acquire(self.context, node.uuid) as task:
             self.assertRaises(exception.MissingParameterValue,

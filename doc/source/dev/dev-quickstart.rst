@@ -275,12 +275,22 @@ or the agent driver, not both. The default is the PXE driver.::
 
     # Enable Neutron which is required by Ironic and disable nova-network.
     disable_service n-net
+    disable_service n-novnc
     enable_service q-svc
     enable_service q-agt
     enable_service q-dhcp
     enable_service q-l3
     enable_service q-meta
     enable_service neutron
+
+    # Disable Horizon
+    disable_service horizon
+
+    # Disable Heat
+    disable_service heat h-api h-api-cfn h-api-cw h-eng
+
+    # Disable Cinder
+    disable_service cinder c-sch c-api c-vol
 
     # Create 3 virtual machines to pose as Ironic's baremetal nodes.
     IRONIC_VM_COUNT=3
@@ -353,6 +363,14 @@ Source credentials, create a key, and spawn an instance::
 
     # spawn instance
     nova boot --flavor baremetal --image $image --key-name default testing
+
+.. note::
+    Because devstack create multiple networks, we need to pass an additional parameter
+    `--nic net-id` to the nova boot command when using the admin account, for example:
+
+    net_id=$(neutron net-list | egrep "$PRIVATE_NETWORK_NAME"'[^-]' | awk '{ print $2 }')
+
+    nova boot --flavor baremetal --nic net-id=$net_id --image $image --key-name default testing
 
 As the demo tenant, you should now see a Nova instance building::
 

@@ -32,13 +32,12 @@ DRIVER.
 import contextlib
 import os
 import re
-import stat
 import tempfile
 import time
 
-from oslo.utils import excutils
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_utils import excutils
 
 from ironic.common import boot_devices
 from ironic.common import exception
@@ -183,17 +182,29 @@ def _make_password_file(password):
     :raises: PasswordFileFailedToCreate from creating or writing to the
              temporary file
     """
+    f = None
     try:
-        fd, path = tempfile.mkstemp()
-        os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
-        with os.fdopen(fd, "w") as f:
-            f.write(password)
-
-        yield path
-        utils.delete_if_exists(path)
-    except Exception as exc:
-        utils.delete_if_exists(path)
+        f = tempfile.NamedTemporaryFile(mode='w', dir=CONF.tempdir)
+        f.write(str(password))
+        f.flush()
+    except (IOError, OSError) as exc:
+        if f is not None:
+            f.close()
         raise exception.PasswordFileFailedToCreate(error=exc)
+    except Exception:
+        if f is not None:
+            f.close()
+        raise
+
+    try:
+        # NOTE(jlvillal): This yield can not be in the try/except block above
+        # because an exception by the caller of this function would then get
+        # changed to a PasswordFileFailedToCreate exception which would mislead
+        # about the problem and its cause.
+        yield f.name
+    finally:
+        if f is not None:
+            f.close()
 
 
 def _parse_driver_info(node):
@@ -548,7 +559,7 @@ def _parse_ipmi_sensors_data(node, sensors_data):
 
 
 @task_manager.require_exclusive_lock
-def _send_raw(task, raw_bytes):
+def send_raw(task, raw_bytes):
     """Send raw bytes to the BMC. Bytes should be a string of bytes.
 
     :param task: a TaskManager instance.
@@ -729,7 +740,7 @@ class IPMIManagement(base.ManagementInterface):
         # This mimics pyghmi's current behavior, and the "option=timeout"
         # setting on newer ipmitool binaries.
         timeout_disable = "0x00 0x08 0x03 0x08"
-        _send_raw(task, timeout_disable)
+        send_raw(task, timeout_disable)
 
         cmd = "chassis bootdev %s" % device
         if persistent:
@@ -843,7 +854,7 @@ class VendorPassthru(base.VendorInterface):
         :raises:  InvalidParameterValue when an invalid value is specified.
 
         """
-        _send_raw(task, raw_bytes)
+        send_raw(task, raw_bytes)
 
     @base.passthru(['POST'])
     @task_manager.require_exclusive_lock

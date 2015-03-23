@@ -333,6 +333,8 @@ Compute Service's controller nodes and compute nodes.*
 
     service nova-compute restart
 
+.. _NeutronFlatNetworking:
+
 Configure Neutron to communicate with the Bare Metal Server
 ===========================================================
 
@@ -356,12 +358,14 @@ DHCP and PXE Boot configuration. An example of this is shown in the
     [ml2_type_flat]
     flat_networks = physnet1
 
+    [ml2_type_vlan]
+    network_vlan_ranges = physnet1
+
     [securitygroup]
     firewall_driver = neutron.agent.linux.iptables_firewall.OVSHybridIptablesFirewallDriver
     enable_security_group = True
 
     [ovs]
-    network_vlan_ranges = physnet1
     bridge_mappings = physnet1:br-eth2
     # Replace eth2 with the interface on the neutron node which you
     # are using to connect to the bare metal server
@@ -422,6 +426,12 @@ DHCP and PXE Boot configuration. An example of this is shown in the
     neutron net-create --tenant-id $TENANT_ID sharednet1 --shared \
     --provider:network_type flat --provider:physical_network physnet1
 
+#. Create the subnet on the newly created network::
+
+    neutron subnet-create sharednet1 $NETWORK_CIDR --name $SUBNET_NAME \
+    --ip-version=4 --gateway=$GATEWAY_IP --allocation-pool \
+    start=$START_IP,end=$END_IP --enable-dhcp
+
 Image Requirements
 ==================
 
@@ -452,7 +462,7 @@ them to Glance service:
    - Build the image your users will run (Ubuntu image has been taken as
      an example)::
 
-       disk-image-create ubuntu baremetal -o my-image
+       disk-image-create ubuntu baremetal dhcp-all-interfaces -o my-image
 
      The above command creates *my-image.qcow2*, *my-image.vmlinuz* and
      *my-image.initrd* files. If you want to use Fedora image, replace
@@ -502,6 +512,13 @@ them to Glance service:
         --disk-format qcow2 --container-format bare --property \
         kernel_id=$MY_VMLINUZ_UUID --property \
         ramdisk_id=$MY_INITRD_UUID < my-image.qcow2
+
+   - *Note:* To deploy a whole disk image, a kernel_id and a ramdisk_id
+     shouldn't be associated with the image. An example is as follows::
+
+         glance image-create --name my-whole-disk-image --is-public True \
+         --disk-format qcow2 \
+         --container-format bare < my-whole-disk-image.qcow2
 
 3. Add the deploy images to glance
 
@@ -579,12 +596,15 @@ node(s) where ``ironic-conductor`` is running.
    user the ``ironic-conductor`` is running as. For example::
 
     sudo mkdir -p /tftpboot
-    sudo chown -R ironic -p /tftpboot
+    sudo chown -R ironic /tftpboot
 
 #. Install tftp server and the syslinux package with the PXE boot images::
 
-    Ubuntu:
-        sudo apt-get install tftpd-hpa syslinux syslinux-common
+    Ubuntu: (Up to and including 14.04)
+        sudo apt-get install tftpd-hpa syslinux-common syslinux
+
+    Ubuntu: (14.10 and after)
+        sudo apt-get install tftpd-hpa syslinux-common pxelinux
 
     Fedora/RHEL:
         sudo yum install tftp-server syslinux-tftpboot
@@ -593,8 +613,24 @@ node(s) where ``ironic-conductor`` is running.
 
 #. Copy the PXE image to ``/tftpboot``. The PXE image might be found at [1]_::
 
-    Ubuntu:
+    Ubuntu (Up to and including 14.04):
         sudo cp /usr/lib/syslinux/pxelinux.0 /tftpboot
+
+    Ubuntu (14.10 and after):
+        sudo cp /usr/lib/PXELINUX/pxelinux.0 /tftpboot
+
+#. If whole disk images need to be deployed via PXE-netboot, copy the
+   chain.c32 image to ``/tftpboot`` to support it. The chain.c32 image
+   might be found at::
+
+    Ubuntu (Up to and including 14.04):
+        sudo cp /usr/lib/syslinux/chain.c32 /tftpboot
+
+    Ubuntu (14.10 and after):
+        sudo cp /usr/lib/syslinux/modules/bios/chain.c32 /tftpboot
+
+    Fedora:
+        sudo cp /boot/extlinux/chain.c32 /tftpboot
 
 #. If the version of syslinux is **greater than** 4 we also need to make sure
    that we copy the library modules into the ``/tftpboot`` directory [2]_
@@ -614,6 +650,10 @@ node(s) where ``ironic-conductor`` is running.
        contents of ``/tftpboot`` to the configured directory
 .. [2] http://www.syslinux.org/wiki/index.php/Library_modules
 
+#. Enable tftp map file, modify ``/etc/xinetd.d/tftp`` as below and restart xinetd
+   service::
+
+   server_args = -v -v -v -v -v --map-file /tftpboot/map-file /tftpboot
 
 PXE UEFI Setup
 --------------
@@ -659,8 +699,8 @@ on the Bare Metal Service node(s) where ``ironic-conductor`` is running.
 
     sudo mkdir -p /tftpboot
     sudo mkdir -p /httpboot
-    sudo chown -R ironic -p /tftpboot
-    sudo chown -R ironic -p /httpboot
+    sudo chown -R ironic /tftpboot
+    sudo chown -R ironic /httpboot
 
 #. Create a map file in the tftp boot directory (``/tftpboot``)::
 
@@ -770,14 +810,20 @@ controller in your bare metal server by using ``ipmitool``::
      checked by just pinging the IPMI controller IP from the conductor
      node.
 
-Ironic supports sending IPMI sensor data to Ceilometer with pxe_ipmitool,
-pxe_ipminative, agent_ipmitool, agent_pyghmi, agent_ilo, iscsi_ilo and pxe_ilo
-drivers. By default, support for sending IPMI sensor data to Ceilometer is
-disabled. If you want to enable it set the following options in the
-``conductor`` section of ``ironic.conf``:
+.. note::
+   If there are slow or unresponsive BMCs in the environment, the retry_timeout
+   configuration option in the [ipmi] section may need to be lowered. The
+   default is fairly conservative, as setting this timeout too low can cause
+   older BMCs to crash and require a hard-reset.
 
-* notification_driver=messaging
-* send_sensor_data=true
+Ironic supports sending IPMI sensor data to Ceilometer with pxe_ipmitool,
+pxe_ipminative, agent_ipmitool, agent_pyghmi, agent_ilo, iscsi_ilo, pxe_ilo,
+and with pxe_irmc driver starting from Kilo release. By default, support for
+sending IPMI sensor data to Ceilometer is disabled. If you want to enable it,
+you should make the following two changes in ``ironic.conf``:
+
+* ``notification_driver = messaging`` in the ``DEFAULT`` section
+* ``send_sensor_data = true`` in the ``conductor`` section
 
 If you want to customize the sensor types which will be sent to Ceilometer,
 change the ``send_sensor_data_types`` option. For example, the below settings
@@ -823,7 +869,7 @@ The boot modes can be configured in Ironic in the following way:
     nova boot --flavor ironic-test-3 --image test-image instance-1
 
   If ``capabilities`` is used in ``extra_spec`` as above, Nova scheduler
-  (``ComputeCapabilitesFilter``) will match only Ironic nodes which have
+  (``ComputeCapabilitiesFilter``) will match only Ironic nodes which have
   the ``boot_mode`` set appropriately in ``properties/capabilities``. It will
   filter out rest of the nodes.
 
@@ -962,6 +1008,181 @@ if desired.
    +------------+--------+-------------------------------------------------------------------------------------------------------------------------------------+
 
 .. _ComputeCapabilitiesFilter: http://docs.openstack.org/developer/nova/devref/filter_scheduler.html?highlight=computecapabilitiesfilter
+
+
+Hardware Inspection
+-------------------
+
+Starting with Kilo release Ironic supports hardware inspection that simplifies
+enrolling nodes. Inspection allows Ironic to discover required node properties
+once required ``driver_info`` fields (e.g. IPMI credentials) are set
+by an operator. There are two kinds of inspection supported by Ironic:
+
+#. Out-of-band inspection may be supported by some vendor drivers.
+
+#. In-band inspection is performed by utilizing the ironic-discoverd_ project.
+   This is supported by the following drivers::
+
+   pxe_drac
+   pxe_ipmitool
+   pxe_ipminative
+   pxe_ssh
+
+  As of Kilo release this feature needs to be explicitly enabled in the
+  configuration by setting ``enabled = True`` in ``[discoverd]`` section.
+  You must additionally install ``ironic-discoverd`` to use this functionality.
+  You must set ``service_url`` if the ironic-discoverd service is
+  being run on a separate host from the ironic-conductor service, or is using
+  non-standard port.
+
+.. _ironic-discoverd: https://github.com/stackforge/ironic-discoverd
+
+Using Ironic as a standalone service
+====================================
+
+It's possible to use Ironic without other OpenStack services.
+
+You should make the following changes to ``/etc/ironic/ironic.conf``:
+
+#. To disable usage of Keystone tokens::
+
+    [DEFAULT]
+    ...
+    auth_strategy=none
+
+#. If you want to disable Neutron, you should have your network pre-configured
+   to serve DHCP and TFTP for machines that you're deploying. To disable it,
+   change the following lines::
+
+    [dhcp]
+    ...
+    dhcp_provider=none
+
+   .. note::
+      If you disabled Neutron and driver that you use is supported by at most
+      one conductor, PXE boot will still work for your nodes without any
+      manual config editing. This is because you know all the DHCP options
+      that will be used for deployment and can set up your DHCP server
+      appropriately.
+
+      If you have multiple conductors per driver, it would be better to use
+      Neutron since it will do all the dynamically changing configurations for
+      you.
+
+If you don't use Glance, it's possible to provide images to Ironic via hrefs.
+
+.. note::
+   At the moment, only two types of hrefs are acceptable instead of Glance
+   UUIDs: HTTP(S) hrefs (e.g. "http://my.server.net/images/img") and
+   file hrefs (file:///images/img).
+
+There are however some limitations for different drivers:
+
+* If you're using one of the drivers that use agent deploy method (namely,
+  ``agent_ilo``, ``agent_ipmitool``, ``agent_pyghmi``, ``agent_ssh`` or
+  ``agent_vbox``) you have to know MD5 checksum for your instance image. To
+  compute it, you can use the follwoing command::
+
+   md5sum image.qcow2
+   ed82def8730f394fb85aef8a208635f6  image.qcow2
+
+  Apart from that, because of the way the agent deploy method works, image
+  hrefs can use only HTTP(S) protocol.
+
+* If you're using ``iscsi_ilo`` or ``agent_ilo`` driver, Swift service is
+  required, as these drivers need to store floppy image that is used to pass
+  parameters to deployment iso. For this method also only HTTP(S) hrefs are
+  acceptable, as HP iLO servers cannot attach other types of hrefs as virtual
+  media.
+
+* Other drivers use PXE deploy method and there are no special requirements
+  in this case.
+
+Steps to start a deployment are pretty similar to those when using Nova:
+
+#. Create a Node in Ironic. At minimum, you must specify the driver name (eg,
+   "pxe_ipmitool"). You can also specify all the required driver parameters in
+   one command. This will return the node UUID::
+
+    ironic node-create -d pxe_ipmitool -i ipmi_address=ipmi.server.net \
+    -i ipmi_username=user -i ipmi_password=pass \
+    -i pxe_deploy_kernel=file:///images/deploy.vmlinuz \
+    -i pxe_deploy_ramdisk=http://my.server.net/images/deploy.ramdisk
+
+    +--------------+--------------------------------------------------------------------------+
+    | Property     | Value                                                                    |
+    +--------------+--------------------------------------------------------------------------+
+    | uuid         | be94df40-b80a-4f63-b92b-e9368ee8d14c                                     |
+    | driver_info  | {u'pxe_deploy_ramdisk': u'http://my.server.net/images/deploy.ramdisk',   |
+    |              | u'pxe_deploy_kernel': u'file:///images/deploy.vmlinuz', u'ipmi_address': |
+    |              | u'ipmi.server.net', u'ipmi_username': u'user', u'ipmi_password':         |
+    |              | u'******'}                                                               |
+    | extra        | {}                                                                       |
+    | driver       | pxe_ipmitool                                                             |
+    | chassis_uuid |                                                                          |
+    | properties   | {}                                                                       |
+    +--------------+--------------------------------------------------------------------------+
+
+   Note that here pxe_deploy_kernel and pxe_deploy_ramdisk contain links to
+   images instead of Glance UUIDs.
+
+#. As in case of Nova, you can also provide ``capabilities`` to node
+   properties, but they will be used only by Ironic (e.g. boot mode). Although
+   you don't need to add properties like ``memory_mb``, ``cpus`` etc. as Ironic
+   will require UUID of a node you're going to deploy.
+
+#. Then create a port to inform Ironic of the Network Interface Cards which
+   are part of the Node by creating a Port with each NIC's MAC address. In this
+   case, they're used for naming of PXE configs for a node::
+
+    ironic port-create -n $NODE_UUID -a $MAC_ADDRESS
+
+#. As there is no Nova flavor and instance image is not provided with nova
+   boot command, you also need to specify some fields in ``instance_info``.
+   For PXE deployment, they are ``image_source``, ``kernel``, ``ramdisk``,
+   ``root_gb``::
+
+    ironic node-update $NODE_UUID add instance_info/image_source=$IMG \
+    instance_info/kernel=$KERNEL instance_info/ramdisk=$RAMDISK \
+    instance_info/root_gb=10
+
+   Here $IMG, $KERNEL, $RAMDISK can also be HTTP(S) or file hrefs. For agent
+   drivers, you don't need to specify kernel and ramdisk, but MD5 checksum of
+   instance image is required::
+
+    ironic node-update $NODE_UUID add instance_info/image_checksum=$MD5HASH
+
+#. Validate that all parameters are correct::
+
+    ironic node-validate $NODE_UUID
+
+    +------------+--------+----------------------------------------------------------------+
+    | Interface  | Result | Reason                                                         |
+    +------------+--------+----------------------------------------------------------------+
+    | console    | False  | Missing 'ipmi_terminal_port' parameter in node's driver_info.  |
+    | deploy     | True   |                                                                |
+    | management | True   |                                                                |
+    | power      | True   |                                                                |
+    +------------+--------+----------------------------------------------------------------+
+
+#. Now you can start the deployment, just run::
+
+    ironic node-set-provision-state $NODE_UUID active
+
+   You can manage provisioning by issuing this command. Valid provision states
+   are ``active``, ``rebuild`` and ``deleted``.
+
+For iLO drivers, fields that should be provided are:
+
+* ``ilo_deploy_iso`` under ``driver_info``;
+
+* ``ilo_boot_iso``, ``image_source``, ``root_gb`` under ``instance_info``.
+
+.. note::
+   There is one limitation in this method - Ironic is not tracking changes of
+   content under hrefs that are specified. I.e., if the content under
+   "http://my.server.net/images/deploy.ramdisk" changes, Ironic does not know
+   about that and does not redownload the content.
 
 
 Troubleshooting

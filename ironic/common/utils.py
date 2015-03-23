@@ -26,12 +26,11 @@ import random
 import re
 import shutil
 import tempfile
-import uuid
 
 import netaddr
-from oslo.utils import excutils
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_utils import excutils
 import paramiko
 import six
 
@@ -157,14 +156,6 @@ def delete_if_exists(pathname):
             raise
 
 
-def is_int_like(val):
-    """Check if a value looks like an int."""
-    try:
-        return str(int(val)) == str(val)
-    except Exception:
-        return False
-
-
 def is_valid_boolstr(val):
     """Check if the provided string is a valid bool string or not."""
     boolstrs = ('true', 'false', 'yes', 'no', 'y', 'n', '1', '0')
@@ -182,9 +173,27 @@ def is_valid_mac(address):
 
     """
     m = "[0-9a-f]{2}(:[0-9a-f]{2}){5}$"
-    if isinstance(address, six.string_types) and re.match(m, address.lower()):
-        return True
-    return False
+    return (isinstance(address, six.string_types) and
+            re.match(m, address.lower()))
+
+
+def is_hostname_safe(hostname):
+    """Determine if the supplied hostname is RFC compliant.
+
+    Check that the supplied hostname conforms to:
+        * http://en.wikipedia.org/wiki/Hostname
+        * http://tools.ietf.org/html/rfc952
+        * http://tools.ietf.org/html/rfc1123
+
+    Also allow "." because what kind of hostname doesn't allow that.
+
+    :param hostname: The hostname to be validated.
+    :returns: True if valid. False if not.
+
+    """
+    m = '^[a-z0-9]([a-z0-9\-\.]{0,61}[a-z0-9])?$'
+    return (isinstance(hostname, six.string_types) and
+           (re.match(m, hostname) is not None))
 
 
 def validate_and_normalize_mac(address):
@@ -470,23 +479,6 @@ def safe_rstrip(value, chars=None):
         return value
 
     return value.rstrip(chars) or value
-
-
-def generate_uuid():
-    return str(uuid.uuid4())
-
-
-def is_uuid_like(val):
-    """Returns validation of a value as a UUID.
-
-    For our purposes, a UUID is a canonical form string:
-    aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
-
-    """
-    try:
-        return str(uuid.UUID(val)) == val
-    except (TypeError, ValueError, AttributeError):
-        return False
 
 
 def mount(src, dest, *args):

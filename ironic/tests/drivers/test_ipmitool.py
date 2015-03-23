@@ -16,6 +16,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+#
 
 """Test class for IPMITool driver module."""
 
@@ -27,6 +28,7 @@ import time
 import mock
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_utils import uuidutils
 
 from ironic.common import boot_devices
 from ironic.common import driver_factory
@@ -221,15 +223,65 @@ class IPMIToolPrivateMethodTestCase(db_base.DbTestCase):
                 driver_info=INFO_DICT)
         self.info = ipmi._parse_driver_info(self.node)
 
-    def test__make_password_file(self, mock_sleep):
-        with ipmi._make_password_file(self.info.get('password')) as pw_file:
-            del_chk_pw_file = pw_file
-            self.assertTrue(os.path.isfile(pw_file))
-            self.assertEqual(0o600, os.stat(pw_file)[stat.ST_MODE] & 0o777)
-            with open(pw_file, "r") as f:
-                password = f.read()
-            self.assertEqual(self.info.get('password'), password)
-        self.assertFalse(os.path.isfile(del_chk_pw_file))
+    def _test__make_password_file(self, mock_sleep, input_password,
+                                  exception_to_raise=None):
+        pw_file = None
+        try:
+            with ipmi._make_password_file(input_password) as pw_file:
+                if exception_to_raise is not None:
+                    raise exception_to_raise
+                self.assertTrue(os.path.isfile(pw_file))
+                self.assertEqual(0o600, os.stat(pw_file)[stat.ST_MODE] & 0o777)
+                with open(pw_file, "r") as f:
+                    password = f.read()
+                self.assertEqual(str(input_password), password)
+        finally:
+            if pw_file is not None:
+                self.assertFalse(os.path.isfile(pw_file))
+
+    def test__make_password_file_str_password(self, mock_sleep):
+        self._test__make_password_file(mock_sleep, self.info.get('password'))
+
+    def test__make_password_file_with_numeric_password(self, mock_sleep):
+        self._test__make_password_file(mock_sleep, 12345)
+
+    def test__make_password_file_caller_exception(self, mock_sleep):
+        # Test caller raising exception
+        result = self.assertRaises(
+            ValueError,
+            self._test__make_password_file,
+            mock_sleep, 12345, ValueError('we should fail'))
+        self.assertEqual(result.message, 'we should fail')
+
+    @mock.patch.object(tempfile, 'NamedTemporaryFile',
+                       new=mock.MagicMock(side_effect=OSError('Test Error')))
+    def test__make_password_file_tempfile_known_exception(self, mock_sleep):
+        # Test OSError exception in _make_password_file for
+        # tempfile.NamedTemporaryFile
+        self.assertRaises(
+            exception.PasswordFileFailedToCreate,
+            self._test__make_password_file, mock_sleep, 12345)
+
+    @mock.patch.object(
+        tempfile, 'NamedTemporaryFile',
+        new=mock.MagicMock(side_effect=OverflowError('Test Error')))
+    def test__make_password_file_tempfile_unknown_exception(self, mock_sleep):
+        # Test exception in _make_password_file for tempfile.NamedTemporaryFile
+        result = self.assertRaises(
+            OverflowError,
+            self._test__make_password_file, mock_sleep, 12345)
+        self.assertEqual(result.message, 'Test Error')
+
+    def test__make_password_file_write_exception(self, mock_sleep):
+        # Test exception in _make_password_file for write()
+        mock_namedtemp = mock.mock_open(mock.MagicMock(name='JLV'))
+        with mock.patch('tempfile.NamedTemporaryFile', mock_namedtemp):
+            mock_filehandle = mock_namedtemp.return_value
+            mock_write = mock_filehandle.write
+            mock_write.side_effect = OSError('Test 2 Error')
+            self.assertRaises(
+                exception.PasswordFileFailedToCreate,
+                self._test__make_password_file, mock_sleep, 12345)
 
     def test__parse_driver_info(self, mock_sleep):
         # make sure we get back the expected things
@@ -477,8 +529,7 @@ class IPMIToolPrivateMethodTestCase(db_base.DbTestCase):
             '-U', self.info['username'],
             '-f', file_handle1,
             'A', 'B', 'C',
-        ],
-        [
+        ], [
             'ipmitool',
             '-I', 'lanplus',
             '-H', self.info['address'],
@@ -522,8 +573,7 @@ class IPMIToolPrivateMethodTestCase(db_base.DbTestCase):
             '-U', self.info['username'],
             '-f', file_handle1,
             'A', 'B', 'C',
-        ],
-        [
+        ], [
             'ipmitool',
             '-I', 'lanplus',
             '-H', self.info['address'],
@@ -569,8 +619,7 @@ class IPMIToolPrivateMethodTestCase(db_base.DbTestCase):
             '-U', self.info['username'],
             '-f', file_handle1,
             'A', 'B', 'C',
-        ],
-        [
+        ], [
             'ipmitool',
             '-I', 'lanplus',
             '-H', '127.127.127.127',
@@ -955,7 +1004,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                     "fake state")
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
-    def test__send_raw_bytes_ok(self, mock_exec):
+    def test_send_raw_bytes_ok(self, mock_exec):
         mock_exec.return_value = [None, None]
 
         with task_manager.acquire(self.context,
@@ -966,7 +1015,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
         mock_exec.assert_called_once_with(self.info, 'raw 0x00 0x01')
 
     @mock.patch.object(ipmi, '_exec_ipmitool', autospec=True)
-    def test__send_raw_bytes_fail(self, mock_exec):
+    def test_send_raw_bytes_fail(self, mock_exec):
         mock_exec.side_effect = exception.PasswordFileFailedToCreate('error')
 
         with task_manager.acquire(self.context,
@@ -1313,7 +1362,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
     def test_management_interface_validate_fail(self):
         # Missing IPMI driver_info information
         node = obj_utils.create_test_node(self.context,
-                                          uuid=utils.generate_uuid(),
+                                          uuid=uuidutils.generate_uuid(),
                                           driver='fake_ipmitool')
         with task_manager.acquire(self.context, node.uuid) as task:
             self.assertRaises(exception.MissingParameterValue,
@@ -1488,7 +1537,7 @@ class IPMIToolDriverTestCase(db_base.DbTestCase):
                                      'Negative Hysteresis': '375.000',
                                      'Sensor ID': 'FAN MOD 1A RPM (0x30)',
                                      'Nominal Reading': '5325.000'
-                                  }
+                                 }
                              },
                              'Temperature': {
                                  'Temp (0x2)': {

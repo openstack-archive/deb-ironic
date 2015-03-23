@@ -13,8 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_utils import strutils
+from oslo_utils import uuidutils
+
 from ironic.common import exception
-from ironic.common import utils
 from ironic.db import api as db_api
 from ironic.objects import base
 from ironic.objects import utils as obj_utils
@@ -32,7 +34,9 @@ class Node(base.IronicObject):
     # Version 1.7: Add conductor_affinity
     # Version 1.8: Add maintenance_reason
     # Version 1.9: Add driver_internal_info
-    VERSION = '1.9'
+    # Version 1.10: Add name and get_by_name()
+    # Version 1.11: Add clean_step
+    VERSION = '1.11'
 
     dbapi = db_api.get_instance()
 
@@ -40,12 +44,18 @@ class Node(base.IronicObject):
             'id': int,
 
             'uuid': obj_utils.str_or_none,
+            'name': obj_utils.str_or_none,
             'chassis_id': obj_utils.int_or_none,
             'instance_uuid': obj_utils.str_or_none,
 
             'driver': obj_utils.str_or_none,
             'driver_info': obj_utils.dict_or_none,
             'driver_internal_info': obj_utils.dict_or_none,
+
+            # A clean step dictionary, indicating the current clean step
+            # being executed, or None, indicating cleaning is not in progress
+            # or has not yet started.
+            'clean_step': obj_utils.dict_or_none,
 
             'instance_info': obj_utils.dict_or_none,
             'properties': obj_utils.dict_or_none,
@@ -75,6 +85,9 @@ class Node(base.IronicObject):
             # that started but failed to finish.
             'last_error': obj_utils.str_or_none,
 
+            'inspection_finished_at': obj_utils.datetime_or_str_or_none,
+            'inspection_started_at': obj_utils.datetime_or_str_or_none,
+
             'extra': obj_utils.dict_or_none,
             }
 
@@ -93,9 +106,9 @@ class Node(base.IronicObject):
         :param node_id: the id *or* uuid of a node.
         :returns: a :class:`Node` object.
         """
-        if utils.is_int_like(node_id):
+        if strutils.is_int_like(node_id):
             return cls.get_by_id(context, node_id)
-        elif utils.is_uuid_like(node_id):
+        elif uuidutils.is_uuid_like(node_id):
             return cls.get_by_uuid(context, node_id)
         else:
             raise exception.InvalidIdentity(identity=node_id)
@@ -119,6 +132,17 @@ class Node(base.IronicObject):
         :returns: a :class:`Node` object.
         """
         db_node = cls.dbapi.get_node_by_uuid(uuid)
+        node = Node._from_db_object(cls(context), db_node)
+        return node
+
+    @base.remotable_classmethod
+    def get_by_name(cls, context, name):
+        """Find a node based on name and return a Node object.
+
+        :param name: the logical name of a node.
+        :returns: a :class:`Node` object.
+        """
+        db_node = cls.dbapi.get_node_by_name(name)
         node = Node._from_db_object(cls(context), db_node)
         return node
 

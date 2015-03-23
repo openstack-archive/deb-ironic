@@ -50,30 +50,32 @@ import threading
 import eventlet
 from eventlet import greenpool
 from oslo import messaging
-from oslo.utils import excutils
 from oslo_concurrency import lockutils
 from oslo_config import cfg
+from oslo_context import context as ironic_context
 from oslo_db import exception as db_exception
+from oslo_utils import excutils
+from oslo_utils import uuidutils
 
 from ironic.common import dhcp_factory
 from ironic.common import driver_factory
 from ironic.common import exception
+from ironic.common.glance_service import service_utils as glance_utils
 from ironic.common import hash_ring as hash
 from ironic.common.i18n import _
 from ironic.common.i18n import _LC
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.common.i18n import _LW
+from ironic.common import images
 from ironic.common import keystone
 from ironic.common import rpc
 from ironic.common import states
 from ironic.common import swift
-from ironic.common import utils as ironic_utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils
 from ironic.db import api as dbapi
 from ironic import objects
-from ironic.openstack.common import context as ironic_context
 from ironic.openstack.common import log
 from ironic.openstack.common import periodic_task
 
@@ -145,7 +147,7 @@ conductor_opts = [
                    help='List of comma separated metric types which need to be'
                         ' sent to Ceilometer. The default value, "ALL", is a '
                         'special value meaning send all the sensor data.'
-                        ),
+                    ),
         cfg.IntOpt('sync_local_state_interval',
                    default=180,
                    help='When conductors join or leave the cluster, existing '
@@ -162,17 +164,49 @@ conductor_opts = [
                    default='ironic_configdrive_container',
                    help='Name of the Swift container to store config drive '
                         'data. Used when configdrive_use_swift is True.'),
+        cfg.IntOpt('inspect_timeout',
+                   default=1800,
+                   help='Timeout (seconds) for waiting for node inspection. '
+                        '0 - unlimited.'),
+        cfg.BoolOpt('clean_nodes',
+                    default=False,
+                    help='Cleaning is a configurable set of steps, such as '
+                         'erasing disk drives, that are performed on the node '
+                         'to ensure it is in a baseline state and ready to be '
+                         'deployed to. '
+                         'This is done after instance deletion, and during '
+                         'the transition from a "managed" to "available" '
+                         'state. When enabled, the particular steps '
+                         'performed to clean a node depend on which driver '
+                         'that node is managed by; see the individual '
+                         'driver\'s documentation for details. '
+                         'NOTE: The introduction of the cleaning operation '
+                         'causes instance deletion to take significantly '
+                         'longer. While this provides a better and more '
+                         'secure user experience, it does impact the service '
+                         'behavior, and as such IS DISABLED BY DEFAULT until '
+                         'consuming services (eg, Nova) have been updated to '
+                         'accomodate the additional time for deletion.'),
 ]
-
 CONF = cfg.CONF
 CONF.register_opts(conductor_opts, 'conductor')
+
+CLEANING_INTERFACE_PRIORITY = {
+    # When two clean steps have the same priority, their order is determined
+    # by which interface is implementing the clean step. The clean step of the
+    # interface with the highest value here, will be executed first in that
+    # case.
+    'power': 3,
+    'management': 2,
+    'deploy': 1
+}
 
 
 class ConductorManager(periodic_task.PeriodicTasks):
     """Ironic Conductor manager main class."""
 
     # NOTE(rloo): This must be in sync with rpcapi.ConductorAPI's.
-    RPC_API_VERSION = '1.23'
+    RPC_API_VERSION = '1.26'
 
     target = messaging.Target(version=RPC_API_VERSION)
 
@@ -202,7 +236,20 @@ class ConductorManager(periodic_task.PeriodicTasks):
     def init_host(self):
         self.dbapi = dbapi.get_instance()
 
+        self._keepalive_evt = threading.Event()
+        """Event for the keepalive thread."""
+
+        self._worker_pool = greenpool.GreenPool(
+                                size=CONF.conductor.workers_pool_size)
+        """GreenPool of background workers for performing tasks async."""
+
+        self.ring_manager = hash.HashRingManager()
+        """Consistent hash ring which maps drivers to conductors."""
+
+        # NOTE(deva): instantiating DriverFactory may raise DriverLoadError
+        #             or DriverNotFound
         self._driver_factory = driver_factory.DriverFactory()
+        """Driver factory loads all enabled drivers."""
 
         self.drivers = self._driver_factory.names
         """List of driver names which this conductor supports."""
@@ -241,18 +288,10 @@ class ConductorManager(periodic_task.PeriodicTasks):
                                                  update_existing=True)
         self.conductor = cdr
 
-        self.ring_manager = hash.HashRingManager()
-        """Consistent hash ring which maps drivers to conductors."""
-
-        self._worker_pool = greenpool.GreenPool(
-                                size=CONF.conductor.workers_pool_size)
-        """GreenPool of background workers for performing tasks async."""
-
         # Spawn a dedicated greenthread for the keepalive
         try:
-            self._keepalive_evt = threading.Event()
             self._spawn_worker(self._conductor_service_record_keepalive)
-            LOG.info(_LI('Successfuly started conductor with hostname '
+            LOG.info(_LI('Successfully started conductor with hostname '
                          '%(hostname)s.'),
                      {'hostname': self.host})
         except exception.NoFreeConductorWorker:
@@ -265,17 +304,23 @@ class ConductorManager(periodic_task.PeriodicTasks):
             if getattr(method, '_periodic_enabled', False):
                 self.add_periodic_task(method)
 
-    def del_host(self):
+    def del_host(self, deregister=True):
         self._keepalive_evt.set()
-        try:
-            # Inform the cluster that this conductor is shutting down.
-            # Note that rebalancing won't begin until after heartbeat timeout.
-            self.dbapi.unregister_conductor(self.host)
-            LOG.info(_LI('Successfully stopped conductor with hostname '
+        if deregister:
+            try:
+                # Inform the cluster that this conductor is shutting down.
+                # Note that rebalancing will not occur immediately, but when
+                # the periodic sync takes place.
+                self.dbapi.unregister_conductor(self.host)
+                LOG.info(_LI('Successfully stopped conductor with hostname '
+                             '%(hostname)s.'),
+                         {'hostname': self.host})
+            except exception.ConductorNotFound:
+                pass
+        else:
+            LOG.info(_LI('Not deregistering conductor with hostname '
                          '%(hostname)s.'),
                      {'hostname': self.host})
-        except exception.ConductorNotFound:
-            pass
         # Waiting here to give workers the chance to finish. This has the
         # benefit of releasing locks workers placed on nodes, as well as
         # having work complete normally.
@@ -651,6 +696,34 @@ class ConductorManager(periodic_task.PeriodicTasks):
             if node.maintenance:
                 raise exception.NodeInMaintenance(op=_('provisioning'),
                                                   node=node.uuid)
+
+            if rebuild:
+                event = 'rebuild'
+
+                # Note(gilliard) Clear these to force the driver to
+                # check whether they have been changed in glance
+                # NOTE(vdrok): If image_source is not from Glance we should
+                # not clear kernel and ramdisk as they're input manually
+                if glance_utils.is_glance_image(
+                        node.instance_info.get('image_source')):
+                    instance_info = node.instance_info
+                    instance_info.pop('kernel', None)
+                    instance_info.pop('ramdisk', None)
+                    node.instance_info = instance_info
+            else:
+                event = 'deploy'
+
+            driver_internal_info = node.driver_internal_info
+            # Infer the image type to make sure the deploy driver
+            # validates only the necessary variables for different
+            # image types.
+            # NOTE(sirushtim): The iwdi variable can be None. It's upto
+            # the deploy driver to validate this.
+            iwdi = images.is_whole_disk_image(context, node.instance_info)
+            driver_internal_info['is_whole_disk_image'] = iwdi
+            node.driver_internal_info = driver_internal_info
+            node.save()
+
             try:
                 task.driver.power.validate(task)
                 task.driver.deploy.validate(task)
@@ -659,19 +732,6 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 raise exception.InstanceDeployFailure(_(
                     "RPC do_node_deploy failed to validate deploy or "
                     "power info. Error: %(msg)s") % {'msg': e})
-
-            if rebuild:
-                event = 'rebuild'
-
-                # Note(gilliard) Clear these to force the driver to
-                # check whether they have been changed in glance
-                instance_info = node.instance_info
-                instance_info.pop('kernel', None)
-                instance_info.pop('ramdisk', None)
-                node.instance_info = instance_info
-                node.save()
-            else:
-                event = 'deploy'
 
             LOG.debug("do_node_deploy Calling event: %(event)s for node: "
                       "%(node)s", {'event': event, 'node': node.uuid})
@@ -723,12 +783,214 @@ class ConductorManager(periodic_task.PeriodicTasks):
             try:
                 task.process_event('delete',
                                    callback=self._spawn_worker,
-                                   call_args=(do_node_tear_down, task),
+                                   call_args=(self._do_node_tear_down, task),
                                    err_handler=provisioning_error_handler)
             except exception.InvalidState:
                 raise exception.InvalidStateRequested(
                         action='delete', node=task.node.uuid,
                         state=task.node.provision_state)
+
+    def _do_node_tear_down(self, task):
+        """Internal RPC method to tear down an existing node deployment."""
+        node = task.node
+        try:
+            task.driver.deploy.clean_up(task)
+            task.driver.deploy.tear_down(task)
+        except Exception as e:
+            with excutils.save_and_reraise_exception():
+                LOG.exception(_LE('Error in tear_down of node %(node)s: '
+                                  '%(err)s'),
+                              {'node': node.uuid, 'err': e})
+                node.last_error = _("Failed to tear down. Error: %s") % e
+                task.process_event('error')
+        else:
+            # NOTE(deva): When tear_down finishes, the deletion is done,
+            # cleaning will start next
+            LOG.info(_LI('Successfully unprovisioned node %(node)s with '
+                         'instance %(instance)s.'),
+                     {'node': node.uuid, 'instance': node.instance_uuid})
+        finally:
+            # NOTE(deva): there is no need to unset conductor_affinity
+            # because it is a reference to the most recent conductor which
+            # deployed a node, and does not limit any future actions.
+            # But we do need to clear the instance_info
+            node.instance_info = {}
+            node.save()
+
+        # Begin cleaning
+        try:
+            task.process_event('clean')
+        except exception.InvalidState:
+            raise exception.InvalidStateRequested(
+                action='clean', node=node.uuid,
+                state=node.provision_state)
+        self._do_node_clean(task)
+
+    @messaging.expected_exceptions(exception.NoFreeConductorWorker,
+                                   exception.NodeLocked,
+                                   exception.InvalidStateRequested,
+                                   exception.NodeNotFound)
+    def continue_node_clean(self, context, node_id):
+        """RPC method to continue cleaning a node.
+
+        This is useful for cleaning tasks that are async. When they complete,
+        they call back via RPC, a new worker and lock are set up, and cleaning
+        continues. This can also be used to resume cleaning on take_over.
+
+        :param context: an admin context.
+        :param node_id: the id or uuid of a node.
+        :raises: InvalidStateRequested if the node is not in CLEANING state
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: NodeNotFound if the node no longer appears in the database
+
+        """
+        LOG.debug("RPC continue_node_clean called for node %s.", node_id)
+
+        with task_manager.acquire(context, node_id, shared=False) as task:
+            if task.node.provision_state != states.CLEANING:
+                raise exception.InvalidStateRequested(_(
+                    'Cannot continue cleaning on %(node)s, node is in '
+                    '%(state)s state, should be %(clean_state)s') %
+                    {'node': task.node.uuid,
+                     'state': task.node.provision_state,
+                     'clean_state': states.CLEANING})
+            task.set_spawn_error_hook(cleaning_error_handler, task.node,
+                                      'Failed to run next clean step')
+            task.spawn_after(
+                self._spawn_worker,
+                self._do_next_clean_step,
+                task,
+                task.node.driver_internal_info.get('clean_steps', []),
+                task.node.clean_step)
+
+    def _do_node_clean(self, task):
+        """Internal RPC method to perform automated cleaning of a node."""
+        node = task.node
+        LOG.debug('Starting cleaning for node %s', node.uuid)
+
+        if not CONF.conductor.clean_nodes:
+            # Skip cleaning, move to AVAILABLE.
+            node.clean_step = None
+            node.save()
+
+            task.process_event('done')
+            LOG.info(_LI('Cleaning is disabled, node %s has been successfully '
+                         'moved to AVAILABLE state.'), node.uuid)
+            return
+
+        try:
+            # NOTE(ghe): Valid power driver values are needed to perform
+            # a cleaning.
+            task.driver.power.validate(task)
+        except (exception.InvalidParameterValue,
+                exception.MissingParameterValue) as e:
+            msg = (_('Failed to validate power driver interface. '
+                     'Can not clean node %(node)s. Error: %(msg)s') %
+                   {'node': node.uuid, 'msg': e})
+            return cleaning_error_handler(task, msg)
+
+        # Allow the deploy driver to set up the ramdisk again (necessary for
+        # IPA cleaning/zapping)
+        try:
+            prepare_result = task.driver.deploy.prepare_cleaning(task)
+        except Exception as e:
+            msg = (_('Failed to prepare node %(node)s for cleaning: %(e)s')
+                   % {'node': node.uuid, 'e': e})
+            LOG.exception(msg)
+            return cleaning_error_handler(task, msg)
+        if prepare_result == states.CLEANING:
+            # Prepare is asynchronous, the deploy driver will need to
+            # set node.driver_internal_info['clean_steps'] and
+            # node.clean_step and then make an RPC call to
+            # continue_node_cleaning to start cleaning.
+            return
+
+        set_node_cleaning_steps(task)
+        self._do_next_clean_step(task,
+            node.driver_internal_info.get('clean_steps', []),
+            node.clean_step)
+
+    def _do_next_clean_step(self, task, steps, last_step):
+        """Start executing cleaning/zapping steps from the last step (if any).
+
+        :param task: a TaskManager instance with an exclusive lock
+        :param steps: The complete list of steps that need to be executed
+            on the node
+        :param last_step: The last step that was executed. {} will start
+            from the beginning
+        """
+        node = task.node
+        # Trim already executed steps
+        if last_step:
+            try:
+                # Trim off last_step (now finished) and all previous steps.
+                steps = steps[steps.index(last_step) + 1:]
+            except ValueError:
+                msg = (_('Node %(node)s got an invalid last step for '
+                         '%(state)s: %(step)s.') %
+                       {'node': node.uuid, 'step': last_step,
+                        'state': node.provision_state})
+                LOG.exception(msg)
+                return cleaning_error_handler(task, msg)
+
+        LOG.info(_LI('Executing %(state)s on node %(node)s, remaining steps: '
+                     '%(steps)s'), {'node': node.uuid, 'steps': steps,
+                                    'state': node.provision_state})
+        # Execute each step until we hit an async step or run out of steps
+        for step in steps:
+            # Save which step we're about to start so we can restart
+            # if necessary
+            node.clean_step = step
+            node.save()
+            interface = getattr(task.driver, step.get('interface'))
+            LOG.info(_LI('Executing %(step)s on node %(node)s'),
+                     {'step': step, 'node': node.uuid})
+            try:
+                result = interface.execute_clean_step(task, step)
+            except Exception as e:
+                msg = (_('Node %(node)s failed step %(step)s: '
+                         '%(exc)s') %
+                       {'node': node.uuid, 'exc': e,
+                        'step': node.clean_step})
+                LOG.exception(msg)
+                cleaning_error_handler(task, msg)
+                return
+
+            # Check if the step is done or not. The step should return
+            # states.CLEANING if the step is still being executed, or
+            # None if the step is done.
+            if result == states.CLEANING:
+                # Kill this worker, the async step will make an RPC call to
+                # continue_node_clean to continue cleaning
+                LOG.info(_LI('Clean step %(step)s on node %(node)s being '
+                             'executed asynchronously, waiting for driver.') %
+                         {'node': node.uuid, 'step': step})
+                return
+            elif result is not None:
+                msg = (_('While executing step %(step)s on node '
+                         '%(node)s, step returned invalid value: %(val)s')
+                       % {'step': step, 'node': node.uuid, 'val': result})
+                LOG.error(msg)
+                return cleaning_error_handler(task, msg)
+            LOG.info(_LI('Node %(node)s finished clean step %(step)s'),
+                     {'node': node.uuid, 'step': step})
+
+        # Clear clean_step
+        node.clean_step = None
+        driver_info = node.driver_internal_info
+        driver_info['clean_steps'] = None
+        node.driver_internal_info = driver_info
+        try:
+            task.driver.deploy.tear_down_cleaning(task)
+        except Exception as e:
+            msg = (_('Failed to tear down from cleaning for node %s')
+                   % node.uuid)
+            LOG.exception(msg)
+            return cleaning_error_handler(task, msg)
+        LOG.info(_LI('Node %s cleaning complete'), node.uuid)
+        task.process_event('done')
 
     @messaging.expected_exceptions(exception.NoFreeConductorWorker,
                                    exception.NodeLocked,
@@ -750,10 +1012,17 @@ class ConductorManager(periodic_task.PeriodicTasks):
 
         """
         with task_manager.acquire(context, node_id, shared=False) as task:
-            try:
-                task.process_event(action)
-            except exception.InvalidState:
-                raise exception.InvalidStateRequested(
+            if (action == states.VERBS['provide'] and
+                    task.node.provision_state == states.MANAGEABLE):
+                task.process_event('provide',
+                                   callback=self._spawn_worker,
+                                   call_args=(self._do_node_clean, task),
+                                   err_handler=provisioning_error_handler)
+            else:
+                try:
+                    task.process_event(action)
+                except exception.InvalidState:
+                    raise exception.InvalidStateRequested(
                         action=action, node=task.node.uuid,
                         state=task.node.provision_state)
 
@@ -790,13 +1059,9 @@ class ConductorManager(periodic_task.PeriodicTasks):
         # and first set of checks below.
 
         filters = {'reserved': False, 'maintenance': False}
-        columns = ['id', 'uuid', 'driver']
-        node_list = self.dbapi.get_nodeinfo_list(columns=columns,
-                                                 filters=filters)
-        for (node_id, node_uuid, driver) in node_list:
+        node_iter = self.iter_nodes(fields=['id'], filters=filters)
+        for (node_uuid, driver, node_id) in node_iter:
             try:
-                if not self._mapped_to_this_conductor(node_uuid, driver):
-                    continue
                 # NOTE(deva): we should not acquire a lock on a node in
                 #             DEPLOYWAIT, as this could cause an error within
                 #             a deploy ramdisk POSTing back at the same time.
@@ -841,40 +1106,11 @@ class ConductorManager(periodic_task.PeriodicTasks):
                    'provision_state': states.DEPLOYWAIT,
                    'maintenance': False,
                    'provisioned_before': callback_timeout}
-        columns = ['uuid', 'driver']
-        node_list = self.dbapi.get_nodeinfo_list(
-                                    columns=columns,
-                                    filters=filters,
-                                    sort_key='provision_updated_at',
-                                    sort_dir='asc')
-
-        workers_count = 0
-        for node_uuid, driver in node_list:
-            if not self._mapped_to_this_conductor(node_uuid, driver):
-                continue
-            try:
-                with task_manager.acquire(context, node_uuid) as task:
-                    # NOTE(comstud): Recheck maintenance and provision_state
-                    # now that we have the lock. We don't need to re-check
-                    # updated_at unless we expect the state to have flipped
-                    # to something else and then back to DEPLOYWAIT between
-                    # the call to get_nodeinfo_list and now.
-                    if (task.node.maintenance or
-                            task.node.provision_state != states.DEPLOYWAIT):
-                        continue
-                    # timeout has been reached - fail the deploy
-                    task.process_event('fail',
-                                       callback=self._spawn_worker,
-                                       call_args=(utils.cleanup_after_timeout,
-                                                  task),
-                                       err_handler=provisioning_error_handler)
-            except exception.NoFreeConductorWorker:
-                break
-            except (exception.NodeLocked, exception.NodeNotFound):
-                continue
-            workers_count += 1
-            if workers_count == CONF.conductor.periodic_max_workers:
-                break
+        sort_key = 'provision_updated_at'
+        callback_method = utils.cleanup_after_timeout
+        err_handler = provisioning_error_handler
+        self._fail_if_in_state(context, filters, states.DEPLOYWAIT,
+                               sort_key, callback_method, err_handler)
 
     def _do_takeover(self, task):
         LOG.debug(('Conductor %(cdr)s taking over node %(node)s'),
@@ -901,16 +1137,12 @@ class ConductorManager(periodic_task.PeriodicTasks):
         filters = {'reserved': False,
                    'maintenance': False,
                    'provision_state': states.ACTIVE}
-        columns = ['id', 'uuid', 'driver', 'conductor_affinity']
-        node_list = self.dbapi.get_nodeinfo_list(
-                                    columns=columns,
+        node_iter = self.iter_nodes(fields=['id', 'conductor_affinity'],
                                     filters=filters)
 
         admin_context = None
         workers_count = 0
-        for node_id, node_uuid, driver, conductor_affinity in node_list:
-            if not self._mapped_to_this_conductor(node_uuid, driver):
-                continue
+        for node_uuid, driver, node_id, conductor_affinity in node_iter:
             if conductor_affinity == self.conductor.id:
                 continue
 
@@ -958,6 +1190,27 @@ class ConductorManager(periodic_task.PeriodicTasks):
 
         return self.host in ring.get_hosts(node_uuid)
 
+    def iter_nodes(self, fields=None, **kwargs):
+        """Iterate over nodes mapped to this conductor.
+
+        Requests node set from and filters out nodes that are not
+        mapped to this conductor.
+
+        Yields tuples (node_uuid, driver, ...) where ... is derived from
+        fields argument, e.g.: fields=None means yielding ('uuid', 'driver'),
+        fields=['foo'] means yielding ('uuid', 'driver', 'foo').
+
+        :param fields: list of fields to fetch in addition to uuid and driver
+        :param kwargs: additional arguments to pass to dbapi when looking for
+                       nodes
+        :return: generator yielding tuples of requested fields
+        """
+        columns = ['uuid', 'driver'] + list(fields or ())
+        node_list = self.dbapi.get_nodeinfo_list(columns=columns, **kwargs)
+        for result in node_list:
+            if self._mapped_to_this_conductor(*result[:2]):
+                yield result
+
     @messaging.expected_exceptions(exception.NodeLocked)
     def validate_driver_interfaces(self, context, node_id):
         """Validate the `core` and `standardized` interfaces for drivers.
@@ -972,6 +1225,15 @@ class ConductorManager(periodic_task.PeriodicTasks):
                   node_id)
         ret_dict = {}
         with task_manager.acquire(context, node_id, shared=True) as task:
+            # NOTE(sirushtim): the is_whole_disk_image variable is needed by
+            # deploy drivers for doing their validate(). Since the deploy
+            # isn't being done yet and the driver information could change in
+            # the meantime, we don't know if the is_whole_disk_image value will
+            # change or not. It isn't saved to the DB, but only used with this
+            # node instance for the current validations.
+            iwdi = images.is_whole_disk_image(context,
+                                              task.node.instance_info)
+            task.node.driver_internal_info['is_whole_disk_image'] = iwdi
             for iface_name in (task.driver.core_interfaces +
                                task.driver.standard_interfaces):
                 iface = getattr(task.driver, iface_name, None)
@@ -1017,9 +1279,37 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 msg = (_("Node %s can't be deleted because it's not "
                          "powered off") % node.uuid)
                 raise exception.NodeInWrongPowerState(msg)
+            if node.console_enabled:
+                try:
+                    task.driver.console.stop_console(task)
+                except Exception as err:
+                    LOG.error(_LE('Failed to stop console while deleting '
+                                  'the node %(node)s: %(err)s.'),
+                              {'node': node.uuid, 'err': err})
             node.destroy()
             LOG.info(_LI('Successfully deleted node %(node)s.'),
                      {'node': node.uuid})
+
+    @messaging.expected_exceptions(exception.NodeLocked,
+                                   exception.NodeNotFound)
+    def destroy_port(self, context, port):
+        """Delete a port.
+
+        :param context: request context.
+        :param port: port object
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: NodeNotFound if the node associated with the port does not
+                 exist.
+
+        """
+        LOG.debug('RPC destroy_port called for port %(port)s',
+                 {'port': port.uuid})
+        with task_manager.acquire(context, port.node_id) as task:
+            port.destroy()
+            LOG.info(_LI('Successfully deleted port %(port)s. '
+                         'The node associated with the port was '
+                         '%(node)s'),
+                         {'port': port.uuid, 'node': task.node.uuid})
 
     @messaging.expected_exceptions(exception.NodeLocked,
                                    exception.UnsupportedDriverExtension,
@@ -1182,17 +1472,12 @@ class ConductorManager(periodic_task.PeriodicTasks):
             return
 
         filters = {'associated': True}
-        columns = ['uuid', 'driver', 'instance_uuid']
-        node_list = self.dbapi.get_nodeinfo_list(columns=columns,
-                                                 filters=filters)
+        node_iter = self.iter_nodes(fields=['instance_uuid'],
+                                    filters=filters)
 
-        for (node_uuid, driver, instance_uuid) in node_list:
-            # only handle the nodes mapped to this conductor
-            if not self._mapped_to_this_conductor(node_uuid, driver):
-                continue
-
+        for (node_uuid, driver, instance_uuid) in node_iter:
             # populate the message which will be sent to ceilometer
-            message = {'message_id': ironic_utils.generate_uuid(),
+            message = {'message_id': uuidutils.generate_uuid(),
                        'instance_uuid': instance_uuid,
                        'node_uuid': node_uuid,
                        'timestamp': datetime.datetime.utcnow(),
@@ -1337,6 +1622,136 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 raise exception.UnsupportedDriverExtension(
                             driver=task.node.driver, extension='management')
             return task.driver.management.get_supported_boot_devices()
+
+    @messaging.expected_exceptions(exception.NoFreeConductorWorker,
+                                   exception.NodeLocked,
+                                   exception.HardwareInspectionFailure,
+                                   exception.InvalidStateRequested,
+                                   exception.UnsupportedDriverExtension)
+    def inspect_hardware(self, context, node_id):
+        """Inspect hardware to obtain hardware properties.
+
+        Initiate the inspection of a node. Validations are done
+        synchronously and the actual inspection work is performed in
+        background (asynchronously).
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :raises: NodeLocked if node is locked by another conductor.
+        :raises: UnsupportedDriverExtension if the node's driver doesn't
+                 support inspect.
+        :raises: NoFreeConductorWorker when there is no free worker to start
+                 async task
+        :raises: HardwareInspectionFailure when unable to get
+                 essential scheduling properties from hardware.
+        :raises: InvalidStateRequested if 'inspect' is not a
+                 valid action to do in the current state.
+
+        """
+        LOG.debug('RPC inspect_hardware called for node %s', node_id)
+        with task_manager.acquire(context, node_id, shared=False) as task:
+            if not getattr(task.driver, 'inspect', None):
+                raise exception.UnsupportedDriverExtension(
+                      driver=task.node.driver, extension='inspect')
+
+            try:
+                task.driver.power.validate(task)
+                task.driver.inspect.validate(task)
+            except (exception.InvalidParameterValue,
+                    exception.MissingParameterValue) as e:
+                error = (_("RPC inspect_hardware failed to validate "
+                           "inspection or power info. Error: %(msg)s")
+                           % {'msg': e})
+                raise exception.HardwareInspectionFailure(error=error)
+
+            try:
+                task.process_event('inspect',
+                                   callback=self._spawn_worker,
+                                   call_args=(_do_inspect_hardware, task),
+                                   err_handler=provisioning_error_handler)
+
+            except exception.InvalidState:
+                raise exception.InvalidStateRequested(
+                        action='inspect', node=task.node.uuid,
+                        state=task.node.provision_state)
+
+    @periodic_task.periodic_task(
+        spacing=CONF.conductor.check_provision_state_interval)
+    def _check_inspect_timeouts(self, context):
+        """Periodically checks inspect_timeout and fails upon reaching it.
+
+        :param: context: request context
+
+        """
+        callback_timeout = CONF.conductor.inspect_timeout
+        if not callback_timeout:
+            return
+
+        filters = {'reserved': False,
+                   'provision_state': states.INSPECTING,
+                   'inspection_started_before': callback_timeout}
+        sort_key = 'inspection_started_at'
+        last_error = _("timeout reached while inspecting the node")
+        self._fail_if_in_state(context, filters, states.INSPECTING,
+                               sort_key, last_error=last_error)
+
+    def _fail_if_in_state(self, context, filters, provision_state,
+                          sort_key, callback_method=None,
+                          err_handler=None, last_error=None):
+        """Fail nodes that are in specified state.
+
+        Retrieves nodes that satisfy the criteria in 'filters'.
+        If any of these nodes is in 'provision_state', it has failed
+        in whatever provisioning activity it was currently doing.
+        That failure is processed here.
+
+        :param: context: request context
+        :param: filters: criteria (as a dictionary) to get the desired
+                         list of nodes that satisfy the filter constraints.
+                         For example, if filters['provisioned_before'] = 60,
+                         this would process nodes whose provision_updated_at
+                         field value was 60 or more seconds before 'now'.
+        :param: provision_state: provision_state that the node is in,
+                                 for the provisioning activity to have failed.
+        :param: sort_key: the nodes are sorted based on this key.
+        :param: callback_method: the callback method to be invoked in a
+                                 spawned thread, for a failed node. This
+                                 method must take a :class:`TaskManager` as
+                                 the first (and only required) parameter.
+        :param: err_handler: for a failed node, the error handler to invoke
+                             if an error occurs trying to spawn an thread
+                             to do the callback_method.
+        :param: last_error: the error message to be updated in node.last_error
+
+        """
+        node_iter = self.iter_nodes(filters=filters,
+                                    sort_key=sort_key,
+                                    sort_dir='asc')
+
+        workers_count = 0
+        for node_uuid, driver in node_iter:
+            try:
+                with task_manager.acquire(context, node_uuid) as task:
+                    if (task.node.maintenance or
+                        task.node.provision_state != provision_state):
+                        continue
+
+                    # timeout has been reached - process the event 'fail'
+                    if callback_method:
+                        task.process_event('fail',
+                                           callback=self._spawn_worker,
+                                           call_args=(callback_method, task),
+                                           err_handler=err_handler)
+                    else:
+                        task.node.last_error = last_error
+                        task.process_event('fail')
+            except exception.NoFreeConductorWorker:
+                break
+            except (exception.NodeLocked, exception.NodeNotFound):
+                continue
+            workers_count += 1
+            if workers_count >= CONF.conductor.periodic_max_workers:
+                break
 
 
 def get_vendor_passthru_metadata(route_dict):
@@ -1502,34 +1917,6 @@ def do_node_deploy(task, conductor_id, configdrive=None):
         node.save()
 
 
-def do_node_tear_down(task):
-    """Internal RPC method to tear down an existing node deployment."""
-    node = task.node
-    try:
-        task.driver.deploy.clean_up(task)
-        task.driver.deploy.tear_down(task)
-    except Exception as e:
-        with excutils.save_and_reraise_exception():
-            LOG.warning(_LW('Error in tear_down of node %(node)s: '
-                            '%(err)s'),
-                        {'node': task.node.uuid, 'err': e})
-            node.last_error = _("Failed to tear down. Error: %s") % e
-            task.process_event('error')
-    else:
-        # NOTE(deva): When tear_down finishes, the deletion is done
-        task.process_event('done')
-        LOG.info(_LI('Successfully unprovisioned node %(node)s with '
-                     'instance %(instance)s.'),
-                 {'node': node.uuid, 'instance': node.instance_uuid})
-    finally:
-        # NOTE(deva): there is no need to unset conductor_affinity
-        # because it is a reference to the most recent conductor which
-        # deployed a node, and does not limit any future actions.
-        # But we do need to clear the instance_info
-        node.instance_info = {}
-        node.save()
-
-
 def handle_sync_power_state_max_retries_exceeded(task,
                                                  actual_power_state):
     node = task.node
@@ -1637,3 +2024,93 @@ def do_sync_power_state(task, count):
         node.save()
 
     return count
+
+
+def _do_inspect_hardware(task):
+    """Initiates inspection.
+
+    :param: task: a TaskManager instance with an exclusive lock
+                  on its node.
+    :raises: HardwareInspectionFailure if driver doesn't
+             return the state as states.MANAGEABLE or
+             states.INSPECTING.
+
+    """
+    node = task.node
+
+    def handle_failure(e):
+        node.last_error = e
+        task.process_event('fail')
+        LOG.error(_LE("Failed to inspect node %(node)s: %(err)s"),
+                  {'node': node.uuid, 'err': e})
+
+    try:
+        new_state = task.driver.inspect.inspect_hardware(task)
+
+    except Exception as e:
+        with excutils.save_and_reraise_exception():
+            error = str(e)
+            handle_failure(error)
+
+    if new_state == states.MANAGEABLE:
+        task.process_event('done')
+        LOG.info(_LI('Successfully inspected node %(node)s')
+                 % {'node': node.uuid})
+    elif new_state != states.INSPECTING:
+        error = (_("During inspection, driver returned unexpected "
+                   "state %(state)s") % {'state': new_state})
+        handle_failure(error)
+        raise exception.HardwareInspectionFailure(error=error)
+
+
+def cleaning_error_handler(task, msg):
+    """Put a failed node in CLEANFAIL or ZAPFAIL and maintenance."""
+    # Reset clean step, msg should include current step
+    if task.node.provision_state == states.CLEANING:
+        task.node.clean_step = {}
+    task.node.last_error = msg
+    task.node.maintenance = True
+    task.node.maintenance_reason = msg
+    task.node.save()
+    task.process_event('fail')
+
+
+def _step_key(step):
+    """Sort by priority, then interface priority in event of tie.
+
+    :param step: cleaning step dict to get priority for.
+    """
+    return (step.get('priority'),
+            CLEANING_INTERFACE_PRIORITY[step.get('interface')])
+
+
+def _get_cleaning_steps(task, enabled=False):
+    """Get sorted cleaning steps for task.node
+
+    :param task: A TaskManager object
+    :param enabled: If True, returns only enabled (priority > 0) steps. If
+        False, returns all clean steps.
+    :returns: A list of clean steps dictionaries, sorted with largest priority
+        as the first item
+    """
+    # Iterate interfaces and get clean steps from each
+    steps = list()
+    for interface in CLEANING_INTERFACE_PRIORITY:
+        interface = getattr(task.driver, interface)
+        if interface:
+            interface_steps = [x for x in interface.get_clean_steps(task)
+                               if not enabled or x['priority'] > 0]
+            steps.extend(interface_steps)
+    # Sort the steps from higher priority to lower priority
+    return sorted(steps, key=_step_key, reverse=True)
+
+
+def set_node_cleaning_steps(task):
+    """Get the list of clean steps, save them to the node."""
+    # Get the prioritized steps, store them.
+    node = task.node
+    driver_info = node.driver_internal_info
+    driver_info['clean_steps'] = _get_cleaning_steps(task, enabled=True)
+    node.driver_internal_info = driver_info
+    node.clean_step = {}
+    node.save()
