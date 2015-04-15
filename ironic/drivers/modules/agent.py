@@ -57,7 +57,14 @@ agent_opts = [
                     'Python Agent ramdisk. If unset, will use the priority '
                     'set in the ramdisk (defaults to 10 for the '
                     'GenericHardwareManager). If set to 0, will not run '
-                    'during cleaning.')
+                    'during cleaning.'),
+    cfg.BoolOpt('manage_tftp',
+                default=True,
+                help='Whether Ironic will manage TFTP files for the deploy '
+                     'ramdisks. If set to False, you will need to configure '
+                     'your own TFTP server that allows booting the deploy '
+                     'ramdisks.'
+                ),
     ]
 
 CONF = cfg.CONF
@@ -97,7 +104,9 @@ def build_agent_options(node):
                   keystone.get_service_url()).rstrip('/')
     agent_config_opts = {
         'ipa-api-url': ironic_api,
-        'ipa-driver-name': node.driver
+        'ipa-driver-name': node.driver,
+        # NOTE: The below entry is a temporary workaround for bug/1433812
+        'coreos.configdrive': 0,
     }
     root_device = deploy_utils.parse_root_device_hints(node)
     if root_device:
@@ -194,17 +203,19 @@ def build_instance_info_for_deploy(task):
 
 def _prepare_pxe_boot(task):
     """Prepare the files required for PXE booting the agent."""
-    pxe_info = _get_tftp_image_info(task.node)
-    pxe_options = _build_pxe_config_options(task.node, pxe_info)
-    pxe_utils.create_pxe_config(task,
-                                pxe_options,
-                                CONF.agent.agent_pxe_config_template)
-    _cache_tftp_images(task.context, task.node, pxe_info)
+    if CONF.agent.manage_tftp:
+        pxe_info = _get_tftp_image_info(task.node)
+        pxe_options = _build_pxe_config_options(task.node, pxe_info)
+        pxe_utils.create_pxe_config(task,
+                                    pxe_options,
+                                    CONF.agent.agent_pxe_config_template)
+        _cache_tftp_images(task.context, task.node, pxe_info)
 
 
 def _do_pxe_boot(task, ports=None):
     """Reboot the node into the PXE ramdisk.
 
+    :param task: a TaskManager instance
     :param ports: a list of Neutron port dicts to update DHCP options on. If
         None, will get the list of ports from the Ironic port objects.
     """
@@ -217,13 +228,13 @@ def _do_pxe_boot(task, ports=None):
 
 def _clean_up_pxe(task):
     """Clean up left over PXE and DHCP files."""
-    pxe_info = _get_tftp_image_info(task.node)
-    for label in pxe_info:
-        path = pxe_info[label][1]
-        utils.unlink_without_raise(path)
-    AgentTFTPImageCache().clean_up()
-
-    pxe_utils.clean_up_pxe_config(task)
+    if CONF.agent.manage_tftp:
+        pxe_info = _get_tftp_image_info(task.node)
+        for label in pxe_info:
+            path = pxe_info[label][1]
+            utils.unlink_without_raise(path)
+        AgentTFTPImageCache().clean_up()
+        pxe_utils.clean_up_pxe_config(task)
 
 
 class AgentDeploy(base.DeployInterface):
@@ -248,10 +259,11 @@ class AgentDeploy(base.DeployInterface):
         """
         node = task.node
         params = {}
-        params['driver_info.deploy_kernel'] = node.driver_info.get(
-                                                              'deploy_kernel')
-        params['driver_info.deploy_ramdisk'] = node.driver_info.get(
-                                                              'deploy_ramdisk')
+        if CONF.agent.manage_tftp:
+            params['driver_info.deploy_kernel'] = node.driver_info.get(
+                'deploy_kernel')
+            params['driver_info.deploy_ramdisk'] = node.driver_info.get(
+                'deploy_ramdisk')
         image_source = node.instance_info.get('image_source')
         params['instance_info.image_source'] = image_source
         error_msg = _('Node %s failed to validate deploy image info. Some '
@@ -263,6 +275,15 @@ class AgentDeploy(base.DeployInterface):
                 raise exception.MissingParameterValue(_(
                     "image_source's image_checksum must be provided in "
                     "instance_info for node %s") % node.uuid)
+
+        is_whole_disk_image = node.driver_internal_info.get(
+            'is_whole_disk_image')
+        # TODO(sirushtim): Remove once IPA has support for partition images.
+        if is_whole_disk_image is False:
+            raise exception.InvalidParameterValue(_(
+                "Node %(node)s is configured to use the %(driver)s driver "
+                "which currently does not support deploying partition "
+                "images.") % {'node': node.uuid, 'driver': node.driver})
 
         # Validate the root device hints
         deploy_utils.parse_root_device_hints(node)
@@ -348,7 +369,7 @@ class AgentDeploy(base.DeployInterface):
         :returns: A list of clean step dictionaries
         """
         steps = deploy_utils.agent_get_clean_steps(task)
-        if CONF.agent.agent_erase_devices_priority:
+        if CONF.agent.agent_erase_devices_priority is not None:
             for step in steps:
                 if (step.get('step') == 'erase_devices' and
                         step.get('interface') == 'deploy'):
@@ -368,29 +389,44 @@ class AgentDeploy(base.DeployInterface):
         return deploy_utils.agent_execute_clean_step(task, step)
 
     def prepare_cleaning(self, task):
-        """Boot into the agent to prepare for cleaning."""
+        """Boot into the agent to prepare for cleaning.
+
+        :param task: a TaskManager object containing the node
+        :raises NodeCleaningFailure: if the previous cleaning ports cannot
+            be removed or if new cleaning ports cannot be created
+        :returns: states.CLEANING to signify an asynchronous prepare
+        """
         provider = dhcp_factory.DHCPFactory()
         # If we have left over ports from a previous cleaning, remove them
         if getattr(provider.provider, 'delete_cleaning_ports', None):
+            # Allow to raise if it fails, is caught and handled in conductor
             provider.provider.delete_cleaning_ports(task)
 
         # Create cleaning ports if necessary
         ports = None
         if getattr(provider.provider, 'create_cleaning_ports', None):
+            # Allow to raise if it fails, is caught and handled in conductor
             ports = provider.provider.create_cleaning_ports(task)
+
         _prepare_pxe_boot(task)
         _do_pxe_boot(task, ports)
         # Tell the conductor we are waiting for the agent to boot.
         return states.CLEANING
 
     def tear_down_cleaning(self, task):
-        """Clean up the PXE and DHCP files after cleaning."""
+        """Clean up the PXE and DHCP files after cleaning.
+
+        :param task: a TaskManager object containing the node
+        :raises NodeCleaningFailure: if the cleaning ports cannot be
+            removed
+        """
         manager_utils.node_power_action(task, states.POWER_OFF)
         _clean_up_pxe(task)
 
         # If we created cleaning ports, delete them
         provider = dhcp_factory.DHCPFactory()
         if getattr(provider.provider, 'delete_cleaning_ports', None):
+            # Allow to raise if it fails, is caught and handled in conductor
             provider.provider.delete_cleaning_ports(task)
 
 
@@ -438,7 +474,7 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
         LOG.debug('prepare_image got response %(res)s for node %(node)s',
                   {'res': res, 'node': node.uuid})
 
-    def _check_deploy_success(self, node):
+    def check_deploy_success(self, node):
         # should only ever be called after we've validated that
         # the prepare_image command is complete
         command = self._client.get_commands_status(node)[-1]
@@ -449,7 +485,7 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
         node = task.node
         LOG.debug('Preparing to reboot to instance for node %s',
                   node.uuid)
-        error = self._check_deploy_success(node)
+        error = self.check_deploy_success(node)
         if error is not None:
             # TODO(jimrollenhagen) power off if using neutron dhcp to
             #                      align with pxe driver?

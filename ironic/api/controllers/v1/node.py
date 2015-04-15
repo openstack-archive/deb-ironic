@@ -23,7 +23,6 @@ import pecan
 from pecan import rest
 import wsme
 from wsme import types as wtypes
-import wsmeext.pecan as wsme_pecan
 
 from ironic.api.controllers import base
 from ironic.api.controllers import link
@@ -31,10 +30,10 @@ from ironic.api.controllers.v1 import collection
 from ironic.api.controllers.v1 import port
 from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils as api_utils
+from ironic.api import expose
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common import states as ir_states
-from ironic.common import utils
 from ironic import objects
 from ironic.openstack.common import log
 
@@ -57,6 +56,13 @@ _VENDOR_METHODS = {}
 
 
 def hide_fields_in_newer_versions(obj):
+    # if requested version is < 1.3, hide driver_internal_info
+    if pecan.request.version.minor < 3:
+        obj.driver_internal_info = wsme.Unset
+
+    if not api_utils.allow_node_logical_names():
+        obj.name = wsme.Unset
+
     # if requested version is < 1.6, hide inspection_*_at fields
     if pecan.request.version.minor < 6:
         obj.inspection_finished_at = wsme.Unset
@@ -70,12 +76,6 @@ def assert_juno_provision_state_name(obj):
         obj.provision_state = ir_states.NOSTATE
 
 
-def hide_driver_internal_info(obj):
-    # if requested version is < 1.3, hide driver_internal_info
-    if pecan.request.version.minor < 3:
-        obj.driver_internal_info = wsme.Unset
-
-
 def check_allow_management_verbs(verb):
     # v1.4 added the MANAGEABLE state and two verbs to move nodes into
     # and out of that state. Reject requests to do this in older versions
@@ -85,45 +85,6 @@ def check_allow_management_verbs(verb):
     if (pecan.request.version.minor < 6 and
             verb == ir_states.VERBS['inspect']):
                 raise exception.NotAcceptable()
-
-
-def allow_logical_names():
-    try:
-        # v1.5 added logical name aliases
-        if pecan.request.version.minor < 5:
-            return False
-    # ignore check if we're not in a pecan context
-    except AttributeError:
-        pass
-    return True
-
-
-def is_valid_name(name):
-    return utils.is_hostname_safe(name) and (not uuidutils.is_uuid_like(name))
-
-
-def _get_rpc_node(node_ident):
-    """Get the RPC node from the node uuid or logical name.
-
-    :param node_ident: the UUID or logical name of a node.
-
-    :returns: The RPC Node.
-    :raises: InvalidUuidOrName if the name or uuid provided is not valid.
-    :raises: NodeNotFound if the node is not found.
-
-    """
-    # Check to see if the node_ident is a valid UUID.  If it is, treat it
-    # as a UUID.
-    if uuidutils.is_uuid_like(node_ident):
-        return objects.Node.get_by_uuid(pecan.request.context, node_ident)
-
-    # If it was not UUID-like, but it is name-like, and we allow names,
-    # check for nodes by that name
-    if allow_logical_names() and utils.is_hostname_safe(node_ident):
-        return objects.Node.get_by_name(pecan.request.context, node_ident)
-
-    # It's not a valid uuid, or it's not a valid name, or we don't allow names
-    raise exception.InvalidUuidOrName(name=node_ident)
 
 
 class NodePatchType(types.JsonPatchType):
@@ -162,7 +123,7 @@ class BootDeviceController(rest.RestController):
                   boot devices.
 
         """
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         if supported:
             return pecan.request.rpcapi.get_supported_boot_devices(
@@ -171,7 +132,7 @@ class BootDeviceController(rest.RestController):
             return pecan.request.rpcapi.get_boot_device(pecan.request.context,
                                                         rpc_node.uuid, topic)
 
-    @wsme_pecan.wsexpose(None, types.uuid_or_name, wtypes.text, types.boolean,
+    @expose.expose(None, types.uuid_or_name, wtypes.text, types.boolean,
                          status_code=204)
     def put(self, node_ident, boot_device, persistent=False):
         """Set the boot device for a node.
@@ -186,7 +147,7 @@ class BootDeviceController(rest.RestController):
                            Default: False.
 
         """
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         pecan.request.rpcapi.set_boot_device(pecan.request.context,
                                              rpc_node.uuid,
@@ -194,7 +155,7 @@ class BootDeviceController(rest.RestController):
                                              persistent=persistent,
                                              topic=topic)
 
-    @wsme_pecan.wsexpose(wtypes.text, types.uuid_or_name)
+    @expose.expose(wtypes.text, types.uuid_or_name)
     def get(self, node_ident):
         """Get the current boot device for a node.
 
@@ -209,7 +170,7 @@ class BootDeviceController(rest.RestController):
         """
         return self._get_boot_device(node_ident)
 
-    @wsme_pecan.wsexpose(wtypes.text, types.uuid_or_name)
+    @expose.expose(wtypes.text, types.uuid_or_name)
     def supported(self, node_ident):
         """Get a list of the supported boot devices.
 
@@ -246,13 +207,13 @@ class ConsoleInfo(base.APIBase):
 
 class NodeConsoleController(rest.RestController):
 
-    @wsme_pecan.wsexpose(ConsoleInfo, types.uuid_or_name)
+    @expose.expose(ConsoleInfo, types.uuid_or_name)
     def get(self, node_ident):
         """Get connection information about the console.
 
         :param node_ident: UUID or logical name of a node.
         """
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         try:
             console = pecan.request.rpcapi.get_console_information(
@@ -264,7 +225,7 @@ class NodeConsoleController(rest.RestController):
 
         return ConsoleInfo(console_enabled=console_state, console_info=console)
 
-    @wsme_pecan.wsexpose(None, types.uuid_or_name, types.boolean,
+    @expose.expose(None, types.uuid_or_name, types.boolean,
                          status_code=202)
     def put(self, node_ident, enabled):
         """Start and stop the node console.
@@ -273,7 +234,7 @@ class NodeConsoleController(rest.RestController):
         :param enabled: Boolean value; whether to enable or disable the
                 console.
         """
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         pecan.request.rpcapi.set_console_mode(pecan.request.context,
                                               rpc_node.uuid, enabled, topic)
@@ -341,7 +302,7 @@ class NodeStatesController(rest.RestController):
     console = NodeConsoleController()
     """Expose console as a sub-element of states"""
 
-    @wsme_pecan.wsexpose(NodeStates, types.uuid_or_name)
+    @expose.expose(NodeStates, types.uuid_or_name)
     def get(self, node_ident):
         """List the states of the node.
 
@@ -350,10 +311,10 @@ class NodeStatesController(rest.RestController):
         # NOTE(lucasagomes): All these state values come from the
         # DB. Ironic counts with a periodic task that verify the current
         # power states of the nodes and update the DB accordingly.
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         return NodeStates.convert(rpc_node)
 
-    @wsme_pecan.wsexpose(None, types.uuid_or_name, wtypes.text,
+    @expose.expose(None, types.uuid_or_name, wtypes.text,
                          status_code=202)
     def power(self, node_ident, target):
         """Set the power state of the node.
@@ -363,12 +324,12 @@ class NodeStatesController(rest.RestController):
         :raises: ClientSideError (HTTP 409) if a power operation is
                  already in progress.
         :raises: InvalidStateRequested (HTTP 400) if the requested target
-                 state is not valid.
+                 state is not valid or if the node is in CLEANING state.
 
         """
         # TODO(lucasagomes): Test if it's able to transition to the
         #                    target state from the current one
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
 
         if target not in [ir_states.POWER_ON,
@@ -378,6 +339,12 @@ class NodeStatesController(rest.RestController):
                     action=target, node=node_ident,
                     state=rpc_node.power_state)
 
+        # Don't change power state for nodes in cleaning
+        elif rpc_node.provision_state == ir_states.CLEANING:
+            raise exception.InvalidStateRequested(
+                    action=target, node=node_ident,
+                    state=rpc_node.provision_state)
+
         pecan.request.rpcapi.change_node_power_state(pecan.request.context,
                                                      rpc_node.uuid, target,
                                                      topic)
@@ -385,7 +352,7 @@ class NodeStatesController(rest.RestController):
         url_args = '/'.join([node_ident, 'states'])
         pecan.response.location = link.build_url('nodes', url_args)
 
-    @wsme_pecan.wsexpose(None, types.uuid_or_name, wtypes.text,
+    @expose.expose(None, types.uuid_or_name, wtypes.text,
                          wtypes.text, status_code=202)
     def provision(self, node_ident, target, configdrive=None):
         """Asynchronous trigger the provisioning of the node.
@@ -411,7 +378,7 @@ class NodeStatesController(rest.RestController):
                  not allow the requested state transition.
         """
         check_allow_management_verbs(target)
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
 
         # Normally, we let the task manager recognize and deal with
@@ -423,6 +390,11 @@ class NodeStatesController(rest.RestController):
         if rpc_node.reservation:
             raise exception.NodeLocked(node=rpc_node.uuid,
                                        host=rpc_node.reservation)
+
+        if (target in (ir_states.ACTIVE, ir_states.REBUILD)
+                and rpc_node.maintenance):
+            raise exception.NodeInMaintenance(op=_('provisioning'),
+                                              node=rpc_node.uuid)
 
         m = ir_states.machine.copy()
         m.initialize(rpc_node.provision_state)
@@ -621,9 +593,6 @@ class Node(base.APIBase):
         #                    the user, it's internal only.
         node.chassis_id = wtypes.Unset
 
-        if not allow_logical_names():
-            node.name = wsme.Unset
-
         node.links = [link.Link.make_link('self', url, 'nodes',
                                           node.uuid),
                       link.Link.make_link('bookmark', url, 'nodes',
@@ -635,7 +604,6 @@ class Node(base.APIBase):
     def convert_with_links(cls, rpc_node, expand=True):
         node = Node(**rpc_node.as_dict())
         assert_juno_provision_state_name(node)
-        hide_driver_internal_info(node)
         hide_fields_in_newer_versions(node)
         return cls._convert_with_links(node, pecan.request.host_url,
                                        expand,
@@ -702,7 +670,7 @@ class NodeVendorPassthruController(rest.RestController):
         'methods': ['GET']
     }
 
-    @wsme_pecan.wsexpose(wtypes.text, types.uuid_or_name)
+    @expose.expose(wtypes.text, types.uuid_or_name)
     def methods(self, node_ident):
         """Retrieve information about vendor methods of the given node.
 
@@ -712,7 +680,7 @@ class NodeVendorPassthruController(rest.RestController):
         :raises: NodeNotFound if the node is not found.
         """
         # Raise an exception if node is not found
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
 
         if rpc_node.driver not in _VENDOR_METHODS:
             topic = pecan.request.rpcapi.get_topic_for(rpc_node)
@@ -722,7 +690,7 @@ class NodeVendorPassthruController(rest.RestController):
 
         return _VENDOR_METHODS[rpc_node.driver]
 
-    @wsme_pecan.wsexpose(wtypes.text, types.uuid_or_name, wtypes.text,
+    @expose.expose(wtypes.text, types.uuid_or_name, wtypes.text,
                          body=wtypes.text)
     def _default(self, node_ident, method, data=None):
         """Call a vendor extension.
@@ -732,7 +700,7 @@ class NodeVendorPassthruController(rest.RestController):
         :param data: body of data to supply to the specified method.
         """
         # Raise an exception if node is not found
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
 
         # Raise an exception if method is not specified
@@ -753,7 +721,7 @@ class NodeVendorPassthruController(rest.RestController):
 class NodeMaintenanceController(rest.RestController):
 
     def _set_maintenance(self, node_ident, maintenance_mode, reason=None):
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         rpc_node.maintenance = maintenance_mode
         rpc_node.maintenance_reason = reason
 
@@ -765,7 +733,7 @@ class NodeMaintenanceController(rest.RestController):
         pecan.request.rpcapi.update_node(pecan.request.context,
                                          rpc_node, topic=topic)
 
-    @wsme_pecan.wsexpose(None, types.uuid_or_name, wtypes.text,
+    @expose.expose(None, types.uuid_or_name, wtypes.text,
                          status_code=202)
     def put(self, node_ident, reason=None):
         """Put the node in maintenance mode.
@@ -776,7 +744,7 @@ class NodeMaintenanceController(rest.RestController):
         """
         self._set_maintenance(node_ident, True, reason=reason)
 
-    @wsme_pecan.wsexpose(None, types.uuid_or_name, status_code=202)
+    @expose.expose(None, types.uuid_or_name, status_code=202)
     def delete(self, node_ident):
         """Remove the node from maintenance mode.
 
@@ -869,7 +837,7 @@ class NodesController(rest.RestController):
         except exception.InstanceNotFound:
             return []
 
-    @wsme_pecan.wsexpose(NodeCollection, types.uuid, types.uuid,
+    @expose.expose(NodeCollection, types.uuid, types.uuid,
                types.boolean, types.boolean, types.uuid, int, wtypes.text,
                wtypes.text)
     def get_all(self, chassis_uuid=None, instance_uuid=None, associated=None,
@@ -896,7 +864,7 @@ class NodesController(rest.RestController):
                                           associated, maintenance, marker,
                                           limit, sort_key, sort_dir)
 
-    @wsme_pecan.wsexpose(NodeCollection, types.uuid, types.uuid,
+    @expose.expose(NodeCollection, types.uuid, types.uuid,
             types.boolean, types.boolean, types.uuid, int, wtypes.text,
             wtypes.text)
     def detail(self, chassis_uuid=None, instance_uuid=None, associated=None,
@@ -931,7 +899,7 @@ class NodesController(rest.RestController):
                                           limit, sort_key, sort_dir, expand,
                                           resource_url)
 
-    @wsme_pecan.wsexpose(wtypes.text, types.uuid_or_name, types.uuid)
+    @expose.expose(wtypes.text, types.uuid_or_name, types.uuid)
     def validate(self, node=None, node_uuid=None):
         """Validate the driver interfaces, using the node's UUID or name.
 
@@ -944,16 +912,17 @@ class NodesController(rest.RestController):
         if node:
             # We're invoking this interface using positional notation, or
             # explicitly using 'node'.  Try and determine which one.
-            if not allow_logical_names() and not uuidutils.is_uuid_like(node):
+            if (not api_utils.allow_node_logical_names() and
+                not uuidutils.is_uuid_like(node)):
                 raise exception.NotAcceptable()
 
-        rpc_node = _get_rpc_node(node_uuid or node)
+        rpc_node = api_utils.get_rpc_node(node_uuid or node)
 
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         return pecan.request.rpcapi.validate_driver_interfaces(
                 pecan.request.context, rpc_node.uuid, topic)
 
-    @wsme_pecan.wsexpose(Node, types.uuid_or_name)
+    @expose.expose(Node, types.uuid_or_name)
     def get_one(self, node_ident):
         """Retrieve information about the given node.
 
@@ -962,10 +931,10 @@ class NodesController(rest.RestController):
         if self.from_chassis:
             raise exception.OperationNotPermitted
 
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
         return Node.convert_with_links(rpc_node)
 
-    @wsme_pecan.wsexpose(Node, body=Node, status_code=201)
+    @expose.expose(Node, body=Node, status_code=201)
     def post(self, node):
         """Create a new node.
 
@@ -993,9 +962,9 @@ class NodesController(rest.RestController):
         # Verify that if we're creating a new node with a 'name' set
         # that it is a valid name
         if node.name:
-            if not allow_logical_names():
+            if not api_utils.allow_node_logical_names():
                 raise exception.NotAcceptable()
-            if not is_valid_name(node.name):
+            if not api_utils.is_valid_node_name(node.name):
                 msg = _("Cannot create node with invalid name %(name)s")
                 raise wsme.exc.ClientSideError(msg % {'name': node.name},
                                                status_code=400)
@@ -1008,7 +977,7 @@ class NodesController(rest.RestController):
         return Node.convert_with_links(new_node)
 
     @wsme.validate(types.uuid, [NodePatchType])
-    @wsme_pecan.wsexpose(Node, types.uuid_or_name, body=[NodePatchType])
+    @expose.expose(Node, types.uuid_or_name, body=[NodePatchType])
     def patch(self, node_ident, patch):
         """Update an existing node.
 
@@ -1018,11 +987,21 @@ class NodesController(rest.RestController):
         if self.from_chassis:
             raise exception.OperationNotPermitted
 
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
 
         # Check if node is transitioning state, although nodes in some states
         # can be updated.
-        if ((rpc_node.target_power_state or rpc_node.target_provision_state)
+        if (rpc_node.provision_state == ir_states.CLEANING and
+                patch == [{'op': 'remove', 'path': '/instance_uuid'}]):
+            # Allow node.instance_uuid removal during cleaning, but not other
+            # operations.
+            # TODO(JoshNang) remove node.instance_uuid when removing
+            # instance_info and stop removing node.instance_uuid in the Nova
+            # Ironic driver. Bug: 1436568
+            LOG.debug('Removing instance uuid %(instance)s from node %(node)s',
+                      {'instance': rpc_node.instance_uuid,
+                       'node': rpc_node.uuid})
+        elif ((rpc_node.target_power_state or rpc_node.target_provision_state)
                 and rpc_node.provision_state not in
                 ir_states.UPDATE_ALLOWED_STATES):
             msg = _("Node %s can not be updated while a state transition "
@@ -1032,9 +1011,9 @@ class NodesController(rest.RestController):
         # Verify that if we're patching 'name' that it is a valid
         name = api_utils.get_patch_value(patch, '/name')
         if name:
-            if not allow_logical_names():
+            if not api_utils.allow_node_logical_names():
                 raise exception.NotAcceptable()
-            if not is_valid_name(name):
+            if not api_utils.is_valid_node_name(name):
                 msg = _("Node %(node)s: Cannot change name to invalid "
                         "name '%(name)s'")
                 raise wsme.exc.ClientSideError(msg % {'node': node_ident,
@@ -1077,12 +1056,22 @@ class NodesController(rest.RestController):
             e.code = 400
             raise e
 
+        # NOTE(lucasagomes): If it's changing the driver and the console
+        # is enabled we prevent updating it because the new driver will
+        # not be able to stop a console started by the previous one.
+        delta = rpc_node.obj_what_changed()
+        if 'driver' in delta and rpc_node.console_enabled:
+            raise wsme.exc.ClientSideError(
+                _("Node %s can not update the driver while the console is "
+                  "enabled. Please stop the console first.") % node_ident,
+                status_code=409)
+
         new_node = pecan.request.rpcapi.update_node(
                          pecan.request.context, rpc_node, topic)
 
         return Node.convert_with_links(new_node)
 
-    @wsme_pecan.wsexpose(None, types.uuid_or_name, status_code=204)
+    @expose.expose(None, types.uuid_or_name, status_code=204)
     def delete(self, node_ident):
         """Delete a node.
 
@@ -1091,7 +1080,7 @@ class NodesController(rest.RestController):
         if self.from_chassis:
             raise exception.OperationNotPermitted
 
-        rpc_node = _get_rpc_node(node_ident)
+        rpc_node = api_utils.get_rpc_node(node_ident)
 
         try:
             topic = pecan.request.rpcapi.get_topic_for(rpc_node)

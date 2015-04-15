@@ -284,6 +284,29 @@ class TestBaseAgentVendor(db_base.DbTestCase):
             '1be26c0b-03f2-4d2e-ae87-c02d7f33c123: Failed checking if deploy '
             'is done. exception: LlamaException')
 
+    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'continue_deploy')
+    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'reboot_to_instance')
+    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
+                       '_notify_conductor_resume_clean')
+    def test_heartbeat_noops_maintenance_mode(self, ncrc_mock, rti_mock,
+                                              cd_mock):
+        """Ensures that heartbeat() no-ops for a maintenance node."""
+        kwargs = {
+            'agent_url': 'http://127.0.0.1:9999/bar'
+        }
+        self.node.maintenance = True
+        for state in (states.AVAILABLE, states.DEPLOYWAIT, states.DEPLOYING,
+                      states.CLEANING):
+            self.node.provision_state = state
+            self.node.save()
+            with task_manager.acquire(
+                    self.context, self.node['uuid'], shared=True) as task:
+                self.passthru.heartbeat(task, **kwargs)
+
+        self.assertEqual(0, ncrc_mock.call_count)
+        self.assertEqual(0, rti_mock.call_count)
+        self.assertEqual(0, cd_mock.call_count)
+
     def test_vendor_passthru_vendor_routes(self):
         expected = ['heartbeat']
         with task_manager.acquire(self.context, self.node.uuid,
@@ -336,7 +359,9 @@ class TestBaseAgentVendor(db_base.DbTestCase):
             'command_status': 'SUCCESS', 'command_error': None}
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.configure_local_boot(task, 'some-root-uuid')
+            task.node.driver_internal_info['is_whole_disk_image'] = False
+            self.passthru.configure_local_boot(task,
+                                               root_uuid='some-root-uuid')
             try_set_boot_device_mock.assert_called_once_with(
                 task, boot_devices.DISK)
             install_bootloader_mock.assert_called_once_with(
@@ -351,6 +376,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
             'command_status': 'SUCCESS', 'command_error': None}
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
+            task.node.driver_internal_info['is_whole_disk_image'] = False
             self.passthru.configure_local_boot(
                 task, root_uuid='some-root-uuid',
                 efi_system_part_uuid='efi-system-part-uuid')
@@ -359,6 +385,29 @@ class TestBaseAgentVendor(db_base.DbTestCase):
             install_bootloader_mock.assert_called_once_with(
                 task.node, root_uuid='some-root-uuid',
                 efi_system_part_uuid='efi-system-part-uuid')
+
+    @mock.patch.object(deploy_utils, 'try_set_boot_device')
+    @mock.patch.object(agent_client.AgentClient, 'install_bootloader')
+    def test_configure_local_boot_whole_disk_image(
+            self, install_bootloader_mock, try_set_boot_device_mock):
+        with task_manager.acquire(self.context, self.node['uuid'],
+                                  shared=False) as task:
+            self.passthru.configure_local_boot(task)
+            self.assertFalse(install_bootloader_mock.called)
+            try_set_boot_device_mock.assert_called_once_with(
+                task, boot_devices.DISK)
+
+    @mock.patch.object(deploy_utils, 'try_set_boot_device')
+    @mock.patch.object(agent_client.AgentClient, 'install_bootloader')
+    def test_configure_local_boot_no_root_uuid(
+            self, install_bootloader_mock, try_set_boot_device_mock):
+        with task_manager.acquire(self.context, self.node['uuid'],
+                                  shared=False) as task:
+            task.node.driver_internal_info['is_whole_disk_image'] = False
+            self.passthru.configure_local_boot(task)
+            self.assertFalse(install_bootloader_mock.called)
+            try_set_boot_device_mock.assert_called_once_with(
+                task, boot_devices.DISK)
 
     @mock.patch.object(agent_client.AgentClient, 'install_bootloader')
     def test_configure_local_boot_boot_loader_install_fail(
@@ -370,9 +419,10 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         self.node.save()
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
+            task.node.driver_internal_info['is_whole_disk_image'] = False
             self.assertRaises(exception.InstanceDeployFailure,
                               self.passthru.configure_local_boot,
-                              task, 'some-root-uuid')
+                              task, root_uuid='some-root-uuid')
             install_bootloader_mock.assert_called_once_with(
                 task.node, root_uuid='some-root-uuid',
                 efi_system_part_uuid=None)
@@ -391,9 +441,10 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         self.node.save()
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
+            task.node.driver_internal_info['is_whole_disk_image'] = False
             self.assertRaises(exception.InstanceDeployFailure,
                               self.passthru.configure_local_boot,
-                              task, 'some-root-uuid')
+                              task, root_uuid='some-root-uuid')
             install_bootloader_mock.assert_called_once_with(
                 task.node, root_uuid='some-root-uuid',
                 efi_system_part_uuid=None)
@@ -406,8 +457,20 @@ class TestBaseAgentVendor(db_base.DbTestCase):
                        '_notify_conductor_resume_clean')
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
     def test_continue_cleaning(self, status_mock, notify_mock):
+        # Test a successful execute clean step on the agent
+        self.node.clean_step = {
+            'priority': 10,
+            'interface': 'deploy',
+            'step': 'erase_devices',
+            'reboot_requested': False
+        }
+        self.node.save()
         status_mock.return_value = [{
             'command_status': 'SUCCEEDED',
+            'command_name': 'execute_clean_step',
+            'command_result': {
+                'clean_step': self.node.clean_step
+            }
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
@@ -417,20 +480,54 @@ class TestBaseAgentVendor(db_base.DbTestCase):
     @mock.patch.object(agent_base_vendor.BaseAgentVendor,
                        '_notify_conductor_resume_clean')
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
-    def test_continue_cleaning_running(self, status_mock, notify_mock):
+    def test_continue_cleaning_old_command(self, status_mock, notify_mock):
+        # Test when a second execute_clean_step happens to the agent, but
+        # the new step hasn't started yet.
+        self.node.clean_step = {
+            'priority': 10,
+            'interface': 'deploy',
+            'step': 'erase_devices',
+            'reboot_requested': False
+        }
+        self.node.save()
         status_mock.return_value = [{
-            'command_status': 'RUNNING',
+            'command_status': 'SUCCEEDED',
+            'command_name': 'execute_clean_step',
+            'command_result': {
+                'priority': 20,
+                'interface': 'deploy',
+                'step': 'update_firmware',
+                'reboot_requested': False
+            }
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
             self.passthru.continue_cleaning(task)
-            notify_mock.assert_not_called()
+            self.assertFalse(notify_mock.called)
+
+    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
+                       '_notify_conductor_resume_clean')
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    def test_continue_cleaning_running(self, status_mock, notify_mock):
+        # Test that no action is taken while a clean step is executing
+        status_mock.return_value = [{
+            'command_status': 'RUNNING',
+            'command_name': 'execute_clean_step',
+            'command_result': {}
+        }]
+        with task_manager.acquire(self.context, self.node['uuid'],
+                                  shared=False) as task:
+            self.passthru.continue_cleaning(task)
+            self.assertFalse(notify_mock.called)
 
     @mock.patch('ironic.conductor.manager.cleaning_error_handler')
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
     def test_continue_cleaning_fail(self, status_mock, error_mock):
+        # Test the a failure puts the node in CLEANFAIL
         status_mock.return_value = [{
             'command_status': 'FAILED',
+            'command_name': 'execute_clean_step',
+            'command_result': {}
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
@@ -443,8 +540,11 @@ class TestBaseAgentVendor(db_base.DbTestCase):
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
     def test_continue_cleaning_clean_version_mismatch(
             self, status_mock, notify_mock, steps_mock):
+        # Test that cleaning is restarted if there is a version mismatch
         status_mock.return_value = [{
             'command_status': 'CLEAN_VERSION_MISMATCH',
+            'command_name': 'execute_clean_step',
+            'command_result': {}
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
@@ -455,8 +555,11 @@ class TestBaseAgentVendor(db_base.DbTestCase):
     @mock.patch('ironic.conductor.manager.cleaning_error_handler')
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
     def test_continue_cleaning_unknown(self, status_mock, error_mock):
+        # Test that unknown commands are treated as failures
         status_mock.return_value = [{
             'command_status': 'UNKNOWN',
+            'command_name': 'execute_clean_step',
+            'command_result': {}
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:

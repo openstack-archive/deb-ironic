@@ -57,7 +57,9 @@ Overview
 
   deploy/user-guide
   deploy/install-guide
+  deploy/upgrade-guide
   deploy/drivers
+  deploy/cleaning
 
 Commands
 --------

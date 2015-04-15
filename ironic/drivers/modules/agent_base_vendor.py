@@ -147,10 +147,10 @@ class BaseAgentVendor(base.VendorInterface):
         we restart cleaning.
         """
         command = self._get_completed_cleaning_command(task)
-        LOG.debug('Cleaning command status for node %(node)s on step %(step)s '
-                  '(command)%', {'node': task.node.uuid,
-                                 'step': task.node.clean_step,
-                                 'command': command})
+        LOG.debug('Cleaning command status for node %(node)s on step %(step)s:'
+                  ' %(command)s', {'node': task.node.uuid,
+                                   'step': task.node.clean_step,
+                                   'command': command})
 
         if not command:
             # Command is not done yet
@@ -163,7 +163,7 @@ class BaseAgentVendor(base.VendorInterface):
                     'err': command.get('command_error'),
                     'step': task.node.clean_step})
             LOG.error(msg)
-            manager.cleaning_error_handler(task, msg)
+            return manager.cleaning_error_handler(task, msg)
         elif command.get('command_status') == 'CLEAN_VERSION_MISMATCH':
             # Restart cleaning, agent must have rebooted to new version
             try:
@@ -175,7 +175,7 @@ class BaseAgentVendor(base.VendorInterface):
                         'err': command.get('command_error'),
                         'step': task.node.clean_step})
                 LOG.exception(msg)
-                manager.cleaning_error_handler(task, msg)
+                return manager.cleaning_error_handler(task, msg)
             self._notify_conductor_resume_clean(task)
 
         elif command.get('command_status') == 'SUCCEEDED':
@@ -187,7 +187,7 @@ class BaseAgentVendor(base.VendorInterface):
                     'err': command.get('command_status'),
                     'step': task.node.clean_step})
             LOG.error(msg)
-            manager.cleaning_error_handler(task, msg)
+            return manager.cleaning_error_handler(task, msg)
 
     @base.passthru(['POST'])
     def heartbeat(self, task, **kwargs):
@@ -223,7 +223,12 @@ class BaseAgentVendor(base.VendorInterface):
         # TODO(jimrollenhagen) improve error messages here
         msg = _('Failed checking if deploy is done.')
         try:
-            if node.provision_state == states.DEPLOYWAIT:
+            if node.maintenance:
+                # this shouldn't happen often, but skip the rest if it does.
+                LOG.debug('Heartbeat from node %(node)s in maintenance mode; '
+                          'not taking any action.', {'node': node.uuid})
+                return
+            elif node.provision_state == states.DEPLOYWAIT:
                 msg = _('Node failed to get image for deploy.')
                 self.continue_deploy(task, **kwargs)
             elif (node.provision_state == states.DEPLOYING and
@@ -308,7 +313,18 @@ class BaseAgentVendor(base.VendorInterface):
 
         last_command = commands[-1]
 
+        if last_command['command_name'] != 'execute_clean_step':
+            # catches race condition where execute_clean_step is still
+            # processing so the command hasn't started yet
+            return
+
+        last_step = last_command['command_result'].get('clean_step')
         if last_command['command_status'] == 'RUNNING':
+            return
+        elif (last_command['command_status'] == 'SUCCEEDED' and
+              last_step != task.node.clean_step):
+            # A previous clean_step was running, the new command has not yet
+            # started.
             return
         else:
             return last_command
@@ -431,7 +447,7 @@ class BaseAgentVendor(base.VendorInterface):
         task.process_event('done')
         LOG.info(_LI('Deployment to node %s done'), task.node.uuid)
 
-    def configure_local_boot(self, task, root_uuid,
+    def configure_local_boot(self, task, root_uuid=None,
                              efi_system_part_uuid=None):
         """Helper method to configure local boot on the node.
 
@@ -441,14 +457,17 @@ class BaseAgentVendor(base.VendorInterface):
 
         :param task: a TaskManager object containing the node
         :param root_uuid: The UUID of the root partition. This is used
-            for identifying the partition which contains the image deployed.
+            for identifying the partition which contains the image deployed
+            or None in case of whole disk images which we expect to already
+            have a bootloader installed.
         :param efi_system_part_uuid: The UUID of the efi system partition.
-            This is used only in uef boot mode.
+            This is used only in uefi boot mode.
         :raises: InstanceDeployFailure if bootloader installation failed or
             on encountering error while setting the boot device on the node.
         """
         node = task.node
-        if not node.driver_internal_info.get('is_whole_disk_image'):
+        if not node.driver_internal_info.get(
+                'is_whole_disk_image') and root_uuid:
             result = self._client.install_bootloader(
                 node, root_uuid=root_uuid,
                 efi_system_part_uuid=efi_system_part_uuid)

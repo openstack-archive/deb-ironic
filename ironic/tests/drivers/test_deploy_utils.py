@@ -37,6 +37,7 @@ from ironic.common import states
 from ironic.common import utils as common_utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
+from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils as utils
 from ironic.drivers.modules import image_cache
 from ironic.tests import base as tests_base
@@ -180,7 +181,7 @@ image=kernel
 
 image=chain.c32
         label=boot_whole_disk
-        append mbr:{{ DISK_IDENTIFIER }}
+        append="mbr:{{ DISK_IDENTIFIER }}"
 """
 
 _UEFI_PXECONF_BOOT_PARTITION = """
@@ -198,7 +199,7 @@ image=kernel
 
 image=chain.c32
         label=boot_whole_disk
-        append mbr:{{ DISK_IDENTIFIER }}
+        append="mbr:{{ DISK_IDENTIFIER }}"
 """
 
 _UEFI_PXECONF_BOOT_WHOLE_DISK = """
@@ -216,7 +217,7 @@ image=kernel
 
 image=chain.c32
         label=boot_whole_disk
-        append mbr:0x12345678
+        append="mbr:0x12345678"
 """
 
 
@@ -1019,13 +1020,18 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.swap_part = '/dev/fake-part1'
         self.root_part = '/dev/fake-part2'
 
-        self.mock_ibd = mock.patch.object(utils, 'is_block_device').start()
-        self.mock_mp = mock.patch.object(utils, 'make_partitions').start()
-        self.addCleanup(self.mock_ibd.stop)
-        self.addCleanup(self.mock_mp.stop)
-        self.mock_remlbl = mock.patch.object(utils,
-                                             'destroy_disk_metadata').start()
-        self.addCleanup(self.mock_remlbl.stop)
+        self.mock_ibd_obj = mock.patch.object(
+            utils, 'is_block_device', autospec=True)
+        self.mock_ibd = self.mock_ibd_obj.start()
+        self.addCleanup(self.mock_ibd_obj.stop)
+        self.mock_mp_obj = mock.patch.object(
+            utils, 'make_partitions', autospec=True)
+        self.mock_mp = self.mock_mp_obj.start()
+        self.addCleanup(self.mock_mp_obj.stop)
+        self.mock_remlbl_obj = mock.patch.object(
+            utils, 'destroy_disk_metadata', autospec=True)
+        self.mock_remlbl = self.mock_remlbl_obj.start()
+        self.addCleanup(self.mock_remlbl_obj.stop)
         self.mock_mp.return_value = {'swap': self.swap_part,
                                      'root': self.root_part}
 
@@ -1043,7 +1049,7 @@ class WorkOnDiskTestCase(tests_base.TestCase):
                                              boot_mode="bios")
 
     def test_no_swap_partition(self):
-        self.mock_ibd.side_effect = [True, False]
+        self.mock_ibd.side_effect = iter([True, False])
         calls = [mock.call(self.root_part),
                  mock.call(self.swap_part)]
         self.assertRaises(exception.InstanceDeployFailure,
@@ -1067,7 +1073,7 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.mock_mp.return_value = {'ephemeral': ephemeral_part,
                                      'swap': swap_part,
                                      'root': root_part}
-        self.mock_ibd.side_effect = [True, True, False]
+        self.mock_ibd.side_effect = iter([True, True, False])
         calls = [mock.call(root_part),
                  mock.call(swap_part),
                  mock.call(ephemeral_part)]
@@ -1095,7 +1101,7 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.mock_mp.return_value = {'swap': swap_part,
                                      'configdrive': configdrive_part,
                                      'root': root_part}
-        self.mock_ibd.side_effect = [True, True, False]
+        self.mock_ibd.side_effect = iter([True, True, False])
         calls = [mock.call(root_part),
                  mock.call(swap_part),
                  mock.call(configdrive_part)]
@@ -1452,6 +1458,39 @@ class ParseInstanceInfoCapabilitiesTestCase(tests_base.TestCase):
         self.assertRaises(exception.InvalidParameterValue,
                           utils.parse_instance_info_capabilities, self.node)
 
+    def test_is_secure_boot_requested_true(self):
+        self.node.instance_info = {'capabilities': {"secure_boot": "tRue"}}
+        self.assertTrue(utils.is_secure_boot_requested(self.node))
+
+    def test_is_secure_boot_requested_false(self):
+        self.node.instance_info = {'capabilities': {"secure_boot": "false"}}
+        self.assertFalse(utils.is_secure_boot_requested(self.node))
+
+    def test_is_secure_boot_requested_invalid(self):
+        self.node.instance_info = {'capabilities': {"secure_boot": "invalid"}}
+        self.assertFalse(utils.is_secure_boot_requested(self.node))
+
+    def test_get_boot_mode_for_deploy_using_capabilities(self):
+        properties = {'capabilities': 'boot_mode:uefi,cap2:value2'}
+        self.node.properties = properties
+
+        result = utils.get_boot_mode_for_deploy(self.node)
+        self.assertEqual('uefi', result)
+
+    def test_get_boot_mode_for_deploy_using_instance_info_cap(self):
+        instance_info = {'capabilities': {'secure_boot': 'True'}}
+        self.node.instance_info = instance_info
+
+        result = utils.get_boot_mode_for_deploy(self.node)
+        self.assertEqual('uefi', result)
+
+    def test_get_boot_mode_for_deploy_using_instance_info(self):
+        instance_info = {'deploy_boot_mode': 'bios'}
+        self.node.instance_info = instance_info
+
+        result = utils.get_boot_mode_for_deploy(self.node)
+        self.assertEqual('bios', result)
+
 
 class TrySetBootDeviceTestCase(db_base.DbTestCase):
 
@@ -1514,7 +1553,9 @@ class AgentCleaningTestCase(db_base.DbTestCase):
     def setUp(self):
         super(AgentCleaningTestCase, self).setUp()
         mgr_utils.mock_the_extension_manager(driver='fake_agent')
-        n = {'driver': 'fake_agent'}
+        n = {'driver': 'fake_agent',
+             'driver_internal_info': {'agent_url': 'http://127.0.0.1:9999'}}
+
         self.node = obj_utils.create_test_node(self.context, **n)
         self.ports = [obj_utils.create_test_port(self.context,
                                                  node_id=self.node.id)]
@@ -1539,39 +1580,34 @@ class AgentCleaningTestCase(db_base.DbTestCase):
         }
 
     @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch('ironic.drivers.modules.deploy_utils._get_agent_client')
-    def test_get_clean_steps(self, get_client_mock, list_ports_mock):
-        client_mock = mock.Mock()
-        client_mock.get_clean_steps.return_value = {
+    @mock.patch.object(agent_client.AgentClient, 'get_clean_steps')
+    def test_get_clean_steps(self, client_mock, list_ports_mock):
+        client_mock.return_value = {
             'command_result': self.clean_steps}
-        get_client_mock.return_value = client_mock
         list_ports_mock.return_value = self.ports
 
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             response = utils.agent_get_clean_steps(task)
-            client_mock.get_clean_steps.assert_called_once_with(task.node,
-                                                                self.ports)
+            client_mock.assert_called_once_with(task.node, self.ports)
             self.assertEqual('1', task.node.driver_internal_info[
                 'hardware_manager_version'])
 
             # Since steps are returned in dicts, they have non-deterministic
             # ordering
             self.assertEqual(2, len(response))
-            self.assertTrue(self.clean_steps['clean_steps'][
-                                'GenericHardwareManager'][0] in response)
-            self.assertTrue(self.clean_steps['clean_steps'][
-                                'SpecificHardwareManager'][0] in response)
+            self.assertIn(self.clean_steps['clean_steps'][
+                'GenericHardwareManager'][0], response)
+            self.assertIn(self.clean_steps['clean_steps'][
+                'SpecificHardwareManager'][0], response)
 
     @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch('ironic.drivers.modules.deploy_utils._get_agent_client')
-    def test_get_clean_steps_missing_steps(self, get_client_mock,
+    @mock.patch.object(agent_client.AgentClient, 'get_clean_steps')
+    def test_get_clean_steps_missing_steps(self, client_mock,
                                            list_ports_mock):
-        client_mock = mock.Mock()
         del self.clean_steps['clean_steps']
-        client_mock.get_clean_steps.return_value = {
+        client_mock.return_value = {
             'command_result': self.clean_steps}
-        get_client_mock.return_value = client_mock
         list_ports_mock.return_value = self.ports
 
         with task_manager.acquire(
@@ -1579,16 +1615,13 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             self.assertRaises(exception.NodeCleaningFailure,
                               utils.agent_get_clean_steps,
                               task)
-            client_mock.get_clean_steps.assert_called_once_with(task.node,
-                                                                self.ports)
+            client_mock.assert_called_once_with(task.node, self.ports)
 
     @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch('ironic.drivers.modules.deploy_utils._get_agent_client')
-    def test_execute_clean_step(self, get_client_mock, list_ports_mock):
-        client_mock = mock.Mock()
-        client_mock.execute_clean_step.return_value = {
+    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step')
+    def test_execute_clean_step(self, client_mock, list_ports_mock):
+        client_mock.return_value = {
             'command_status': 'SUCCEEDED'}
-        get_client_mock.return_value = client_mock
         list_ports_mock.return_value = self.ports
 
         with task_manager.acquire(
@@ -1599,13 +1632,10 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             self.assertEqual(states.CLEANING, response)
 
     @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch('ironic.drivers.modules.deploy_utils._get_agent_client')
-    def test_execute_clean_step_running(self, get_client_mock,
-                                        list_ports_mock):
-        client_mock = mock.Mock()
-        client_mock.execute_clean_step.return_value = {
+    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step')
+    def test_execute_clean_step_running(self, client_mock, list_ports_mock):
+        client_mock.return_value = {
             'command_status': 'RUNNING'}
-        get_client_mock.return_value = client_mock
         list_ports_mock.return_value = self.ports
 
         with task_manager.acquire(
@@ -1616,13 +1646,11 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             self.assertEqual(states.CLEANING, response)
 
     @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch('ironic.drivers.modules.deploy_utils._get_agent_client')
-    def test_execute_clean_step_version_mismatch(self, get_client_mock,
+    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step')
+    def test_execute_clean_step_version_mismatch(self, client_mock,
                                         list_ports_mock):
-        client_mock = mock.Mock()
-        client_mock.execute_clean_step.return_value = {
+        client_mock.return_value = {
             'command_status': 'RUNNING'}
-        get_client_mock.return_value = client_mock
         list_ports_mock.return_value = self.ports
 
         with task_manager.acquire(

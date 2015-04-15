@@ -15,17 +15,18 @@
 
 import datetime
 
+from oslo_utils import uuidutils
 import pecan
 from pecan import rest
 import wsme
 from wsme import types as wtypes
-import wsmeext.pecan as wsme_pecan
 
 from ironic.api.controllers import base
 from ironic.api.controllers import link
 from ironic.api.controllers.v1 import collection
 from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils as api_utils
+from ironic.api import expose
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic import objects
@@ -175,12 +176,12 @@ class PortsController(rest.RestController):
         'detail': ['GET'],
     }
 
-    def _get_ports_collection(self, node_uuid, address, marker, limit,
+    def _get_ports_collection(self, node_ident, address, marker, limit,
                               sort_key, sort_dir, expand=False,
                               resource_url=None):
-        if self.from_nodes and not node_uuid:
+        if self.from_nodes and not node_ident:
             raise exception.MissingParameterValue(_(
-                  "Node id not specified."))
+                  "Node identifier not specified."))
 
         limit = api_utils.validate_limit(limit)
         sort_dir = api_utils.validate_sort_dir(sort_dir)
@@ -190,12 +191,12 @@ class PortsController(rest.RestController):
             marker_obj = objects.Port.get_by_uuid(pecan.request.context,
                                                   marker)
 
-        if node_uuid:
+        if node_ident:
             # FIXME(comstud): Since all we need is the node ID, we can
             #                 make this more efficient by only querying
             #                 for that column. This will get cleaned up
             #                 as we move to the object interface.
-            node = objects.Node.get_by_uuid(pecan.request.context, node_uuid)
+            node = api_utils.get_rpc_node(node_ident)
             ports = objects.Port.list_by_node_id(pecan.request.context,
                                                  node.id, limit, marker_obj,
                                                  sort_key=sort_key,
@@ -227,13 +228,20 @@ class PortsController(rest.RestController):
         except exception.PortNotFound:
             return []
 
-    @wsme_pecan.wsexpose(PortCollection, types.uuid, types.macaddress,
-                         types.uuid, int, wtypes.text, wtypes.text)
-    def get_all(self, node_uuid=None, address=None, marker=None, limit=None,
-                sort_key='id', sort_dir='asc'):
+    @expose.expose(PortCollection, types.uuid_or_name, types.uuid,
+                         types.macaddress, types.uuid, int, wtypes.text,
+                         wtypes.text)
+    def get_all(self, node=None, node_uuid=None, address=None, marker=None,
+                limit=None, sort_key='id', sort_dir='asc'):
         """Retrieve a list of ports.
 
-        :param node_uuid: UUID of a node, to get only ports for that node.
+        Note that the 'node_uuid' interface is deprecated in favour
+        of the 'node' interface
+
+        :param node: UUID or name of a node, to get only ports for that
+                           node.
+        :param node_uuid: UUID of a node, to get only ports for that
+                           node.
         :param address: MAC address of a port, to get the port which has
                         this MAC address.
         :param marker: pagination marker for large data sets.
@@ -241,16 +249,31 @@ class PortsController(rest.RestController):
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         """
-        return self._get_ports_collection(node_uuid, address, marker, limit,
-                                          sort_key, sort_dir)
+        if not node_uuid and node:
+            # We're invoking this interface using positional notation, or
+            # explicitly using 'node'.  Try and determine which one.
+            # Make sure only one interface, node or node_uuid is used
+            if (not api_utils.allow_node_logical_names() and
+                not uuidutils.is_uuid_like(node)):
+                raise exception.NotAcceptable()
 
-    @wsme_pecan.wsexpose(PortCollection, types.uuid, types.macaddress,
-                         types.uuid, int, wtypes.text, wtypes.text)
-    def detail(self, node_uuid=None, address=None, marker=None, limit=None,
-                sort_key='id', sort_dir='asc'):
+        return self._get_ports_collection(node_uuid or node, address, marker,
+                                          limit, sort_key, sort_dir)
+
+    @expose.expose(PortCollection, types.uuid_or_name, types.uuid,
+                         types.macaddress, types.uuid, int, wtypes.text,
+                         wtypes.text)
+    def detail(self, node=None, node_uuid=None, address=None, marker=None,
+               limit=None, sort_key='id', sort_dir='asc'):
         """Retrieve a list of ports with detail.
 
-        :param node_uuid: UUID of a node, to get only ports for that node.
+        Note that the 'node_uuid' interface is deprecated in favour
+        of the 'node' interface
+
+        :param node: UUID or name of a node, to get only ports for that
+                     node.
+        :param node_uuid: UUID of a node, to get only ports for that
+                          node.
         :param address: MAC address of a port, to get the port which has
                         this MAC address.
         :param marker: pagination marker for large data sets.
@@ -258,6 +281,14 @@ class PortsController(rest.RestController):
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         """
+        if not node_uuid and node:
+            # We're invoking this interface using positional notation, or
+            # explicitly using 'node'.  Try and determine which one.
+            # Make sure only one interface, node or node_uuid is used
+            if (not api_utils.allow_node_logical_names() and
+                not uuidutils.is_uuid_like(node)):
+                raise exception.NotAcceptable()
+
         # NOTE(lucasagomes): /detail should only work against collections
         parent = pecan.request.path.split('/')[:-1][-1]
         if parent != "ports":
@@ -265,11 +296,11 @@ class PortsController(rest.RestController):
 
         expand = True
         resource_url = '/'.join(['ports', 'detail'])
-        return self._get_ports_collection(node_uuid, address, marker, limit,
-                                          sort_key, sort_dir, expand,
+        return self._get_ports_collection(node_uuid or node, address, marker,
+                                          limit, sort_key, sort_dir, expand,
                                           resource_url)
 
-    @wsme_pecan.wsexpose(Port, types.uuid)
+    @expose.expose(Port, types.uuid)
     def get_one(self, port_uuid):
         """Retrieve information about the given port.
 
@@ -281,7 +312,7 @@ class PortsController(rest.RestController):
         rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
         return Port.convert_with_links(rpc_port)
 
-    @wsme_pecan.wsexpose(Port, body=Port, status_code=201)
+    @expose.expose(Port, body=Port, status_code=201)
     def post(self, port):
         """Create a new port.
 
@@ -298,7 +329,7 @@ class PortsController(rest.RestController):
         return Port.convert_with_links(new_port)
 
     @wsme.validate(types.uuid, [PortPatchType])
-    @wsme_pecan.wsexpose(Port, types.uuid, body=[PortPatchType])
+    @expose.expose(Port, types.uuid, body=[PortPatchType])
     def patch(self, port_uuid, patch):
         """Update an existing port.
 
@@ -341,7 +372,7 @@ class PortsController(rest.RestController):
 
         return Port.convert_with_links(new_port)
 
-    @wsme_pecan.wsexpose(None, types.uuid, status_code=204)
+    @expose.expose(None, types.uuid, status_code=204)
     def delete(self, port_uuid):
         """Delete a port.
 

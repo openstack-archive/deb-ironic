@@ -15,15 +15,9 @@
 #    under the License.
 
 """
-Tests for database migrations. This test case reads the configuration
-file test_migrations.conf for database connection settings
-to use in the tests. For each connection found in the config file,
-the test case runs a series of test cases to ensure that migrations work
-properly.
-
-There are also "opportunistic" tests for both mysql and postgresql in here,
-which allows testing against all 3 databases (sqlite in memory, mysql, pg) in
-a properly configured unit test environment.
+Tests for database migrations. There are "opportunistic" tests for both mysql
+and postgresql in here, which allows testing against these databases in a
+properly configured unit test environment.
 
 For the opportunistic testing you need to set up a db named 'openstack_citest'
 with user 'openstack_citest' and password 'openstack_citest' on localhost.
@@ -314,12 +308,8 @@ class MigrationCheckersMixin(object):
                 'instance_uuid': instance_uuid}
         nodes.insert().values(data).execute()
         data['uuid'] = uuidutils.generate_uuid()
-        # TODO(viktors): Remove check on sqlalchemy.exc.IntegrityError, when
-        #                Ironic will use oslo_db 0.4.0 or higher.
-        #                See bug #1214341 for details.
-        self.assertRaises(
-            (sqlalchemy.exc.IntegrityError, db_exc.DBDuplicateEntry),
-            nodes.insert().execute, data)
+        self.assertRaises(db_exc.DBDuplicateEntry,
+                          nodes.insert().execute, data)
 
     def _check_242cc6a923b3(self, engine, data):
         nodes = db_utils.get_table(engine, 'nodes')
@@ -373,6 +363,15 @@ class MigrationCheckersMixin(object):
         self.assertIn('clean_step', col_names)
         self.assertIsInstance(nodes.c.clean_step.type,
                               sqlalchemy.types.String)
+
+    def _check_2fb93ffd2af1(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        bigstring = 'a' * 255
+        uuid = uuidutils.generate_uuid()
+        data = {'uuid': uuid, 'name': bigstring}
+        nodes.insert().execute(data)
+        node = nodes.select(nodes.c.uuid == uuid).execute().first()
+        self.assertEqual(bigstring, node['name'])
 
     def test_upgrade_and_version(self):
         with patch_with_engine(self.engine):

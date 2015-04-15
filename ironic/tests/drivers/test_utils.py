@@ -112,27 +112,6 @@ class UtilsTestCase(db_base.DbTestCase):
             self.assertEqual('a:b,c:d,a:b',
                              task.node.properties['capabilities'])
 
-    def test_rm_node_capability(self):
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=False) as task:
-            task.node.properties['capabilities'] = 'a:b'
-            driver_utils.rm_node_capability(task, 'a')
-            self.assertIsNone(task.node.properties['capabilities'])
-
-    def test_rm_node_capability_exists(self):
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=False) as task:
-            task.node.properties['capabilities'] = 'a:b,c:d,x:y'
-            self.assertIsNone(driver_utils.rm_node_capability(task, 'c'))
-            self.assertEqual('a:b,x:y', task.node.properties['capabilities'])
-
-    def test_rm_node_capability_non_existent(self):
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=False) as task:
-            task.node.properties['capabilities'] = 'a:b'
-            self.assertIsNone(driver_utils.rm_node_capability(task, 'x'))
-            self.assertEqual('a:b', task.node.properties['capabilities'])
-
     def test_validate_capability(self):
         properties = {'capabilities': 'cat:meow,cap2:value2'}
         self.node.properties = properties

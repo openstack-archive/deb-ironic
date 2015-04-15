@@ -30,7 +30,7 @@ from ironic.common.i18n import _LI
 from ironic.common import images
 from ironic.common import swift
 from ironic.common import utils
-from ironic.drivers import utils as driver_utils
+from ironic.drivers.modules import deploy_utils
 from ironic.openstack.common import log as logging
 
 ilo_client = importutils.try_import('proliantutils.ilo.client')
@@ -74,15 +74,6 @@ OPTIONAL_PROPERTIES = {
 CONSOLE_PROPERTIES = {
     'console_port': _("node's UDP port to connect to. Only required for "
                       "console access.")
-}
-INSPECT_PROPERTIES = {
-    'inspect_ports': _("Comma-separated values of ethernet ports "
-                       "to be identified for creating node "
-                       "ports. Valid values may be "
-                       "inspect_ports = '1,2,...n' or "
-                       "inspect_ports = 'all' or "
-                       "inspect_ports = 'none'. "
-                       "Required only for inspection.")
 }
 CLEAN_PROPERTIES = {
     'ilo_change_password': _("new password for iLO. Required if the clean "
@@ -140,11 +131,6 @@ def parse_driver_info(node):
                 d_info[param] = int(value)
             except ValueError:
                 not_integers.append(param)
-
-    for param in INSPECT_PROPERTIES:
-        value = info.get(param)
-        if value:
-            d_info[param] = value
 
     if not_integers:
         raise exception.InvalidParameterValue(_(
@@ -346,42 +332,58 @@ def set_boot_mode(node, boot_mode):
 
 
 def update_boot_mode(task):
-    """Update 'boot_mode' capability value of node's 'capabilities' property.
+    """Update instance_info with boot mode to be used for deploy.
 
-    This method updates the 'boot_mode' capability in node's 'capabilities'
-    property if not set.
-    It also sets the boot mode to be used in the next boot.
+    This method updates instance_info with boot mode to be used for
+    deploy if node properties['capabilities'] do not have boot_mode.
+    It sets the boot mode on the node.
 
     :param task: Task object.
     :raises: IloOperationError if setting boot mode failed.
     """
-    node = task.node
 
-    boot_mode = driver_utils.get_node_capability(node, 'boot_mode')
+    node = task.node
+    boot_mode = deploy_utils.get_boot_mode_for_deploy(node)
+
     if boot_mode is not None:
         LOG.debug("Node %(uuid)s boot mode is being set to %(boot_mode)s",
                   {'uuid': node.uuid, 'boot_mode': boot_mode})
         set_boot_mode(node, boot_mode)
         return
 
-    ilo_object = get_ilo_object(task.node)
+    LOG.debug("Check pending boot mode for node %s.", node.uuid)
+    ilo_object = get_ilo_object(node)
 
     try:
-        p_boot_mode = ilo_object.get_pending_boot_mode()
-        if p_boot_mode == 'UNKNOWN':
-            # NOTE(faizan) ILO will return this in remote cases and mostly on
-            # the nodes which supports UEFI. Such nodes mostly comes with UEFI
-            # as default boot mode. So we will try setting bootmode to UEFI
-            # and if it fails then we fall back to BIOS boot mode.
-            ilo_object.set_pending_boot_mode('UEFI')
-            p_boot_mode = 'UEFI'
+        boot_mode = ilo_object.get_pending_boot_mode()
     except ilo_error.IloCommandNotSupportedError:
-        p_boot_mode = DEFAULT_BOOT_MODE
+        boot_mode = 'legacy'
 
-    driver_utils.rm_node_capability(task, 'boot_mode')
+    if boot_mode != 'UNKNOWN':
+        boot_mode = BOOT_MODE_ILO_TO_GENERIC[boot_mode.lower()]
 
-    driver_utils.add_node_capability(task, 'boot_mode',
-        BOOT_MODE_ILO_TO_GENERIC[p_boot_mode.lower()])
+    if boot_mode == 'UNKNOWN':
+        # NOTE(faizan) ILO will return this in remote cases and mostly on
+        # the nodes which supports UEFI. Such nodes mostly comes with UEFI
+        # as default boot mode. So we will try setting bootmode to UEFI
+        # and if it fails then we fall back to BIOS boot mode.
+        try:
+            boot_mode = 'uefi'
+            ilo_object.set_pending_boot_mode(
+                                   BOOT_MODE_GENERIC_TO_ILO[boot_mode].upper())
+        except ilo_error.IloError as ilo_exception:
+            operation = _("Setting %s as boot mode") % boot_mode
+            raise exception.IloOperationError(operation=operation,
+                                              error=ilo_exception)
+
+        LOG.debug("Node %(uuid)s boot mode is being set to %(boot_mode)s "
+                      "as pending boot mode is unknown.",
+                      {'uuid': node.uuid, 'boot_mode': boot_mode})
+
+    instance_info = node.instance_info
+    instance_info['deploy_boot_mode'] = boot_mode
+    node.instance_info = instance_info
+    node.save()
 
 
 def setup_vmedia_for_boot(task, boot_iso, parameters=None):

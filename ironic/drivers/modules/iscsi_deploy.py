@@ -23,9 +23,12 @@ from ironic.common import exception
 from ironic.common.glance_service import service_utils as glance_service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
+from ironic.common.i18n import _LI
 from ironic.common import image_service as service
 from ironic.common import keystone
+from ironic.common import states
 from ironic.common import utils
+from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
 from ironic.drivers import utils as driver_utils
@@ -275,23 +278,31 @@ def continue_deploy(task, **kwargs):
     :param kwargs: the kwargs to be passed to deploy.
     :raises: InvalidState if the event is not allowed by the associated
              state machine.
-    :returns: a dictionary containing some identifiers for the deployed
-        image. If it's partition image, then it returns root uuid and efi
-        system partition uuid (if boot mode is uefi).  If it's whole disk
-        image, it returns disk identifier. On error cases, it returns an
-        empty dictionary.
+    :returns: a dictionary containing the following keys:
+        For partition image:
+            'root uuid': UUID of root partition
+            'efi system partition uuid': UUID of the uefi system partition
+                                         (if boot mode is uefi).
+            NOTE: If key exists but value is None, it means partition doesn't
+                  exist.
+        For whole disk image:
+            'disk identifier': ID of the disk to which image was deployed.
     """
     node = task.node
 
     params = get_deploy_info(node, **kwargs)
     ramdisk_error = kwargs.get('error')
 
+    def _fail_deploy(task, msg):
+        """Fail the deploy after logging and setting error states."""
+        LOG.error(msg)
+        deploy_utils.set_failed_state(task, msg)
+        destroy_images(task.node.uuid)
+        raise exception.InstanceDeployFailure(msg)
+
     if ramdisk_error:
-        LOG.error(_LE('Error returned from deploy ramdisk: %s'),
-                  ramdisk_error)
-        deploy_utils.set_failed_state(task, _('Failure in deploy ramdisk.'))
-        destroy_images(node.uuid)
-        return {}
+        msg = _('Error returned from deploy ramdisk: %s') % ramdisk_error
+        _fail_deploy(task, msg)
 
     # NOTE(lucasagomes): Let's make sure we don't log the full content
     # of the config drive here because it can be up to 64MB in size,
@@ -311,11 +322,18 @@ def continue_deploy(task, **kwargs):
         else:
             uuid_dict_returned = deploy_utils.deploy_partition_image(**params)
     except Exception as e:
-        LOG.error(_LE('Deploy failed for instance %(instance)s. '
-                      'Error: %(error)s'),
-                  {'instance': node.instance_uuid, 'error': e})
-        deploy_utils.set_failed_state(task, _('Failed to continue '
-                                              'iSCSI deployment.'))
+        msg = (_('Deploy failed for instance %(instance)s. '
+                 'Error: %(error)s') %
+                 {'instance': node.instance_uuid, 'error': e})
+        _fail_deploy(task, msg)
+
+    root_uuid_or_disk_id = uuid_dict_returned.get(
+        'root uuid', uuid_dict_returned.get('disk identifier'))
+    if not root_uuid_or_disk_id:
+        msg = (_("Couldn't determine the UUID of the root "
+                 "partition or the disk identifier after deploying "
+                 "node %s") % node.uuid)
+        _fail_deploy(task, msg)
 
     destroy_images(node.uuid)
     return uuid_dict_returned
@@ -332,10 +350,15 @@ def do_agent_iscsi_deploy(task, agent_client):
     :param agent_client: an instance of agent_client.AgentClient
         which will be used during iscsi deploy (for exposing node's
         target disk via iSCSI, for install boot loader, etc).
-    :returns: a dictionary containing some identifiers for the deployed
-        image. If it's partition image, then it returns root uuid and efi
-        system partition uuid (if boot mode is uefi).  If it's whole disk
-        image, it returns disk identifier.
+    :returns: a dictionary containing the following keys:
+        For partition image:
+            'root uuid': UUID of root partition
+            'efi system partition uuid': UUID of the uefi system partition
+                                         (if boot mode is uefi).
+            NOTE: If key exists but value is None, it means partition doesn't
+                  exist.
+        For whole disk image:
+            'disk identifier': ID of the disk to which image was deployed.
     :raises: InstanceDeployFailure, if it encounters some error
         during the deploy.
     """
@@ -367,12 +390,6 @@ def do_agent_iscsi_deploy(task, agent_client):
     uuid_dict_returned = continue_deploy(task, **iscsi_params)
     root_uuid_or_disk_id = uuid_dict_returned.get(
         'root uuid', uuid_dict_returned.get('disk identifier'))
-    if not root_uuid_or_disk_id:
-        msg = (_("Couldn't determine the UUID of the root "
-                 "partition or the disk identifier when deploying "
-                 "node %s") % node.uuid)
-        deploy_utils.set_failed_state(task, msg)
-        raise exception.InstanceDeployFailure(reason=msg)
 
     # TODO(lucasagomes): Move this bit saving the root_uuid to
     # iscsi_deploy.continue_deploy()
@@ -403,9 +420,9 @@ def _get_boot_mode(node):
     :param node: A single Node.
     :returns: A string representing the boot mode type. Defaults to 'bios'.
     """
-    boot_mode = driver_utils.get_node_capability(node, 'boot_mode')
+    boot_mode = deploy_utils.get_boot_mode_for_deploy(node)
     if boot_mode:
-        return boot_mode.lower()
+        return boot_mode
     return "bios"
 
 
@@ -430,14 +447,23 @@ def build_deploy_ramdisk_options(node):
     node.instance_info = i_info
     node.save()
 
+    # XXX(jroll) DIB relies on boot_option=local to decide whether or not to
+    # lay down a bootloader. Hack this for now; fix it for real in Liberty.
+    # See also bug #1441556.
+    boot_option = get_boot_option(node)
+    if node.driver_internal_info.get('is_whole_disk_image'):
+        boot_option = 'netboot'
+
     deploy_options = {
         'deployment_id': node['uuid'],
         'deployment_key': deploy_key,
         'iscsi_target_iqn': "iqn-%s" % node.uuid,
         'ironic_api_url': ironic_api,
         'disk': CONF.pxe.disk_devices,
-        'boot_option': get_boot_option(node),
+        'boot_option': boot_option,
         'boot_mode': _get_boot_mode(node),
+        # NOTE: The below entry is a temporary workaround for bug/1433812
+        'coreos.configdrive': 0,
     }
 
     root_device = deploy_utils.parse_root_device_hints(node)
@@ -524,3 +550,87 @@ def validate(task):
 
     # Validate the root device hints
     deploy_utils.parse_root_device_hints(node)
+
+
+def validate_pass_bootloader_info_input(task, input_params):
+    """Validates the input sent with bootloader install info passthru.
+
+    This method validates the input sent with bootloader install info
+    passthru.
+
+    :param task: A TaskManager object.
+    :param input_params: A dictionary of params sent as input to passthru.
+    :raises: InvalidParameterValue, if deploy key passed doesn't match the
+        one stored in instance_info.
+    :raises: MissingParameterValue, if some input is missing.
+    """
+    params = {'address': input_params.get('address'),
+              'key': input_params.get('key'),
+              'status': input_params.get('status')}
+    msg = _("Some mandatory input missing in 'pass_bootloader_info' "
+            "vendor passthru from ramdisk.")
+    deploy_utils.check_for_missing_params(params, msg)
+
+    deploy_key = task.node.instance_info['deploy_key']
+    if deploy_key != input_params.get('key'):
+        raise exception.InvalidParameterValue(
+            _("Deploy key %(key_sent)s does not match "
+              "with %(expected_key)s") %
+            {'key_sent': input_params.get('key'), 'expected_key': deploy_key})
+
+
+def validate_bootloader_install_status(task, input_params):
+    """Validate if bootloader was installed.
+
+    This method first validates if deploy key sent in vendor passthru
+    was correct one, and then validates whether bootloader installation
+    was successful or not.
+
+    :param task: A TaskManager object.
+    :param input_params: A dictionary of params sent as input to passthru.
+    :raises: InstanceDeployFailure, if bootloader installation was
+        reported from ramdisk as failure.
+    """
+    if input_params['status'] != 'SUCCEEDED':
+        msg = (_('Failed to install bootloader on node %(node)s. '
+                 'Error: %(error)s.') %
+               {'node': task.node.uuid, 'error': input_params.get('error')})
+        LOG.error(msg)
+        deploy_utils.set_failed_state(task, msg)
+        raise exception.InstanceDeployFailure(msg)
+
+
+def finish_deploy(task, address):
+    """Notifies the ramdisk to reboot the node and makes the instance active.
+
+    This method notifies the ramdisk to proceed to reboot and then
+    makes the instance active.
+
+    :param task: a TaskManager object.
+    :param address: The IP address of the bare metal node.
+    :raises: InstanceDeployFailure, if notifying ramdisk failed.
+    """
+    node = task.node
+    try:
+        deploy_utils.notify_ramdisk_to_proceed(address)
+    except Exception as e:
+        LOG.error(_LE('Deploy failed for instance %(instance)s. '
+                      'Error: %(error)s'),
+                  {'instance': node.instance_uuid, 'error': e})
+        msg = (_('Failed to notify ramdisk to reboot after bootloader '
+                 'installation. Error: %s') % e)
+        deploy_utils.set_failed_state(task, msg)
+        raise exception.InstanceDeployFailure(msg)
+
+    # TODO(lucasagomes): When deploying a node with the DIB ramdisk
+    # Ironic will not power control the node at the end of the deployment,
+    # it's the DIB ramdisk that reboots the node. But, for the SSH driver
+    # some changes like setting the boot device only gets applied when the
+    # machine is powered off and on again. So the code below is enforcing
+    # it. For Liberty we need to change the DIB ramdisk so that Ironic
+    # always controls the power state of the node for all drivers.
+    if get_boot_option(node) == "local" and 'ssh' in node.driver:
+        manager_utils.node_power_action(task, states.REBOOT)
+
+    LOG.info(_LI('Deployment to node %s done'), node.uuid)
+    task.process_event('done')

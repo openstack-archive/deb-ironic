@@ -48,6 +48,7 @@ class TestAgentMethods(db_base.DbTestCase):
         options = agent.build_agent_options(self.node)
         self.assertEqual('api-url', options['ipa-api-url'])
         self.assertEqual('fake_agent', options['ipa-driver-name'])
+        self.assertEqual(0, options['coreos.configdrive'])
 
     @mock.patch.object(keystone, 'get_service_url')
     def test_build_agent_options_keystone(self, get_url_mock):
@@ -57,6 +58,7 @@ class TestAgentMethods(db_base.DbTestCase):
         options = agent.build_agent_options(self.node)
         self.assertEqual('api-url', options['ipa-api-url'])
         self.assertEqual('fake_agent', options['ipa-driver-name'])
+        self.assertEqual(0, options['coreos.configdrive'])
 
     def test_build_agent_options_root_device_hints(self):
         self.config(api_url='api-url', group='conductor')
@@ -162,6 +164,14 @@ class TestAgentDeploy(db_base.DbTestCase):
         self.assertIn('driver_info.deploy_ramdisk', str(e))
         self.assertIn('driver_info.deploy_kernel', str(e))
 
+    def test_validate_driver_info_manage_tftp_false(self):
+        self.config(manage_tftp=False, group='agent')
+        self.node.driver_info = {}
+        self.node.save()
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            self.driver.validate(task)
+
     def test_validate_instance_info_missing_params(self):
         self.node.instance_info = {}
         self.node.save()
@@ -183,12 +193,50 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.assertRaises(exception.MissingParameterValue,
                               self.driver.validate, task)
 
+    def test_validate_agent_fail_partition_image(self):
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            task.node.driver_internal_info['is_whole_disk_image'] = False
+            self.assertRaises(exception.InvalidParameterValue,
+                              self.driver.validate, task)
+
     def test_validate_invalid_root_device_hints(self):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             task.node.properties['root_device'] = {'size': 'not-int'}
             self.assertRaises(exception.InvalidParameterValue,
                               task.driver.deploy.validate, task)
+
+    @mock.patch.object(agent, '_cache_tftp_images')
+    @mock.patch.object(pxe_utils, 'create_pxe_config')
+    @mock.patch.object(agent, '_build_pxe_config_options')
+    @mock.patch.object(agent, '_get_tftp_image_info')
+    def test__prepare_pxe_boot(self, pxe_info_mock, options_mock,
+                               create_mock, cache_mock):
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            agent._prepare_pxe_boot(task)
+            pxe_info_mock.assert_called_once_with(task.node)
+            options_mock.assert_called_once_with(task.node, mock.ANY)
+            create_mock.assert_called_once_with(
+                task, mock.ANY, CONF.agent.agent_pxe_config_template)
+            cache_mock.assert_called_once_with(task.context, task.node,
+                                               mock.ANY)
+
+    @mock.patch.object(agent, '_cache_tftp_images')
+    @mock.patch.object(pxe_utils, 'create_pxe_config')
+    @mock.patch.object(agent, '_build_pxe_config_options')
+    @mock.patch.object(agent, '_get_tftp_image_info')
+    def test__prepare_pxe_boot_manage_tftp_false(
+            self, pxe_info_mock, options_mock, create_mock, cache_mock):
+        self.config(manage_tftp=False, group='agent')
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            agent._prepare_pxe_boot(task)
+        self.assertFalse(pxe_info_mock.called)
+        self.assertFalse(options_mock.called)
+        self.assertFalse(create_mock.called)
+        self.assertFalse(cache_mock.called)
 
     @mock.patch.object(dhcp_factory.DHCPFactory, 'update_dhcp')
     @mock.patch('ironic.conductor.utils.node_set_boot_device')
@@ -212,6 +260,36 @@ class TestAgentDeploy(db_base.DbTestCase):
             power_mock.assert_called_once_with(task, states.POWER_OFF)
             self.assertEqual(driver_return, states.DELETED)
 
+    @mock.patch.object(pxe_utils, 'clean_up_pxe_config')
+    @mock.patch.object(agent, 'AgentTFTPImageCache')
+    @mock.patch('ironic.common.utils.unlink_without_raise')
+    @mock.patch.object(agent, '_get_tftp_image_info')
+    def test__clean_up_pxe(self, info_mock, unlink_mock, cache_mock,
+                           clean_mock):
+        info_mock.return_value = {'label': ['fake1', 'fake2']}
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            agent._clean_up_pxe(task)
+            info_mock.assert_called_once_with(task.node)
+            unlink_mock.assert_called_once_with('fake2')
+            clean_mock.assert_called_once_with(task)
+
+    @mock.patch.object(pxe_utils, 'clean_up_pxe_config')
+    @mock.patch.object(agent.AgentTFTPImageCache, 'clean_up')
+    @mock.patch('ironic.common.utils.unlink_without_raise')
+    @mock.patch.object(agent, '_get_tftp_image_info')
+    def test__clean_up_pxe_manage_tftp_false(
+            self, info_mock, unlink_mock, cache_mock, clean_mock):
+        self.config(manage_tftp=False, group='agent')
+        info_mock.return_value = {'label': ['fake1', 'fake2']}
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            agent._clean_up_pxe(task)
+            self.assertFalse(info_mock.called)
+            self.assertFalse(unlink_mock.called)
+            self.assertFalse(cache_mock.called)
+            self.assertFalse(clean_mock.called)
+
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports')
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.create_cleaning_ports')
     @mock.patch('ironic.drivers.modules.agent._do_pxe_boot')
@@ -226,8 +304,8 @@ class TestAgentDeploy(db_base.DbTestCase):
                              self.driver.prepare_cleaning(task))
             prepare_mock.assert_called_once_with(task)
             boot_mock.assert_called_once_with(task, ports)
-            create_mock.assert_called_once()
-            delete_mock.assert_called_once()
+            create_mock.assert_called_once_with(task)
+            delete_mock.assert_called_once_with(task)
 
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports')
     @mock.patch('ironic.drivers.modules.agent._clean_up_pxe')
@@ -238,7 +316,7 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.assertIsNone(self.driver.tear_down_cleaning(task))
             power_mock.assert_called_once_with(task, states.POWER_OFF)
             cleanup_mock.assert_called_once_with(task)
-            neutron_mock.assert_called_once()
+            neutron_mock.assert_called_once_with(task)
 
     @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps')
     def test_get_clean_steps(self, mock_get_clean_steps):
@@ -254,10 +332,11 @@ class TestAgentDeploy(db_base.DbTestCase):
     @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps')
     def test_get_clean_steps_config_priority(self, mock_get_clean_steps):
         # Test that we can override the priority of get clean steps
-        self.config(agent_erase_devices_priority=20, group='agent')
+        # Use 0 because it is an edge case (false-y) and used in devstack
+        self.config(agent_erase_devices_priority=0, group='agent')
         mock_steps = [{'priority': 10, 'interface': 'deploy',
                        'step': 'erase_devices'}]
-        expected_steps = [{'priority': 20, 'interface': 'deploy',
+        expected_steps = [{'priority': 0, 'interface': 'deploy',
                            'step': 'erase_devices'}]
         mock_get_clean_steps.return_value = mock_steps
         with task_manager.acquire(self.context, self.node.uuid) as task:
@@ -335,9 +414,9 @@ class TestAgentVendor(db_base.DbTestCase):
     @mock.patch('ironic.conductor.utils.node_power_action')
     @mock.patch('ironic.conductor.utils.node_set_boot_device')
     @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '._check_deploy_success')
+                '.check_deploy_success')
     def test_reboot_to_instance(self, check_deploy_mock, bootdev_mock,
-                                 power_mock):
+                                power_mock):
         check_deploy_mock.return_value = None
 
         self.node.provision_state = states.DEPLOYING
@@ -399,6 +478,7 @@ class TestAgentVendor(db_base.DbTestCase):
                     'deployment_ari_path': 'fake-node/deploy_ramdisk',
                     'ipa-api-url': 'api-url',
                     'ipa-driver-name': u'fake_agent',
+                    'coreos.configdrive': 0,
                     'pxe_append_params': 'foo bar'}
 
         if root_device_hints:

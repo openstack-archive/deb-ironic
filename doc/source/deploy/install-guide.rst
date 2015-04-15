@@ -4,8 +4,9 @@
 Bare Metal Service Installation Guide
 =====================================
 
-This document pertains to the Juno (2014.2) release of OpenStack.  Users of
-earlier releases may encounter some differences in configuration of services.
+This document pertains to the Kilo (2015.1) release of OpenStack Ironic.  Users
+of earlier releases may encounter differences, and are encouraged to look at
+earlier versions of this document for guidance.
 
 
 Service Overview
@@ -14,23 +15,33 @@ Service Overview
 The Bare Metal Service is a collection of components that provides support to
 manage and provision physical machines.
 
-Also known as the ``ironic`` project, the Bare Metal Service interacts with
-several other OpenStack services such as:
+Also known as the ``Ironic`` project, the Bare Metal Service may, depending
+upon configuration, interact with several other OpenStack services. This
+includes:
 
-- the Identity Service (keystone) for request authentication and to
+- the Telemetry (Ceilometer) for consuming the IPMI metrics
+- the Identity Service (Keystone) for request authentication and to
   locate other OpenStack services
-- the Image Service (glance) from which to retrieve images
-- the Networking Service (neutron) for DHCP and network configuration
-- the Compute Service (nova), which leverages the Bare Metal Service to
-  manage compute instances on bare metal.
+- the Image Service (Glance) from which to retrieve images and image meta-data
+- the Networking Service (Neutron) for DHCP and network configuration
+- the Compute Service (Nova) works with Ironic and acts as a user-facing API
+  for instance management, while Ironic provides the admin/operator API for
+  hardware management. Nova also provides scheduling facilities (matching
+  flavors <-> images <-> hardware), tenant quotas, IP assignment, and other
+  services which Ironic does not, in and of itself, provide.
+
+- the Block Storage (Cinder) will provide volumes, but the aspect is not yet available.
 
 The Bare Metal Service includes the following components:
 
-- ironic-api. A RESTful API that processes application requests by sending
+- ironic-api: A RESTful API that processes application requests by sending
   them to the ironic-conductor over RPC.
-- ironic-conductor. Adds/edits/deletes nodes; powers on/off nodes with
+- ironic-conductor: Adds/edits/deletes nodes; powers on/off nodes with
   ipmi or ssh; provisions/deploys/decommissions bare metal nodes.
-- Ironic client. A command-line interface (CLI) for interacting with
+- ironic-python-agent: A python service which is run in a temporary ramdisk to
+  provide ironic-conductor service(s) with remote access and in-band hardware
+  control.
+- python-ironicclient: A command-line interface (CLI) for interacting with
   the Bare Metal Service.
 
 Additionally, the Bare Metal Service has certain external dependencies, which are
@@ -43,6 +54,20 @@ very similar to other OpenStack Services:
   metadata) from users.
 - A queue. A central hub for passing messages. It should use the same
   implementation as that of the Compute Service (typically RabbitMQ).
+
+Optionally, one may wish to utilize the following associated projects for
+additional functionality:
+
+- ironic-discoverd_; An associated service which performs in-band hardware
+  introspection by PXE booting unregistered hardware into a "discovery ramdisk".
+- diskimage-builder_; May be used to customize machine images, create and
+  discovery deploy ramdisks, if necessary.
+.. _ironic-discoverd: https://github.com/stackforge/ironic-discoverd
+.. _diskimage-builder: https://github.com/openstack/diskimage-builder
+
+
+.. todo: include coreos-image-builder reference here, once the split is done
+
 
 Install and Configure Prerequisites
 ===================================
@@ -644,16 +669,17 @@ node(s) where ``ironic-conductor`` is running.
     echo 'r ^([^/]) /tftpboot/\1' > /tftpboot/map-file
     echo 'r ^(/tftpboot/) /tftpboot/\2' >> /tftpboot/map-file
 
+#. Enable tftp map file, modify ``/etc/xinetd.d/tftp`` as below and restart xinetd
+   service::
+
+    server_args = -v -v -v -v -v --map-file /tftpboot/map-file /tftpboot
+
 .. [1] On **Fedora/RHEL** the ``syslinux-tftpboot`` package already install
        the library modules and PXE image at ``/tftpboot``. If the TFTP server
        is configured to listen to a different directory you should copy the
        contents of ``/tftpboot`` to the configured directory
 .. [2] http://www.syslinux.org/wiki/index.php/Library_modules
 
-#. Enable tftp map file, modify ``/etc/xinetd.d/tftp`` as below and restart xinetd
-   service::
-
-   server_args = -v -v -v -v -v --map-file /tftpboot/map-file /tftpboot
 
 PXE UEFI Setup
 --------------
@@ -873,12 +899,68 @@ The boot modes can be configured in Ironic in the following way:
   the ``boot_mode`` set appropriately in ``properties/capabilities``. It will
   filter out rest of the nodes.
 
-  The above facility for matching in Nova can be used in heterogenous
+  The above facility for matching in Nova can be used in heterogeneous
   environments where there is a mix of ``uefi`` and ``bios`` machines, and
   operator wants to provide a choice to the user regarding boot modes. If
   the flavor doesn't contain ``boot_mode`` and ``boot_mode`` is configured for
   Ironic nodes, then Nova scheduler will consider all nodes and user may get
   either ``bios`` or ``uefi`` machine.
+
+
+Local boot with partition images
+================================
+
+Starting with the Kilo release, Ironic supports local boot with partition
+images, meaning that after the deployment the node's subsequent reboots
+won't happen via PXE or Virtual Media. Instead, it will boot from a
+local boot loader installed on the disk.
+
+It's important to note that in order for this to work the image being
+deployed with Ironic **must** contain ``grub2`` installed within it.
+
+Enabling the local boot is different when Ironic is used with Nova and
+without it. The following sections will describe both methods.
+
+.. note::
+   The local boot feature is dependent upon a updated deploy ramdisk built
+   with diskimage-builder_ **version >= 0.1.42** or ironic-python-agent_
+   in the kilo-era.
+
+.. _diskimage-builder: https://github.com/openstack/diskimage-builder
+.. _ironic-python-agent: https://github.com/openstack/ironic-python-agent
+
+
+Enabling local boot with Nova
+-----------------------------
+
+To enable local boot we need to set a capability on the Ironic node, e.g::
+
+    ironic node-update <node-uuid> add properties/capabilities="boot_option:local"
+
+
+Nodes having ``boot_option`` set to ``local`` may be requested by adding
+an ``extra_spec`` to the Nova flavor, e.g::
+
+    nova flavor-key baremetal set capabilities:boot_option="local"
+
+
+.. note::
+    If the node is configured to use ``UEFI``, Ironic will create an ``EFI
+    partition`` on the disk and switch the partition table format to
+    ``gpt``. The ``EFI partition`` will be used later by the boot loader
+    (which is installed from the deploy ramdisk).
+
+
+Enabling local boot without Nova
+--------------------------------
+
+Since adding ``capabilities`` to the node's properties is only used by
+the Nova scheduler to perform more advanced scheduling of instances,
+we need a way to enable local boot when Nova is not present. To do that
+we can simply specify the capability via the ``instance_info`` attribute
+of the node, e.g::
+
+    ironic node-update <node-uuid> add instance_info/capabilities='{"boot_option": "local"}'
 
 
 Enrollment
@@ -1035,12 +1117,64 @@ by an operator. There are two kinds of inspection supported by Ironic:
   being run on a separate host from the ironic-conductor service, or is using
   non-standard port.
 
+  In order to ensure that ports in Ironic are synchronized with NIC ports on
+  the node, the following settings in the ironic-discoverd configuration file
+  must be set::
+
+    [discoverd]
+    add_ports = all
+    keep_ports = present
+
+  (requires ironic-discoverd of version 1.1.0 or higher). Note that in this
+  case an operator is responsible for deleting ports that can't be actually
+  used by Ironic, see `bug 1405131
+  <https://bugs.launchpad.net/ironic/+bug/1405131>`_ for explanation.
+
 .. _ironic-discoverd: https://github.com/stackforge/ironic-discoverd
+
+
+Specifying the disk for deployment
+==================================
+
+Starting with the Kilo release, Ironic supports passing hints to the
+deploy ramdisk about which disk it should pick for the deployment. In
+Linux when a server has more than one SATA, SCSI or IDE disk controller,
+the order in which their corresponding device nodes are added is arbitrary
+[`link`_], resulting in devices like ``/dev/sda`` and ``/dev/sdb`` to
+switch around between reboots. Therefore, to guarantee that a specific
+disk is always chosen for the deployment, Ironic introduced root device
+hints.
+
+The list of support hints is:
+
+* model (STRING): device identifier
+* vendor (STRING): device vendor
+* serial (STRING): disk serial number
+* wwn (STRING): unique storage identifier
+* size (INT): size of the device in GiB
+
+To associate one or more hints with a node, update the node's properties
+with a ``root_device`` key, e.g::
+
+    ironic node-update <node-uuid> add properties/root_device='{"wwn": "0x4000cca77fc4dba1"}'
+
+
+That will guarantee that Ironic will pick the disk device that has the
+``wwn`` equal to the specified wwn value, or fail the deployment if it
+can not be found.
+
+.. note::
+    If multiple hints are specified, a device must satisfy all the hints.
+
+
+.. _`link`: https://access.redhat.com/documentation/en-US/Red_Hat_Enterprise_Linux/7/html/Storage_Administration_Guide/persistent_naming.html
+
 
 Using Ironic as a standalone service
 ====================================
 
-It's possible to use Ironic without other OpenStack services.
+Starting with Kilo release, it's possible to use Ironic without other
+OpenStack services.
 
 You should make the following changes to ``/etc/ironic/ironic.conf``:
 
@@ -1081,7 +1215,7 @@ There are however some limitations for different drivers:
 * If you're using one of the drivers that use agent deploy method (namely,
   ``agent_ilo``, ``agent_ipmitool``, ``agent_pyghmi``, ``agent_ssh`` or
   ``agent_vbox``) you have to know MD5 checksum for your instance image. To
-  compute it, you can use the follwoing command::
+  compute it, you can use the following command::
 
    md5sum image.qcow2
    ed82def8730f394fb85aef8a208635f6  image.qcow2
@@ -1183,6 +1317,117 @@ For iLO drivers, fields that should be provided are:
    content under hrefs that are specified. I.e., if the content under
    "http://my.server.net/images/deploy.ramdisk" changes, Ironic does not know
    about that and does not redownload the content.
+
+
+Other references
+----------------
+
+* `Enabling local boot without Nova`_
+
+
+Enabling the configuration drive (configdrive)
+==============================================
+
+Starting with the Kilo release, Ironic supports exposing a configuration
+drive image to the instances.
+
+The configuration drive is usually used in conjunction with Nova, but
+Ironic also offers a standalone way of using it. The following sections
+will describe both methods.
+
+
+When used with Nova
+-------------------
+
+To enable the configuration drive when deploying an instance, pass
+``--config-drive true`` parameter to the ``nova boot`` command, e.g::
+
+    nova boot --config-drive true --flavor baremetal --image test-image instance-1
+
+It's also possible to enable the configuration drive automatically on
+all instances by configuring the ``Nova Compute service`` to always
+create a configuration drive by setting the following option in the
+``/etc/nova/nova.conf`` file, e.g::
+
+    [DEFAULT]
+    ...
+
+    force_config_drive=always
+
+
+When used standalone
+--------------------
+
+When used without Nova, the operator needs to create a configuration drive
+and provide the file or HTTP URL to Ironic.
+
+For the format of the configuration drive, Ironic expects a ``gzipped``
+and ``base64`` encoded ISO 9660 [*]_ file with a ``config-2`` label. The
+`Ironic client <https://github.com/openstack/python-ironicclient>`_
+can generate a configuration drive in the expected format. Just pass a
+directory path containing the files that will be injected into it via the
+``--config-drive`` parameter of the ``node-set-provision-state`` command,
+e.g::
+
+    ironic node-set-provision-state --config-drive /dir/configdrive_files $node_identifier active
+
+
+Accessing the configuration drive data
+--------------------------------------
+
+When the configuration drive is enabled, Ironic will create a partition on the
+instance disk and write the configuration drive image onto it. The
+configuration drive must be mounted before use. This is performed
+automatically by many tools, such as cloud-init and cloudbase-init. To mount
+it manually on a Linux distribution that supports accessing devices by labels,
+simply run the following::
+
+    mkdir -p /mnt/config
+    mount /dev/disk/by-label/config-2 /mnt/config
+
+
+If the guest OS doesn't support accessing devices by labels, you can use
+other tools such as ``blkid`` to identify which device corresponds to
+the configuration drive and mount it, e.g::
+
+    CONFIG_DEV=$(blkid -t LABEL="config-2" -odevice)
+    mkdir -p /mnt/config
+    mount $CONFIG_DEV /mnt/config
+
+
+.. [*] A config drive could also be a data block with a VFAT filesystem
+       on it instead of ISO 9660. But it's unlikely that it would be needed
+       since ISO 9660 is widely supported across operating systems.
+
+
+Cloud-init integration
+----------------------
+
+The configuration drive can be especially
+useful when used with ``cloud-init`` [`link
+<http://cloudinit.readthedocs.org/en/latest/topics/datasources.html#config-drive>`_],
+but in order to use it we should follow some rules:
+
+* ``Cloud-init`` expects a specific format to the data. For
+  more information about the expected file layout see [`link
+  <http://docs.openstack.org/user-guide/content/enable_config_drive.html#config_drive_contents>`_].
+
+
+* Since Ironic uses a disk partition as the configuration drive,
+  it will only work with ``cloud-init`` version **>= 0.7.5** [`link
+  <http://bazaar.launchpad.net/~cloud-init-dev/cloud-init/trunk/view/head:/ChangeLog>`_].
+
+
+* ``Cloud-init`` has a collection of data source modules, so when
+  building the image with `disk-image-builder`_ we have to define
+  ``DIB_CLOUD_INIT_DATASOURCES`` environment variable and set the
+  appropriate sources to enable the configuration drive, e.g::
+
+    DIB_CLOUD_INIT_DATASOURCES="ConfigDrive, OpenStack" disk-image-create -o fedora-cloud-image fedora baremetal
+
+  See [`link
+  <http://docs.openstack.org/developer/diskimage-builder/elements/cloud-init-datasources/README.html>`_]
+  for more information.
 
 
 Troubleshooting

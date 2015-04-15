@@ -169,7 +169,7 @@ conductor_opts = [
                    help='Timeout (seconds) for waiting for node inspection. '
                         '0 - unlimited.'),
         cfg.BoolOpt('clean_nodes',
-                    default=False,
+                    default=True,
                     help='Cleaning is a configurable set of steps, such as '
                          'erasing disk drives, that are performed on the node '
                          'to ensure it is in a baseline state and ready to be '
@@ -182,11 +182,9 @@ conductor_opts = [
                          'driver\'s documentation for details. '
                          'NOTE: The introduction of the cleaning operation '
                          'causes instance deletion to take significantly '
-                         'longer. While this provides a better and more '
-                         'secure user experience, it does impact the service '
-                         'behavior, and as such IS DISABLED BY DEFAULT until '
-                         'consuming services (eg, Nova) have been updated to '
-                         'accomodate the additional time for deletion.'),
+                         'longer. In an environment where all tenants are '
+                         'trusted (eg, because there is only one tenant), '
+                         'this option could be safely disabled.'),
 ]
 CONF = cfg.CONF
 CONF.register_opts(conductor_opts, 'conductor')
@@ -206,7 +204,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
     """Ironic Conductor manager main class."""
 
     # NOTE(rloo): This must be in sync with rpcapi.ConductorAPI's.
-    RPC_API_VERSION = '1.26'
+    RPC_API_VERSION = '1.27'
 
     target = messaging.Target(version=RPC_API_VERSION)
 
@@ -717,7 +715,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
             # Infer the image type to make sure the deploy driver
             # validates only the necessary variables for different
             # image types.
-            # NOTE(sirushtim): The iwdi variable can be None. It's upto
+            # NOTE(sirushtim): The iwdi variable can be None. It's up to
             # the deploy driver to validate this.
             iwdi = images.is_whole_disk_image(context, node.instance_info)
             driver_internal_info['is_whole_disk_image'] = iwdi
@@ -826,10 +824,6 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 state=node.provision_state)
         self._do_node_clean(task)
 
-    @messaging.expected_exceptions(exception.NoFreeConductorWorker,
-                                   exception.NodeLocked,
-                                   exception.InvalidStateRequested,
-                                   exception.NodeNotFound)
     def continue_node_clean(self, context, node_id):
         """RPC method to continue cleaning a node.
 
@@ -1072,7 +1066,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
                         node.maintenance or node.reservation is not None):
                     continue
 
-                with task_manager.acquire(context, node_id) as task:
+                with task_manager.acquire(context, node_uuid) as task:
                     if (task.node.provision_state == states.DEPLOYWAIT or
                             task.node.maintenance):
                         continue
@@ -1155,7 +1149,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
 
             # Node is mapped here, but not updated by this conductor last
             try:
-                with task_manager.acquire(admin_context, node_id) as task:
+                with task_manager.acquire(admin_context, node_uuid) as task:
                     # NOTE(deva): now that we have the lock, check again to
                     # avoid racing with deletes and other state changes
                     node = task.node
@@ -1986,6 +1980,7 @@ def do_sync_power_state(task, count):
                          {'node': node.uuid, 'state': power_state})
             node.power_state = power_state
             node.save()
+            return 0
 
     # If the node is now in the expected state, reset the counter
     # otherwise, if we've exceeded the retry limit, stop here

@@ -144,33 +144,6 @@ def get_node_capability(node, capability):
                 "Format should be 'key:val'."), node_capability)
 
 
-def rm_node_capability(task, capability):
-    """Remove 'capability' from node's 'capabilities' property.
-
-    :param task: Task object.
-    :param capability: Capability key.
-
-    """
-    node = task.node
-    properties = node.properties
-    capabilities = properties.get('capabilities')
-
-    if not capabilities:
-        return
-
-    caps = []
-    for cap in capabilities.split(','):
-        parts = cap.split(':')
-        if len(parts) == 2 and parts[0] and parts[1]:
-            if parts[0] == capability:
-                continue
-        caps.append(cap)
-    new_cap_str = ",".join(caps)
-    properties['capabilities'] = new_cap_str if new_cap_str else None
-    node.properties = properties
-    node.save()
-
-
 def add_node_capability(task, capability, value):
     """Add 'capability' to node's 'capabilities' property.
 

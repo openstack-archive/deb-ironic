@@ -73,10 +73,6 @@ LOG = logging.getLogger(__name__)
 VALID_ROOT_DEVICE_HINTS = set(('size', 'model', 'wwn', 'serial', 'vendor'))
 
 
-def _get_agent_client():
-    return agent_client.AgentClient()
-
-
 # All functions are called from deploy() directly or indirectly.
 # They are split for stub-out.
 
@@ -563,8 +559,12 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
                         or configdrive HTTP URL.
     :param boot_option: Can be "local" or "netboot". "netboot" by default.
     :param boot_mode: Can be "bios" or "uefi". "bios" by default.
-    :returns: a dictionary containing the UUID of root partition and efi system
-        partition (if boot mode is uefi).
+    :returns: a dictionary containing the following keys:
+        'root uuid': UUID of root partition
+        'efi system partition uuid': UUID of the uefi system partition
+                                     (if boot mode is uefi).
+        NOTE: If key exists but value is None, it means partition doesn't
+              exist.
     """
     # the only way for preserve_ephemeral to be set to true is if we are
     # rebuilding an instance with --preserve_ephemeral.
@@ -673,8 +673,12 @@ def deploy_partition_image(address, port, iqn, lun, image_path,
                         or configdrive HTTP URL.
     :param boot_option: Can be "local" or "netboot". "netboot" by default.
     :param boot_mode: Can be "bios" or "uefi". "bios" by default.
-    :returns: a dictionary containing the UUID of root partition and efi system
-        partition (if boot mode is uefi).
+    :returns: a dictionary containing the following keys:
+        'root uuid': UUID of root partition
+        'efi system partition uuid': UUID of the uefi system partition
+                                     (if boot mode is uefi).
+        NOTE: If key exists but value is None, it means partition doesn't
+              exist.
     """
     with _iscsi_setup_and_handle_errors(address, port, iqn,
                                         lun, image_path) as dev:
@@ -702,7 +706,8 @@ def deploy_disk_image(address, port, iqn, lun,
     :param image_path: Path for the instance's disk image.
     :param node_uuid: node's uuid. Used for logging. Currently not in use
         by this function but could be used in the future.
-    :returns: a dictionary containing the disk identifier for the disk.
+    :returns: a dictionary containing the key 'disk identifier' to identify
+        the disk which was used for deployment.
     """
     with _iscsi_setup_and_handle_errors(address, port, iqn,
                                         lun, image_path) as dev:
@@ -746,8 +751,14 @@ def _iscsi_setup_and_handle_errors(address, port, iqn, lun,
         delete_iscsi(address, port, iqn)
 
 
-def notify_deploy_complete(address):
-    """Notifies the completion of deployment to the baremetal node.
+def notify_ramdisk_to_proceed(address):
+    """Notifies the ramdisk waiting for instructions from Ironic.
+
+    DIB ramdisk (from init script) makes vendor passhthrus and listens
+    on port 10000 for Ironic to notify back the completion of the task.
+    This method connects to port 10000 of the bare metal running the
+    ramdisk and then sends some data to notify the ramdisk to proceed
+    with it's next task.
 
     :param address: The IP address of the node.
     """
@@ -888,7 +899,7 @@ def agent_get_clean_steps(task):
     :raises: NodeCleaningFailure if the agent returns invalid results
     :returns: A list of clean step dictionaries
     """
-    client = _get_agent_client()
+    client = agent_client.AgentClient()
     ports = objects.Port.list_by_node_id(
         task.context, task.node.id)
     result = client.get_clean_steps(task.node, ports).get('command_result')
@@ -899,10 +910,10 @@ def agent_get_clean_steps(task):
             'get_clean_steps for node %(node)s returned invalid result:'
             ' %(result)s') % ({'node': task.node.uuid, 'result': result}))
 
-    driver_info = task.node.driver_internal_info
-    driver_info['hardware_manager_version'] = result[
+    driver_internal_info = task.node.driver_internal_info
+    driver_internal_info['hardware_manager_version'] = result[
         'hardware_manager_version']
-    task.node.driver_internal_info = driver_info
+    task.node.driver_internal_info = driver_internal_info
     task.node.save()
 
     # Clean steps looks like {'HardwareManager': [{step1},{steps2}..]..}
@@ -926,7 +937,7 @@ def agent_execute_clean_step(task, step):
     :raises: NodeCleaningFailure if the agent does not return a command status
     :returns: states.CLEANING to signify the step will be completed async
     """
-    client = _get_agent_client()
+    client = agent_client.AgentClient()
     ports = objects.Port.list_by_node_id(
         task.context, task.node.id)
     result = client.execute_clean_step(step, task.node, ports)
@@ -959,8 +970,7 @@ def try_set_boot_device(task, device, persistent=True):
         manager_utils.node_set_boot_device(task, device,
                                            persistent=persistent)
     except exception.IPMIFailure:
-        if driver_utils.get_node_capability(task.node,
-                                            'boot_mode') == 'uefi':
+        if get_boot_mode_for_deploy(task.node) == 'uefi':
             LOG.warning(_LW("ipmitool is unable to set boot device while "
                             "the node %s is in UEFI boot mode. Please set "
                             "the boot device manually.") % task.node.uuid)
@@ -1013,3 +1023,52 @@ def parse_root_device_hints(node):
         hints.append("%s=%s" % (key, value))
 
     return ','.join(hints)
+
+
+def is_secure_boot_requested(node):
+    """Returns True if secure_boot is requested for deploy.
+
+    This method checks node property for secure_boot and returns True
+    if it is requested.
+
+    :param node: a single Node.
+    :raises: InvalidParameterValue if the capabilities string is not a
+             dictionary or is malformed.
+    :returns: True if secure_boot is requested.
+    """
+
+    capabilities = parse_instance_info_capabilities(node)
+    sec_boot = capabilities.get('secure_boot', 'false').lower()
+
+    return sec_boot == 'true'
+
+
+def get_boot_mode_for_deploy(node):
+    """Returns the boot mode that would be used for deploy.
+
+    This method returns boot mode to be used for deploy.
+    It returns 'uefi' if 'secure_boot' is set to 'true' in
+    'instance_info/capabilities' of node.
+    Otherwise it returns value of 'boot_mode' in 'properties/capabilities'
+    of node if set. If that is not set, it returns boot mode in
+    'instance_info/deploy_boot_mode' for the node.
+    It would return None if boot mode is present neither in 'capabilities' of
+    node 'properties' nor in node's 'instance_info' (which could also be None).
+
+    :param node: an ironic node object.
+    :returns: 'bios', 'uefi' or None
+    """
+
+    if is_secure_boot_requested(node):
+        LOG.debug('Deploy boot mode is uefi for %s.', node.uuid)
+        return 'uefi'
+
+    boot_mode = driver_utils.get_node_capability(node, 'boot_mode')
+    if boot_mode is None:
+        instance_info = node.instance_info
+        boot_mode = instance_info.get('deploy_boot_mode')
+
+    LOG.debug('Deploy boot mode is %(boot_mode)s for %(node)s.',
+              {'boot_mode': boot_mode, 'node': node.uuid})
+
+    return boot_mode.lower() if boot_mode else boot_mode

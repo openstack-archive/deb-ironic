@@ -47,8 +47,8 @@ Conceptual Architecture
 =======================
 
 The following diagram shows the relationships and how all services come into
-play during the provisioning of a physical server. (Note that Swift can be
-used with Ironic, but is missing from this diagram.)
+play during the provisioning of a physical server. (Note that Ceilometer and
+Swift can be used with Ironic, but are missing from this diagram.)
 
 
 .. figure:: ../images/conceptual_architecture.png
@@ -74,7 +74,7 @@ The Ironic service is composed of the following components:
    exposed via the API service. The Conductor and API services communicate
    via RPC.
 
-#. various Drivers that support heterogenous hardware
+#. various Drivers that support heterogeneous hardware
 
 #. a Message Queue
 

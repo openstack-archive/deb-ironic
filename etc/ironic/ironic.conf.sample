@@ -360,6 +360,11 @@
 # set to 0, will not run during cleaning. (integer value)
 #agent_erase_devices_priority=<None>
 
+# Whether Ironic will manage TFTP files for the deploy
+# ramdisks. If set to False, you will need to configure your
+# own TFTP server that allows booting the deploy ramdisks.
+# (boolean value)
+#manage_tftp=true
 
 #
 # Options defined in ironic.drivers.modules.agent_base_vendor
@@ -516,12 +521,10 @@
 # driver that node is managed by; see the individual driver's
 # documentation for details. NOTE: The introduction of the
 # cleaning operation causes instance deletion to take
-# significantly longer. While this provides a better and more
-# secure user experience, it does impact the service behavior,
-# and as such IS DISABLED BY DEFAULT until consuming services
-# (eg, Nova) have been updated to accomodate the additional
-# time for deletion. (boolean value)
-#clean_nodes=false
+# significantly longer. In an environment where all tenants
+# are trusted (eg, because there is only one tenant), this
+# option could be safely disabled. (boolean value)
+#clean_nodes=true
 
 
 [console]
@@ -826,8 +829,9 @@
 # (integer value)
 #glance_num_retries=0
 
-# Default protocol to use when connecting to glance. Set to
-# https for SSL. (string value)
+# Authentication strategy to use when connecting to glance.
+# Only "keystone" and "noauth" are currently supported by
+# ironic. (string value)
 #auth_strategy=keystone
 
 
@@ -1192,6 +1196,23 @@
 #cleaning_network_uuid=<None>
 
 
+[oslo_concurrency]
+
+#
+# Options defined in oslo.concurrency
+#
+
+# Enables or disables inter-process locks. (boolean value)
+#disable_process_locking=false
+
+# Directory to use for lock files.  For security, the
+# specified directory should only be writable by the user
+# running the processes that need locking. Defaults to
+# environment variable OSLO_LOCK_PATH. If external locks are
+# used, a lock path must be set. (string value)
+#lock_path=<None>
+
+
 [oslo_messaging_amqp]
 
 #
@@ -1376,9 +1397,40 @@
 # value)
 #rabbit_ha_queues=false
 
+# Number of seconds after which the Rabbit broker is
+# considered down if heartbeat's keep-alive fails (0 disable
+# the heartbeat). (integer value)
+#heartbeat_timeout_threshold=60
+
+# How often times during the heartbeat_timeout_threshold we
+# check the heartbeat. (integer value)
+#heartbeat_rate=2
+
 # Deprecated, use rpc_backend=kombu+memory or rpc_backend=fake
 # (boolean value)
 #fake_rabbit=false
+
+
+[oslo_policy]
+
+#
+# Options defined in oslo.policy
+#
+
+# The JSON file that defines policies. (string value)
+#policy_file=policy.json
+
+# Default rule. Enforced when a requested rule is not found.
+# (string value)
+#policy_default_rule=default
+
+# Directories where policy configuration files are stored.
+# They can be relative to any directory in the search path
+# defined by the config_dir option, or absolute paths. The
+# file defined by policy_file must exist for these directories
+# to be searched.  Missing or empty directories are ignored.
+# (multi valued)
+#policy_dirs=policy.d
 
 
 [pxe]

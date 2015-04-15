@@ -33,9 +33,6 @@ class DbNodeTestCase(base.DbTestCase):
     def test_create_node(self):
         utils.create_test_node()
 
-    def test_create_node_nullable_chassis_id(self):
-        utils.create_test_node(chassis_id=None)
-
     def test_create_node_already_exists(self):
         utils.create_test_node()
         self.assertRaises(exception.NodeAlreadyExists,
@@ -139,7 +136,7 @@ class DbNodeTestCase(base.DbTestCase):
         res = self.dbapi.get_node_list(filters={'maintenance': False})
         self.assertEqual([node1.id], [r.id for r in res])
 
-    @mock.patch.object(timeutils, 'utcnow')
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
     def test_get_nodeinfo_list_provision(self, mock_utcnow):
         past = datetime.datetime(2000, 1, 1, 0, 0)
         next = past + datetime.timedelta(minutes=8)
@@ -164,7 +161,7 @@ class DbNodeTestCase(base.DbTestCase):
                                                     states.DEPLOYWAIT})
         self.assertEqual([node2.id], [r[0] for r in res])
 
-    @mock.patch.object(timeutils, 'utcnow')
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
     def test_get_nodeinfo_list_inspection(self, mock_utcnow):
         past = datetime.datetime(2000, 1, 1, 0, 0)
         next = past + datetime.timedelta(minutes=8)
@@ -197,13 +194,11 @@ class DbNodeTestCase(base.DbTestCase):
             uuids.append(six.text_type(node['uuid']))
         res = self.dbapi.get_node_list()
         res_uuids = [r.uuid for r in res]
-        self.assertEqual(uuids.sort(), res_uuids.sort())
+        six.assertCountEqual(self, uuids, res_uuids)
 
     def test_get_node_list_with_filters(self):
-        ch1 = utils.get_test_chassis(id=1, uuid=uuidutils.generate_uuid())
-        ch2 = utils.get_test_chassis(id=2, uuid=uuidutils.generate_uuid())
-        self.dbapi.create_chassis(ch1)
-        self.dbapi.create_chassis(ch2)
+        ch1 = utils.create_test_chassis(uuid=uuidutils.generate_uuid())
+        ch2 = utils.create_test_chassis(uuid=uuidutils.generate_uuid())
 
         node1 = utils.create_test_node(driver='driver-one',
             instance_uuid=uuidutils.generate_uuid(),
@@ -359,7 +354,7 @@ class DbNodeTestCase(base.DbTestCase):
                           node2.id,
                           {'instance_uuid': new_i_uuid})
 
-    @mock.patch.object(timeutils, 'utcnow')
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
     def test_update_node_provision(self, mock_utcnow):
         mocked_time = datetime.datetime(2000, 1, 1, 0, 0)
         mock_utcnow.return_value = mocked_time
@@ -383,7 +378,7 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertIsNone(res['provision_updated_at'])
         self.assertIsNone(res['inspection_started_at'])
 
-    @mock.patch.object(timeutils, 'utcnow')
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
     def test_update_node_inspection_started_at(self, mock_utcnow):
         mocked_time = datetime.datetime(2000, 1, 1, 0, 0)
         mock_utcnow.return_value = mocked_time
@@ -395,7 +390,7 @@ class DbNodeTestCase(base.DbTestCase):
                          timeutils.normalize_time(result))
         self.assertIsNone(res['inspection_finished_at'])
 
-    @mock.patch.object(timeutils, 'utcnow')
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
     def test_update_node_inspection_finished_at(self, mock_utcnow):
         mocked_time = datetime.datetime(2000, 1, 1, 0, 0)
         mock_utcnow.return_value = mocked_time

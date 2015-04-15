@@ -28,7 +28,6 @@ from ironic.common import exception
 from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
-from ironic.common.i18n import _LI
 from ironic.common.i18n import _LW
 from ironic.common import image_service as service
 from ironic.common import keystone
@@ -186,6 +185,11 @@ def _build_pxe_config_options(node, pxe_info, ctx):
         template.
     """
     is_whole_disk_image = node.driver_internal_info.get('is_whole_disk_image')
+    if is_whole_disk_image:
+        # These are dummy values to satisfy elilo.
+        # image and initrd fields in elilo config cannot be blank.
+        kernel = 'no_kernel'
+        ramdisk = 'no_ramdisk'
 
     if CONF.pxe.ipxe_enabled:
         deploy_kernel = '/'.join([CONF.pxe.http_url, node.uuid,
@@ -206,12 +210,10 @@ def _build_pxe_config_options(node, pxe_info, ctx):
         'deployment_aki_path': deploy_kernel,
         'deployment_ari_path': deploy_ramdisk,
         'pxe_append_params': CONF.pxe.pxe_append_params,
-        'tftp_server': CONF.pxe.tftp_server
+        'tftp_server': CONF.pxe.tftp_server,
+        'aki_path': kernel,
+        'ari_path': ramdisk
     }
-
-    if not is_whole_disk_image:
-        pxe_options.update({'aki_path': kernel,
-                            'ari_path': ramdisk})
 
     deploy_ramdisk_options = iscsi_deploy.build_deploy_ramdisk_options(node)
     pxe_options.update(deploy_ramdisk_options)
@@ -228,6 +230,30 @@ def _build_pxe_config_options(node, pxe_info, ctx):
 def _get_token_file_path(node_uuid):
     """Generate the path for PKI token file."""
     return os.path.join(CONF.pxe.tftp_root, 'token-' + node_uuid)
+
+
+def validate_boot_option_for_uefi(node):
+    """In uefi boot mode, validate if the boot option is compatible.
+
+    This method raises exception if whole disk image being deployed
+    in UEFI boot mode without 'boot_option' being set to 'local'.
+
+    :param node: a single Node.
+    :raises: InvalidParameterValue
+    """
+
+    boot_mode = deploy_utils.get_boot_mode_for_deploy(node)
+    boot_option = iscsi_deploy.get_boot_option(node)
+    if (boot_mode == 'uefi' and
+        node.driver_internal_info.get('is_whole_disk_image') and
+        boot_option != 'local'):
+        LOG.error(_LE("Whole disk image with netboot is not supported in UEFI "
+                      "boot mode."))
+        raise exception.InvalidParameterValue(_(
+                    "Conflict: Whole disk image being used for deploy, but "
+                    "cannot be used with node %(node_uuid)s configured to use "
+                    "UEFI boot with netboot option") %
+                    {'node_uuid': node.uuid})
 
 
 @image_cache.cleanup(priority=25)
@@ -327,7 +353,7 @@ class PXEDeploy(base.DeployInterface):
         driver_utils.validate_boot_mode_capability(node)
         driver_utils.validate_boot_option_capability(node)
 
-        boot_mode = driver_utils.get_node_capability(node, 'boot_mode')
+        boot_mode = deploy_utils.get_boot_mode_for_deploy(task.node)
 
         if CONF.pxe.ipxe_enabled:
             if not CONF.pxe.http_url or not CONF.pxe.http_root:
@@ -342,6 +368,10 @@ class PXEDeploy(base.DeployInterface):
                     "Conflict: iPXE is enabled, but cannot be used with node"
                     "%(node_uuid)s configured to use UEFI boot") %
                     {'node_uuid': node.uuid})
+
+        # Check if 'boot_option' is compatible with 'boot_mode' of uefi and
+        # image being deployed
+        validate_boot_option_for_uefi(task.node)
 
         d_info = _parse_deploy_info(node)
 
@@ -417,7 +447,7 @@ class PXEDeploy(base.DeployInterface):
         pxe_options = _build_pxe_config_options(task.node, pxe_info,
                                                 task.context)
 
-        if driver_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
+        if deploy_utils.get_boot_mode_for_deploy(task.node) == 'uefi':
             pxe_config_template = CONF.pxe.uefi_pxe_config_template
         else:
             pxe_config_template = CONF.pxe.pxe_config_template
@@ -455,7 +485,7 @@ class PXEDeploy(base.DeployInterface):
                     task.node.uuid)
                 deploy_utils.switch_pxe_config(
                     pxe_config_path, root_uuid_or_disk_id,
-                    driver_utils.get_node_capability(task.node, 'boot_mode'),
+                    deploy_utils.get_boot_mode_for_deploy(task.node),
                     iwdi)
 
     def clean_up(self, task):
@@ -513,6 +543,7 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
 
         Valid methods:
         * pass_deploy_info
+        * pass_bootloader_install_info
 
         :param task: a TaskManager instance containing the node to act on.
         :param method: method to be validated.
@@ -522,6 +553,30 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
         if method == 'pass_deploy_info':
             driver_utils.validate_boot_option_capability(task.node)
             iscsi_deploy.get_deploy_info(task.node, **kwargs)
+        elif method == 'pass_bootloader_install_info':
+            iscsi_deploy.validate_pass_bootloader_info_input(task, kwargs)
+
+    @base.passthru(['POST'])
+    @task_manager.require_exclusive_lock
+    def pass_bootloader_install_info(self, task, **kwargs):
+        """Accepts the results of bootloader installation.
+
+        This method acts as a vendor passthru and accepts the result of
+        the bootloader installation. If bootloader installation was
+        successful, then it notifies the bare metal to proceed to reboot
+        and makes the instance active. If the bootloader installation failed,
+        then it sets provisioning as failed and powers off the node.
+        :param task: A TaskManager object.
+        :param kwargs: The arguments sent with vendor passthru.  The expected
+            kwargs are::
+                'key': The deploy key for authorization
+                'status': 'SUCCEEDED' or 'FAILED'
+                'error': The error message if status == 'FAILED'
+                'address': The IP address of the ramdisk
+        """
+        task.process_event('resume')
+        iscsi_deploy.validate_bootloader_install_status(task, kwargs)
+        iscsi_deploy.finish_deploy(task, kwargs['address'])
 
     @base.passthru(['POST'])
     @task_manager.require_exclusive_lock
@@ -540,14 +595,9 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
 
         _destroy_token_file(node)
         is_whole_disk_image = node.driver_internal_info['is_whole_disk_image']
-        uuid_dict_returned = iscsi_deploy.continue_deploy(task, **kwargs)
-        root_uuid_or_disk_id = uuid_dict_returned.get(
-            'root uuid', uuid_dict_returned.get('disk identifier'))
-
-        # TODO(rameshg87): It's not correct to return here as it will leave
-        # the node in DEPLOYING state. This will be fixed in bug 1405519.
-        if not root_uuid_or_disk_id:
-            return
+        uuid_dict = iscsi_deploy.continue_deploy(task, **kwargs)
+        root_uuid_or_disk_id = uuid_dict.get(
+            'root uuid', uuid_dict.get('disk identifier'))
 
         # save the node's root disk UUID so that another conductor could
         # rebuild the PXE config file. Due to a shortcoming in Nova objects,
@@ -561,25 +611,34 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
         try:
             if iscsi_deploy.get_boot_option(node) == "local":
                 deploy_utils.try_set_boot_device(task, boot_devices.DISK)
+
                 # If it's going to boot from the local disk, get rid of
                 # the PXE configuration files used for the deployment
                 pxe_utils.clean_up_pxe_config(task)
+
+                # Ask the ramdisk to install bootloader and
+                # wait for the call-back through the vendor passthru
+                # 'pass_bootloader_install_info', if it's not a
+                # whole disk image.
+                if not is_whole_disk_image:
+                    deploy_utils.notify_ramdisk_to_proceed(kwargs['address'])
+                    task.process_event('wait')
+                    return
             else:
                 pxe_config_path = pxe_utils.get_pxe_config_file_path(node.uuid)
-                node_cap = driver_utils.get_node_capability(node, 'boot_mode')
+                boot_mode = deploy_utils.get_boot_mode_for_deploy(node)
                 deploy_utils.switch_pxe_config(pxe_config_path,
                                                root_uuid_or_disk_id,
-                                               node_cap, is_whole_disk_image)
+                                               boot_mode, is_whole_disk_image)
 
-            deploy_utils.notify_deploy_complete(kwargs['address'])
-            LOG.info(_LI('Deployment to node %s done'), node.uuid)
-            task.process_event('done')
         except Exception as e:
             LOG.error(_LE('Deploy failed for instance %(instance)s. '
                           'Error: %(error)s'),
                       {'instance': node.instance_uuid, 'error': e})
             msg = _('Failed to continue iSCSI deployment.')
             deploy_utils.set_failed_state(task, msg)
+        else:
+            iscsi_deploy.finish_deploy(task, kwargs.get('address'))
 
     @task_manager.require_exclusive_lock
     def continue_deploy(self, task, **kwargs):
@@ -604,14 +663,13 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
         # it here.
         _destroy_token_file(node)
 
-        uuid_dict_returned = iscsi_deploy.do_agent_iscsi_deploy(task,
-                                                                self._client)
+        uuid_dict = iscsi_deploy.do_agent_iscsi_deploy(task, self._client)
 
         is_whole_disk_image = node.driver_internal_info['is_whole_disk_image']
         if iscsi_deploy.get_boot_option(node) == "local":
             # Install the boot loader
-            root_uuid = uuid_dict_returned.get('root uuid')
-            efi_sys_uuid = uuid_dict_returned.get('efi system partition uuid')
+            root_uuid = uuid_dict.get('root uuid')
+            efi_sys_uuid = uuid_dict.get('efi system partition uuid')
             self.configure_local_boot(
                 task, root_uuid=root_uuid,
                 efi_system_part_uuid=efi_sys_uuid)
@@ -620,10 +678,10 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
             # the PXE configuration files used for the deployment
             pxe_utils.clean_up_pxe_config(task)
         else:
-            root_uuid_or_disk_id = uuid_dict_returned.get(
-                'root uuid', uuid_dict_returned.get('disk identifier'))
+            root_uuid_or_disk_id = uuid_dict.get(
+                'root uuid', uuid_dict.get('disk identifier'))
             pxe_config_path = pxe_utils.get_pxe_config_file_path(node.uuid)
-            boot_mode = driver_utils.get_node_capability(node, 'boot_mode')
+            boot_mode = deploy_utils.get_boot_mode_for_deploy(node)
             deploy_utils.switch_pxe_config(pxe_config_path,
                                            root_uuid_or_disk_id,
                                            boot_mode, is_whole_disk_image)

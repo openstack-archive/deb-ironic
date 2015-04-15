@@ -23,6 +23,7 @@ from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common import utils
+from ironic.drivers.modules import deploy_utils
 from ironic.drivers import utils as driver_utils
 from ironic.openstack.common import fileutils
 from ironic.openstack.common import log as logging
@@ -79,11 +80,19 @@ def _link_mac_pxe_configs(task):
     :param task: A TaskManager instance.
 
     """
-    pxe_config_file_path = get_pxe_config_file_path(task.node.uuid)
-    for mac in driver_utils.get_node_mac_addresses(task):
-        mac_path = _get_pxe_mac_path(mac)
+
+    def create_link(mac_path):
         utils.unlink_without_raise(mac_path)
         utils.create_link_without_raise(pxe_config_file_path, mac_path)
+
+    pxe_config_file_path = get_pxe_config_file_path(task.node.uuid)
+    for mac in driver_utils.get_node_mac_addresses(task):
+        create_link(_get_pxe_mac_path(mac))
+        # TODO(lucasagomes): Backward compatibility with :hexraw,
+        # to be removed in M.
+        # see: https://bugs.launchpad.net/ironic/+bug/1441710
+        if CONF.pxe.ipxe_enabled:
+            create_link(_get_pxe_mac_path(mac, delimiter=''))
 
 
 def _link_ip_address_pxe_configs(task):
@@ -109,17 +118,20 @@ def _link_ip_address_pxe_configs(task):
                                          ip_address_path)
 
 
-def _get_pxe_mac_path(mac):
+def _get_pxe_mac_path(mac, delimiter=None):
     """Convert a MAC address into a PXE config file name.
 
     :param mac: A MAC address string in the format xx:xx:xx:xx:xx:xx.
+    :param delimiter: The MAC address delimiter. Defaults to dash ('-').
     :returns: the path to the config file.
 
     """
-    if CONF.pxe.ipxe_enabled:
-        mac_file_name = mac.replace(':', '').lower()
-    else:
-        mac_file_name = "01-" + mac.replace(":", "-").lower()
+    if delimiter is None:
+        delimiter = '-'
+
+    mac_file_name = mac.replace(':', delimiter).lower()
+    if not CONF.pxe.ipxe_enabled:
+        mac_file_name = '01-' + mac_file_name
 
     return os.path.join(get_root_dir(), PXE_CFG_DIR_NAME, mac_file_name)
 
@@ -191,7 +203,7 @@ def create_pxe_config(task, pxe_options, template=None):
     pxe_config = _build_pxe_config(pxe_options, template)
     utils.write_to_file(pxe_config_file_path, pxe_config)
 
-    if driver_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
+    if deploy_utils.get_boot_mode_for_deploy(task.node) == 'uefi':
         _link_ip_address_pxe_configs(task)
     else:
         _link_mac_pxe_configs(task)
@@ -205,7 +217,7 @@ def clean_up_pxe_config(task):
     """
     LOG.debug("Cleaning up PXE config for node %s", task.node.uuid)
 
-    if driver_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
+    if deploy_utils.get_boot_mode_for_deploy(task.node) == 'uefi':
         api = dhcp_factory.DHCPFactory().provider
         ip_addresses = api.get_ip_addresses(task)
         if not ip_addresses:
@@ -220,6 +232,12 @@ def clean_up_pxe_config(task):
     else:
         for mac in driver_utils.get_node_mac_addresses(task):
             utils.unlink_without_raise(_get_pxe_mac_path(mac))
+            # TODO(lucasagomes): Backward compatibility with :hexraw,
+            # to be removed in M.
+            # see: https://bugs.launchpad.net/ironic/+bug/1441710
+            if CONF.pxe.ipxe_enabled:
+                utils.unlink_without_raise(_get_pxe_mac_path(mac,
+                                           delimiter=''))
 
     utils.rmtree_without_raise(os.path.join(get_root_dir(),
                                             task.node.uuid))
@@ -252,7 +270,7 @@ def dhcp_options_for_instance(task):
         dhcp_opts.append({'opt_name': 'bootfile-name',
                           'opt_value': ipxe_script_url})
     else:
-        if driver_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
+        if deploy_utils.get_boot_mode_for_deploy(task.node) == 'uefi':
             boot_file = CONF.pxe.uefi_pxe_bootfile_name
         else:
             boot_file = CONF.pxe.pxe_bootfile_name

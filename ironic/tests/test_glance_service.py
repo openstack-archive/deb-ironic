@@ -18,9 +18,13 @@ import datetime
 import filecmp
 import os
 import tempfile
+import time
 
+from glanceclient import exc as glance_exc
 import mock
+from oslo_config import cfg
 from oslo_context import context
+from oslo_serialization import jsonutils
 import testtools
 
 
@@ -32,8 +36,6 @@ from ironic.tests import base
 from ironic.tests import matchers
 from ironic.tests import stubs
 
-from oslo_config import cfg
-from oslo_serialization import jsonutils
 
 CONF = cfg.CONF
 
@@ -458,7 +460,8 @@ class TestGlanceImageService(base.TestCase):
         self.assertEqual(self.NOW_DATETIME, image_meta['created_at'])
         self.assertEqual(self.NOW_DATETIME, image_meta['updated_at'])
 
-    def test_download_with_retries(self):
+    @mock.patch.object(time, 'sleep', autospec=True)
+    def test_download_with_retries(self, mock_sleep):
         tries = [0]
 
         class MyGlanceStubClient(stubs.StubGlanceClient):
@@ -466,7 +469,7 @@ class TestGlanceImageService(base.TestCase):
             def get(self, image_id):
                 if tries[0] == 0:
                     tries[0] = 1
-                    raise exception.ServiceUnavailable('')
+                    raise glance_exc.ServiceUnavailable('')
                 else:
                     return {}
 
@@ -487,6 +490,7 @@ class TestGlanceImageService(base.TestCase):
         tries = [0]
         self.config(glance_num_retries=1, group='glance')
         stub_service.download(image_id, writer)
+        self.assertTrue(mock_sleep.called)
 
     def test_download_file_url(self):
         # NOTE: only in v2 API
@@ -533,7 +537,7 @@ class TestGlanceImageService(base.TestCase):
         class MyGlanceStubClient(stubs.StubGlanceClient):
             """A client that raises a Forbidden exception."""
             def get(self, image_id):
-                raise exception.Forbidden(image_id)
+                raise glance_exc.Forbidden(image_id)
 
         stub_client = MyGlanceStubClient()
         stub_context = context.RequestContext(auth_token=True)
@@ -549,7 +553,7 @@ class TestGlanceImageService(base.TestCase):
         class MyGlanceStubClient(stubs.StubGlanceClient):
             """A client that raises a HTTPForbidden exception."""
             def get(self, image_id):
-                raise exception.HTTPForbidden(image_id)
+                raise glance_exc.HTTPForbidden(image_id)
 
         stub_client = MyGlanceStubClient()
         stub_context = context.RequestContext(auth_token=True)
@@ -565,7 +569,7 @@ class TestGlanceImageService(base.TestCase):
         class MyGlanceStubClient(stubs.StubGlanceClient):
             """A client that raises a NotFound exception."""
             def get(self, image_id):
-                raise exception.NotFound(image_id)
+                raise glance_exc.NotFound(image_id)
 
         stub_client = MyGlanceStubClient()
         stub_context = context.RequestContext(auth_token=True)
@@ -581,7 +585,7 @@ class TestGlanceImageService(base.TestCase):
         class MyGlanceStubClient(stubs.StubGlanceClient):
             """A client that raises a HTTPNotFound exception."""
             def get(self, image_id):
-                raise exception.HTTPNotFound(image_id)
+                raise glance_exc.HTTPNotFound(image_id)
 
         stub_client = MyGlanceStubClient()
         stub_context = context.RequestContext(auth_token=True)
@@ -632,7 +636,7 @@ def _create_failing_glance_client(info):
         def get(self, image_id):
             info['num_calls'] += 1
             if info['num_calls'] == 1:
-                raise exception.ServiceUnavailable('')
+                raise glance_exc.ServiceUnavailable('')
             return {}
 
     return MyGlanceStubClient()
@@ -663,7 +667,7 @@ class TestGlanceSwiftTempURL(base.TestCase):
             'id': '757274c4-2856-4bd2-bb20-9a4a231e187b'
         }
 
-    @mock.patch('swiftclient.utils.generate_temp_url')
+    @mock.patch('swiftclient.utils.generate_temp_url', autospec=True)
     def test_swift_temp_url(self, tempurl_mock):
 
         path = ('/v1/AUTH_a422b2-91f3-2f46-74b7-d7c9e8958f5d30'
@@ -686,7 +690,7 @@ class TestGlanceSwiftTempURL(base.TestCase):
             key=CONF.glance.swift_temp_url_key,
             method='GET')
 
-    @mock.patch('swiftclient.utils.generate_temp_url')
+    @mock.patch('swiftclient.utils.generate_temp_url', autospec=True)
     def test_swift_temp_url_multiple_containers(self, tempurl_mock):
 
         self.config(swift_store_multiple_containers_seed=8,

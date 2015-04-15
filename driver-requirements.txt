@@ -5,11 +5,11 @@
 
 # These are available on pypi
 ironic-discoverd>=1.0.0
-proliantutils>=2.0.1
+proliantutils>=2.1.0
 pyghmi
 pysnmp
 python-scciclient
-python-seamicroclient
+python-seamicroclient>=0.4.0
 
 # The drac and amt driver import a python module called "pywsman", however,
 # this does not exist on pypi.

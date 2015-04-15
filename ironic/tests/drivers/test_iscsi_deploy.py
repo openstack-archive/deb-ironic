@@ -429,6 +429,7 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
                          'ironic_api_url': api_url,
                          'boot_option': expected_boot_option,
                          'boot_mode': expected_boot_mode,
+                         'coreos.configdrive': 0,
                         }
 
         if expected_root_device:
@@ -486,6 +487,25 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         self._test_build_deploy_ramdisk_options(mock_alnum, fake_api_url,
                                                 expected_boot_option=expected)
 
+    @mock.patch.object(keystone, 'get_service_url', autospec=True)
+    @mock.patch.object(utils, 'random_alnum', autospec=True)
+    def test_build_deploy_ramdisk_options_whole_disk_image(self, mock_alnum,
+                                                           mock_get_url):
+        """Tests a hack to boot_option for whole disk images.
+
+        This hack is in place to fix bug #1441556.
+        """
+        self.node.instance_info = {'capabilities': '{"boot_option": "local"}'}
+        dii = self.node.driver_internal_info
+        dii['is_whole_disk_image'] = True
+        self.node.driver_internal_info = dii
+        self.node.save()
+        expected = 'netboot'
+        fake_api_url = 'http://127.0.0.1:6385'
+        self.config(api_url=fake_api_url, group='conductor')
+        self._test_build_deploy_ramdisk_options(mock_alnum, fake_api_url,
+                                                expected_boot_option=expected)
+
     def test_get_boot_option(self):
         self.node.instance_info = {'capabilities': '{"boot_option": "local"}'}
         result = iscsi_deploy.get_boot_option(self.node)
@@ -511,7 +531,9 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             params = iscsi_deploy.get_deploy_info(task.node, **kwargs)
-            iscsi_deploy.continue_deploy(task, **kwargs)
+            self.assertRaises(exception.InstanceDeployFailure,
+                              iscsi_deploy.continue_deploy,
+                              task, **kwargs)
             self.assertEqual(states.DEPLOYFAIL, task.node.provision_state)
             self.assertEqual(states.ACTIVE, task.node.target_provision_state)
             self.assertIsNotNone(task.node.last_error)
@@ -533,7 +555,9 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
 
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
-            retval = iscsi_deploy.continue_deploy(task, **kwargs)
+            self.assertRaises(exception.InstanceDeployFailure,
+                              iscsi_deploy.continue_deploy,
+                              task, **kwargs)
             self.assertIsNotNone(task.node.last_error)
             self.assertEqual(states.DEPLOYFAIL, task.node.provision_state)
             self.assertEqual(states.ACTIVE, task.node.target_provision_state)
@@ -541,7 +565,56 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             mock_image_cache.assert_called_once_with()
             mock_image_cache.return_value.clean_up.assert_called_once_with()
             self.assertFalse(deploy_mock.called)
-            self.assertEqual({}, retval)
+
+    @mock.patch.object(iscsi_deploy, 'InstanceImageCache')
+    @mock.patch.object(manager_utils, 'node_power_action')
+    @mock.patch.object(deploy_utils, 'deploy_partition_image')
+    def test_continue_deploy_fail_no_root_uuid_or_disk_id(
+            self, deploy_mock, power_mock, mock_image_cache):
+        kwargs = {'address': '123456', 'iqn': 'aaa-bbb', 'key': 'fake-56789'}
+        deploy_mock.return_value = {}
+        self.node.provision_state = states.DEPLOYWAIT
+        self.node.target_provision_state = states.ACTIVE
+        self.node.save()
+
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            params = iscsi_deploy.get_deploy_info(task.node, **kwargs)
+            self.assertRaises(exception.InstanceDeployFailure,
+                              iscsi_deploy.continue_deploy,
+                              task, **kwargs)
+            self.assertEqual(states.DEPLOYFAIL, task.node.provision_state)
+            self.assertEqual(states.ACTIVE, task.node.target_provision_state)
+            self.assertIsNotNone(task.node.last_error)
+            deploy_mock.assert_called_once_with(**params)
+            power_mock.assert_called_once_with(task, states.POWER_OFF)
+            mock_image_cache.assert_called_once_with()
+            mock_image_cache.return_value.clean_up.assert_called_once_with()
+
+    @mock.patch.object(iscsi_deploy, 'InstanceImageCache')
+    @mock.patch.object(manager_utils, 'node_power_action')
+    @mock.patch.object(deploy_utils, 'deploy_partition_image')
+    def test_continue_deploy_fail_empty_root_uuid(
+            self, deploy_mock, power_mock, mock_image_cache):
+        kwargs = {'address': '123456', 'iqn': 'aaa-bbb', 'key': 'fake-56789'}
+        deploy_mock.return_value = {'root uuid': ''}
+        self.node.provision_state = states.DEPLOYWAIT
+        self.node.target_provision_state = states.ACTIVE
+        self.node.save()
+
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            params = iscsi_deploy.get_deploy_info(task.node, **kwargs)
+            self.assertRaises(exception.InstanceDeployFailure,
+                              iscsi_deploy.continue_deploy,
+                              task, **kwargs)
+            self.assertEqual(states.DEPLOYFAIL, task.node.provision_state)
+            self.assertEqual(states.ACTIVE, task.node.target_provision_state)
+            self.assertIsNotNone(task.node.last_error)
+            deploy_mock.assert_called_once_with(**params)
+            power_mock.assert_called_once_with(task, states.POWER_OFF)
+            mock_image_cache.assert_called_once_with()
+            mock_image_cache.return_value.clean_up.assert_called_once_with()
 
     @mock.patch.object(iscsi_deploy, 'LOG')
     @mock.patch.object(iscsi_deploy, 'get_deploy_info')
@@ -725,34 +798,117 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             self.assertEqual(states.ACTIVE, self.node.target_provision_state)
             self.assertIsNotNone(self.node.last_error)
 
-    @mock.patch.object(iscsi_deploy, 'continue_deploy')
-    @mock.patch.object(iscsi_deploy, 'build_deploy_ramdisk_options')
-    def test_do_agent_iscsi_deploy_no_root_uuid(self, build_options_mock,
-                                                continue_deploy_mock):
-        build_options_mock.return_value = {'deployment_key': 'abcdef',
-                                           'iscsi_target_iqn': 'iqn-qweqwe'}
-        agent_client_mock = mock.MagicMock()
-        agent_client_mock.start_iscsi_target.return_value = {
-            'command_status': 'SUCCESS', 'command_error': None}
-        driver_internal_info = {'agent_url': 'http://1.2.3.4:1234'}
-        self.node.driver_internal_info = driver_internal_info
+    def test_validate_pass_bootloader_info_input(self):
+        params = {'key': 'some-random-key', 'address': '1.2.3.4',
+                  'error': '', 'status': 'SUCCEEDED'}
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.instance_info['deploy_key'] = 'some-random-key'
+            # Assert that the method doesn't raise
+            iscsi_deploy.validate_pass_bootloader_info_input(task, params)
+
+    def test_validate_pass_bootloader_info_missing_status(self):
+        params = {'key': 'some-random-key', 'address': '1.2.3.4'}
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            self.assertRaises(exception.MissingParameterValue,
+                              iscsi_deploy.validate_pass_bootloader_info_input,
+                              task, params)
+
+    def test_validate_pass_bootloader_info_missing_key(self):
+        params = {'status': 'SUCCEEDED', 'address': '1.2.3.4'}
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            self.assertRaises(exception.MissingParameterValue,
+                              iscsi_deploy.validate_pass_bootloader_info_input,
+                              task, params)
+
+    def test_validate_pass_bootloader_info_missing_address(self):
+        params = {'status': 'SUCCEEDED', 'key': 'some-random-key'}
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            self.assertRaises(exception.MissingParameterValue,
+                              iscsi_deploy.validate_pass_bootloader_info_input,
+                              task, params)
+
+    def test_validate_pass_bootloader_info_input_invalid_key(self):
+        params = {'key': 'some-other-key', 'address': '1.2.3.4',
+                  'status': 'SUCCEEDED'}
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.instance_info['deploy_key'] = 'some-random-key'
+            self.assertRaises(exception.InvalidParameterValue,
+                              iscsi_deploy.validate_pass_bootloader_info_input,
+                              task, params)
+
+    def test_validate_bootloader_install_status(self):
+        kwargs = {'key': 'abcdef', 'status': 'SUCCEEDED', 'error': ''}
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.instance_info['deploy_key'] = 'abcdef'
+            # Nothing much to assert except that it shouldn't raise.
+            iscsi_deploy.validate_bootloader_install_status(task, kwargs)
+
+    @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
+    def test_validate_bootloader_install_status_install_failed(
+            self, set_fail_state_mock):
+        kwargs = {'key': 'abcdef', 'status': 'FAILED', 'error': 'some-error'}
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.provision_state = states.DEPLOYING
+            task.node.target_provision_state = states.ACTIVE
+            task.node.instance_info['deploy_key'] = 'abcdef'
+            self.assertRaises(exception.InstanceDeployFailure,
+                              iscsi_deploy.validate_bootloader_install_status,
+                              task, kwargs)
+            set_fail_state_mock.assert_called_once_with(task, mock.ANY)
+
+    @mock.patch.object(deploy_utils, 'notify_ramdisk_to_proceed',
+                       autospec=True)
+    def test_finish_deploy(self, notify_mock):
         self.node.provision_state = states.DEPLOYING
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
-        continue_deploy_mock.return_value = {}
-
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
+            iscsi_deploy.finish_deploy(task, '1.2.3.4')
+            notify_mock.assert_called_once_with('1.2.3.4')
+            self.assertEqual(states.ACTIVE, task.node.provision_state)
+            self.assertEqual(states.NOSTATE, task.node.target_provision_state)
+
+    @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
+    @mock.patch.object(deploy_utils, 'notify_ramdisk_to_proceed',
+                       autospec=True)
+    def test_finish_deploy_notify_fails(self, notify_mock,
+                                        set_fail_state_mock):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            notify_mock.side_effect = RuntimeError()
             self.assertRaises(exception.InstanceDeployFailure,
-                              iscsi_deploy.do_agent_iscsi_deploy,
-                              task, agent_client_mock)
-            self.node.refresh()
-            build_options_mock.assert_called_once_with(task.node)
-            agent_client_mock.start_iscsi_target.assert_called_once_with(
-                task.node, 'iqn-qweqwe')
-            continue_deploy_mock.assert_called_once_with(
-                task, error=None, iqn='iqn-qweqwe', key='abcdef',
-                address='1.2.3.4')
-            self.assertEqual(states.DEPLOYFAIL, self.node.provision_state)
-            self.assertEqual(states.ACTIVE, self.node.target_provision_state)
-            self.assertIsNotNone(self.node.last_error)
+                              iscsi_deploy.finish_deploy, task, '1.2.3.4')
+            set_fail_state_mock.assert_called_once_with(task, mock.ANY)
+
+    @mock.patch.object(manager_utils, 'node_power_action')
+    @mock.patch.object(deploy_utils, 'notify_ramdisk_to_proceed',
+                       autospec=True)
+    def test_finish_deploy_ssh_with_local_boot(self, notify_mock,
+                                               node_power_mock):
+        instance_info = dict(INST_INFO_DICT)
+        instance_info['capabilities'] = {'boot_option': 'local'}
+        n = {
+              'uuid': uuidutils.generate_uuid(),
+              'driver': 'fake_ssh',
+              'instance_info': instance_info,
+              'provision_state': states.DEPLOYING,
+              'target_provision_state': states.ACTIVE,
+        }
+        mgr_utils.mock_the_extension_manager(driver="fake_ssh")
+        node = obj_utils.create_test_node(self.context, **n)
+
+        with task_manager.acquire(self.context, node.uuid,
+                                  shared=False) as task:
+            iscsi_deploy.finish_deploy(task, '1.2.3.4')
+            notify_mock.assert_called_once_with('1.2.3.4')
+            self.assertEqual(states.ACTIVE, task.node.provision_state)
+            self.assertEqual(states.NOSTATE, task.node.target_provision_state)
+            node_power_mock.assert_called_once_with(task, states.REBOOT)

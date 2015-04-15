@@ -66,6 +66,14 @@ class TestPXEUtils(db_base.DbTestCase):
         }
         self.agent_pxe_options.update(common_pxe_options)
 
+        self.ipxe_options = self.pxe_options.copy()
+        self.ipxe_options.update({
+            'deployment_aki_path': 'http://1.2.3.4:1234/deploy_kernel',
+            'deployment_ari_path': 'http://1.2.3.4:1234/deploy_ramdisk',
+            'aki_path': 'http://1.2.3.4:1234/kernel',
+            'ari_path': 'http://1.2.3.4:1234/ramdisk',
+        })
+
         self.node = object_utils.create_test_node(self.context)
 
     def test__build_pxe_config(self):
@@ -88,9 +96,39 @@ class TestPXEUtils(db_base.DbTestCase):
 
         self.assertEqual(unicode(expected_template), rendered_template)
 
-    @mock.patch('ironic.common.utils.create_link_without_raise')
-    @mock.patch('ironic.common.utils.unlink_without_raise')
-    @mock.patch('ironic.drivers.utils.get_node_mac_addresses')
+    def test__build_ipxe_config(self):
+        # NOTE(lucasagomes): iPXE is just an extension of the PXE driver,
+        # it doesn't have it's own configuration option for template.
+        # More info:
+        # http://docs.openstack.org/developer/ironic/deploy/install-guide.html
+        self.config(
+            pxe_config_template='ironic/drivers/modules/ipxe_config.template',
+            group='pxe'
+        )
+        self.config(http_url='http://1.2.3.4:1234', group='pxe')
+        rendered_template = pxe_utils._build_pxe_config(
+                self.ipxe_options, CONF.pxe.pxe_config_template)
+
+        expected_template = open(
+            'ironic/tests/drivers/ipxe_config.template').read().rstrip()
+
+        self.assertEqual(unicode(expected_template), rendered_template)
+
+    def test__build_elilo_config(self):
+        pxe_opts = self.pxe_options
+        pxe_opts['boot_mode'] = 'uefi'
+        rendered_template = pxe_utils._build_pxe_config(
+                pxe_opts, CONF.pxe.uefi_pxe_config_template)
+
+        expected_template = open(
+            'ironic/tests/drivers/elilo_efi_pxe_config.template'
+            ).read().rstrip()
+
+        self.assertEqual(unicode(expected_template), rendered_template)
+
+    @mock.patch('ironic.common.utils.create_link_without_raise', autospec=True)
+    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch('ironic.drivers.utils.get_node_mac_addresses', autospec=True)
     def test__write_mac_pxe_configs(self, get_macs_mock, unlink_mock,
                                     create_link_mock):
         macs = [
@@ -106,7 +144,7 @@ class TestPXEUtils(db_base.DbTestCase):
         ]
         unlink_calls = [
             mock.call('/tftpboot/pxelinux.cfg/01-00-11-22-33-44-55-66'),
-            mock.call('/tftpboot/pxelinux.cfg/01-00-11-22-33-44-55-67')
+            mock.call('/tftpboot/pxelinux.cfg/01-00-11-22-33-44-55-67'),
         ]
         with task_manager.acquire(self.context, self.node.uuid) as task:
             pxe_utils._link_mac_pxe_configs(task)
@@ -114,9 +152,43 @@ class TestPXEUtils(db_base.DbTestCase):
         unlink_mock.assert_has_calls(unlink_calls)
         create_link_mock.assert_has_calls(create_link_calls)
 
-    @mock.patch('ironic.common.utils.create_link_without_raise')
-    @mock.patch('ironic.common.utils.unlink_without_raise')
-    @mock.patch('ironic.common.dhcp_factory.DHCPFactory.provider')
+    @mock.patch('ironic.common.utils.create_link_without_raise', autospec=True)
+    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch('ironic.drivers.utils.get_node_mac_addresses', autospec=True)
+    def test__write_mac_ipxe_configs(self, get_macs_mock, unlink_mock,
+                                     create_link_mock):
+        self.config(ipxe_enabled=True, group='pxe')
+        macs = [
+            '00:11:22:33:44:55:66',
+            '00:11:22:33:44:55:67'
+        ]
+        get_macs_mock.return_value = macs
+        create_link_calls = [
+            mock.call(u'/httpboot/1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
+                      '/httpboot/pxelinux.cfg/00-11-22-33-44-55-66'),
+            mock.call(u'/httpboot/1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
+                      '/httpboot/pxelinux.cfg/00112233445566'),
+            mock.call(u'/httpboot/1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
+                      '/httpboot/pxelinux.cfg/00-11-22-33-44-55-67'),
+            mock.call(u'/httpboot/1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
+                      '/httpboot/pxelinux.cfg/00112233445567'),
+        ]
+        unlink_calls = [
+            mock.call('/httpboot/pxelinux.cfg/00-11-22-33-44-55-66'),
+            mock.call('/httpboot/pxelinux.cfg/00112233445566'),
+            mock.call('/httpboot/pxelinux.cfg/00-11-22-33-44-55-67'),
+            mock.call('/httpboot/pxelinux.cfg/00112233445567'),
+        ]
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            pxe_utils._link_mac_pxe_configs(task)
+
+        unlink_mock.assert_has_calls(unlink_calls)
+        create_link_mock.assert_has_calls(create_link_calls)
+
+    @mock.patch('ironic.common.utils.create_link_without_raise', autospec=True)
+    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch('ironic.common.dhcp_factory.DHCPFactory.provider',
+                autospec=True)
     def test__link_ip_address_pxe_configs(self, provider_mock, unlink_mock,
                                           create_link_mock):
         ip_address = '10.10.0.1'
@@ -135,9 +207,9 @@ class TestPXEUtils(db_base.DbTestCase):
         unlink_mock.assert_called_once_with('/tftpboot/0A0A0001.conf')
         create_link_mock.assert_has_calls(create_link_calls)
 
-    @mock.patch('ironic.common.utils.write_to_file')
-    @mock.patch.object(pxe_utils, '_build_pxe_config')
-    @mock.patch('ironic.openstack.common.fileutils.ensure_tree')
+    @mock.patch('ironic.common.utils.write_to_file', autospec=True)
+    @mock.patch.object(pxe_utils, '_build_pxe_config', autospec=True)
+    @mock.patch('ironic.openstack.common.fileutils.ensure_tree', autospec=True)
     def test_create_pxe_config(self, ensure_tree_mock, build_mock,
                                write_mock):
         build_mock.return_value = self.pxe_options
@@ -150,7 +222,7 @@ class TestPXEUtils(db_base.DbTestCase):
             mock.call(os.path.join(CONF.pxe.tftp_root, self.node.uuid)),
             mock.call(os.path.join(CONF.pxe.tftp_root, 'pxelinux.cfg'))
         ]
-        ensure_tree_mock.has_calls(ensure_calls)
+        ensure_tree_mock.assert_has_calls(ensure_calls)
 
         pxe_cfg_file_path = pxe_utils.get_pxe_config_file_path(self.node.uuid)
         write_mock.assert_called_with(pxe_cfg_file_path, self.pxe_options)
@@ -179,7 +251,7 @@ class TestPXEUtils(db_base.DbTestCase):
         self.config(ipxe_enabled=True, group='pxe')
         self.config(http_root='/httpboot', group='pxe')
         mac = '00:11:22:33:AA:BB:CC'
-        self.assertEqual('/httpboot/pxelinux.cfg/00112233aabbcc',
+        self.assertEqual('/httpboot/pxelinux.cfg/00-11-22-33-aa-bb-cc',
                          pxe_utils._get_pxe_mac_path(mac))
 
     def test__get_pxe_ip_address_path(self):
@@ -308,6 +380,27 @@ class TestPXEUtils(db_base.DbTestCase):
             task.node.properties = properties
             pxe_utils.clean_up_pxe_config(task)
 
-        unlink_mock.assert_called_once_with('/tftpboot/0A0A0001.conf')
-        rmtree_mock.assert_called_once_with(
+            unlink_mock.assert_called_once_with('/tftpboot/0A0A0001.conf')
+            rmtree_mock.assert_called_once_with(
+                os.path.join(CONF.pxe.tftp_root, self.node.uuid))
+
+    @mock.patch('ironic.common.utils.rmtree_without_raise')
+    @mock.patch('ironic.common.utils.unlink_without_raise')
+    @mock.patch('ironic.common.dhcp_factory.DHCPFactory.provider')
+    def test_clean_up_pxe_config_uefi_instance_info(self,
+                                                    provider_mock, unlink_mock,
+                                                    rmtree_mock):
+        ip_address = '10.10.0.1'
+        address = "aa:aa:aa:aa:aa:aa"
+        object_utils.create_test_port(self.context, node_id=self.node.id,
+                                      address=address)
+
+        provider_mock.get_ip_addresses.return_value = [ip_address]
+
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node.instance_info['deploy_boot_mode'] = 'uefi'
+            pxe_utils.clean_up_pxe_config(task)
+
+            unlink_mock.assert_called_once_with('/tftpboot/0A0A0001.conf')
+            rmtree_mock.assert_called_once_with(
                 os.path.join(CONF.pxe.tftp_root, self.node.uuid))

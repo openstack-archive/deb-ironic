@@ -7,7 +7,7 @@ iLO drivers
 Overview
 ========
 iLO drivers enable to take advantage of features of iLO management engine in
-HP Proliant servers.  iLO drivers are targetted for HP Proliant Gen 8 systems
+HP Proliant servers.  iLO drivers are targeted for HP Proliant Gen 8 systems
 and above which have iLO 4 management engine. [1]_
 
 For more detailed and up-to-date information (like tested platforms, known
@@ -40,9 +40,9 @@ Prerequisites
   managing HP Proliant hardware.
 
   Install ``proliantutils`` [2]_ module on the Ironic conductor node. Minimum
-  version required is 2.0.1.::
+  version required is 2.1.0.::
 
-   $ pip install "proliantutils>=2.0.1"
+   $ pip install "proliantutils>=2.1.0"
 
 * ``ipmitool`` command must be present on the service node(s) where
   ``ironic-conductor`` is running. On most distros, this is provided as part
@@ -80,9 +80,10 @@ This driver should work on HP Proliant Gen8 Servers and above with iLO 4.
 It has been tested with the following servers:
 
 * ProLiant DL380e Gen8
-* ProLiant DL380e Gen8
 * ProLiant DL580 Gen8 UEFI
 * ProLiant DL180 Gen9 UEFI
+* ProLiant DL380 Gen9 UEFI
+* ProLiant DL580 Gen9 UEFI
 
 For more up-to-date information on server platform support info, refer
 iLO driver wiki [6]_.
@@ -95,11 +96,13 @@ Features
   by the nova flavor's extra spec.
 * Always boot from network using Virtual Media.
 * UEFI Boot Support
+* UEFI Secure Boot Support
 * Passing authentication token via secure, encrypted management network
   (Virtual Media). Provisioning is done using iSCSI over data network
   (like PXE driver), so this driver has the  benefit of security
   enhancement with the same performance. Hence it segregates management info
   from data channel.
+* Support for Out-Of-Band cleaning operations.
 * Remote Console
 * HW Sensors
 * Works well for machines with resource constraints (lesser amount of memory).
@@ -247,7 +250,15 @@ node::
 
 Boot modes
 ~~~~~~~~~~
-Refer boot_mode_support_ for more information.
+Refer to `Boot mode support`_ section for more information.
+
+UEFI Secure Boot
+~~~~~~~~~~~~~~~~
+Refer to `UEFI Secure Boot support`_ section for more information.
+
+Node cleaning
+~~~~~~~~~~~~~
+Refer to ilo_node_cleaning_ for more information.
 
 agent_ilo driver
 ^^^^^^^^^^^^^^^^
@@ -271,7 +282,8 @@ This driver should work on HP Proliant Gen8 Servers and above with iLO 4.
 It has been tested with the following servers:
 
 * ProLiant DL380e Gen8
-* ProLiant DL380e Gen8
+* ProLiant DL380 Gen9 UEFI
+* ProLiant DL580 Gen9 UEFI
 
 This driver supports only Gen 8 Class 0 systems (BIOS only).  For
 more up-to-date information, check the iLO driver wiki [6]_.
@@ -279,11 +291,16 @@ more up-to-date information, check the iLO driver wiki [6]_.
 Features
 ~~~~~~~~
 * PXE-less deploy with Virtual Media using Ironic Python Agent.
+* Support for out-of-band cleaning operations.
 * Remote Console
 * HW Sensors
 * IPA runs on the baremetal node and pulls the image directly from Swift.
 * IPA deployed instances always boots from local disk.
 * Segregates management info from data channel.
+* UEFI Boot Support
+* UEFI Secure Boot Support
+* Support to use default in-band cleaning operations supported by
+  Ironic Python Agent. For more details, see :ref:`InbandvsOutOfBandCleaning`.
 
 Requirements
 ~~~~~~~~~~~~
@@ -421,6 +438,18 @@ node::
 
   ironic node-create -d agent_ilo -i ilo_address=<ilo-ip-address> -i ilo_username=<ilo-username> -i ilo_password=<ilo-password> -i ilo_deploy_iso=<glance-uuid-of-deploy-iso>
 
+Boot modes
+~~~~~~~~~~
+Refer to `Boot mode support`_ section for more information.
+
+UEFI Secure Boot
+~~~~~~~~~~~~~~~~
+Refer to `UEFI Secure Boot support`_ section for more information.
+
+Node Cleaning
+~~~~~~~~~~~~~
+Refer to ilo_node_cleaning_ for more information.
+
 pxe_ilo driver
 ^^^^^^^^^^^^^^
 
@@ -456,6 +485,7 @@ Features
 * Automatic detection of current boot mode.
 * Automatic setting of the required boot mode if UEFI boot mode is requested
   by the nova flavor's extra spec.
+* Support for Out-Of-Band cleaning operations.
 
 Requirements
 ~~~~~~~~~~~~
@@ -510,12 +540,14 @@ node::
 
 Boot modes
 ~~~~~~~~~~
-Refer boot_mode_support_ for more information.
+Refer to `Boot mode support`_ section for more information.
+
+Node Cleaning
+~~~~~~~~~~~~~
+Refer to ilo_node_cleaning_ for more information.
 
 Functionalities across drivers
 ==============================
-
-.. _boot_mode_support:
 
 Boot mode support
 ^^^^^^^^^^^^^^^^^
@@ -524,6 +556,7 @@ mode (Legacy BIOS or UEFI).
 
 * ``pxe_ilo``
 * ``iscsi_ilo``
+* ``agent_ilo``
 
 The boot modes can be configured in Ironic in the following way:
 
@@ -554,7 +587,7 @@ The boot modes can be configured in Ironic in the following way:
   the ``boot_mode`` set appropriately in ``properties/capabilities``. It will
   filter out rest of the nodes.
 
-  The above facility for matching in Nova can be used in heterogenous
+  The above facility for matching in Nova can be used in heterogeneous
   environments where there is a mix of ``uefi`` and ``bios`` machines, and
   operator wants to provide a choice to the user regarding boot modes.  If the
   flavor doesn't contain ``boot_mode`` then Nova scheduler will not consider
@@ -570,6 +603,104 @@ diskimage-builder command to build the image.  For example::
 
   disk-image-create ubuntu baremetal iso
 
+UEFI Secure Boot support
+^^^^^^^^^^^^^^^^^^^^^^^^
+The following drivers support UEFI secure boot deploy:
+
+* ``iscsi_ilo``
+* ``agent_ilo``
+
+The UEFI secure boot mode can be configured in Ironic by adding
+``secure_boot`` parameter in the ``capabilities`` parameter  within
+``properties`` field of an Ironic node.
+
+``secure_boot`` is a boolean parameter and takes value as ``true`` or
+``false``.
+
+To enable ``secure_boot`` on a node add it to ``capabilities`` as below::
+
+ ironic node-update <node-uuid> add properties/capabilities='secure_boot:true'
+
+Nodes having ``secure_boot`` set to ``true`` may be requested by adding an
+``extra_spec`` to the Nova flavor::
+
+  nova flavor-key ironic-test-3 set capabilities:secure_boot="true"
+  nova boot --flavor ironic-test-3 --image test-image instance-1
+
+If ``capabilities`` is used in ``extra_spec`` as above, Nova scheduler
+(``ComputeCapabilitiesFilter``) will match only Ironic nodes which have
+the ``secure_boot`` set appropriately in ``properties/capabilities``. It will
+filter out rest of the nodes.
+
+The above facility for matching in Nova can be used in heterogeneous
+environments where there is a mix of machines supporting and not supporting
+UEFI secure boot, and operator wants to provide a choice to the user
+regarding secure boot.  If the flavor doesn't contain ``secure_boot`` then
+Nova scheduler will not consider secure boot mode as a placement criteria,
+hence user may get a secure boot capable machine that matches with user
+specified flavors but deployment would not use its secure boot capability.
+Secure boot deploy would happen only when it is explicitly specified through
+flavor.
+
+Ensure the public key of the signed image is loaded into baremetal to deploy
+signed images.
+For HP Proliant Gen9 servers, one can enroll public key using iLO System
+Utilities UI. Please refer to section ``Accessing Secure Boot options`` in
+HP UEFI System Utilities User Guide. [7]_
+One can also refer to white paper on Secure Boot for Linux on HP Proliant
+servers for additional details. [8]_
+
+.. _ilo_node_cleaning:
+
+Node Cleaning
+^^^^^^^^^^^^^
+The following iLO drivers support node cleaning -
+
+* ``pxe_ilo``
+* ``iscsi_ilo``
+* ``agent_ilo``
+
+Supported Cleaning Operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* The cleaning operations supported are:
+
+  -``reset_ilo``:
+    Resets the iLO. By default, enabled with priority 1.
+  -``reset_bios_to_default``:
+    Resets BIOS Settings to default. By default, enabled with priority 10.
+    This clean step is supported only on Gen9 and above servers.
+  -``reset_secure_boot_keys_to_default``:
+    Resets secure boot keys to manufacturer's defaults. This step is supported
+    only on Gen9 and above servers. By default, enabled with priority 20 .
+  -``reset_ilo_credential``:
+    Resets the iLO password, if 'ilo_change_password' is specified as part of
+    node's driver_info. By default, enabled with priority 30.
+  -``clear_secure_boot_keys``:
+    Clears all secure boot keys. This step is supported only on Gen9 and above
+    servers. By default, this step is disabled.
+
+* For in-band cleaning operations supported by ``agent_ilo`` driver, see
+  :ref:`InbandvsOutOfBandCleaning`.
+
+* All the cleaning steps have an explicit configuration option for priority.
+  In order to disable or change the priority of the clean steps, respective
+  configuration option for priority should be updated in ironic.conf.
+
+* Updating clean step priority to 0, will disable that particular clean step
+  and will not run during cleaning.
+
+* Configuration Options for the clean steps are listed under [ilo] section in
+  ironic.conf ::
+
+  - clean_priority_reset_ilo=1
+  - clean_priority_reset_bios_to_default=10
+  - clean_priority_reset_secure_boot_keys_to_default=20
+  - clean_priority_clear_secure_boot_keys=0
+  - clean_priority_reset_ilo_credential=30
+  - clean_priority_erase_devices=10
+
+For more information on node cleaning, see [9]_.
 
 References
 ==========
@@ -579,4 +710,7 @@ References
 .. [4] http://docs.openstack.org/developer/glance/configuring.html#configuring-the-swift-storage-backend
 .. [5] Ironic Python Agent - https://github.com/openstack/ironic-python-agent
 .. [6] https://wiki.openstack.org/wiki/Ironic/Drivers/iLODrivers
+.. [7] HP UEFI System Utilities User Guide - http://www.hp.com/ctg/Manual/c04398276.pdf
+.. [8] Secure Boot for Linux on HP Proliant servers http://h20195.www2.hp.com/V2/getpdf.aspx/4AA5-4496ENW.pdf
+.. [9] http://docs.openstack.org/developer/ironic/deploy/cleaning.html
 

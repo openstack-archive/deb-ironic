@@ -15,6 +15,7 @@
 Test class for DRAC client wrapper.
 """
 
+import time
 from xml.etree import ElementTree
 
 import mock
@@ -49,6 +50,25 @@ class DracClientTestCase(base.TestCase):
         mock_options.set_max_elements.assert_called_once_with(100)
         mock_pywsman_client.enumerate.assert_called_once_with(mock_options,
             None, self.resource_uri)
+        mock_xml.context.assert_called_once_with()
+
+    @mock.patch.object(time, 'sleep', lambda seconds: None)
+    def test_wsman_enumerate_retry(self, mock_client_pywsman):
+        mock_xml = test_utils.mock_wsman_root('<test></test>')
+        mock_pywsman_client = mock_client_pywsman.Client.return_value
+        mock_pywsman_client.enumerate.side_effect = [None, mock_xml]
+
+        client = drac_client.Client(**INFO_DICT)
+        client.wsman_enumerate(self.resource_uri)
+
+        mock_options = mock_client_pywsman.ClientOptions.return_value
+        mock_options.set_flags.assert_called_once_with(
+            mock_client_pywsman.FLAG_ENUMERATION_OPTIMIZATION)
+        mock_options.set_max_elements.assert_called_once_with(100)
+        mock_pywsman_client.enumerate.assert_has_calls([
+            mock.call(mock_options, None, self.resource_uri),
+            mock.call(mock_options, None, self.resource_uri)
+        ])
         mock_xml.context.assert_called_once_with()
 
     def test_wsman_enumerate_with_additional_pull(self, mock_client_pywsman):
@@ -117,6 +137,24 @@ class DracClientTestCase(base.TestCase):
         mock_options = mock_client_pywsman.ClientOptions.return_value
         mock_pywsman_client.invoke.assert_called_once_with(mock_options,
             self.resource_uri, method_name, None)
+
+    @mock.patch.object(time, 'sleep', lambda seconds: None)
+    def test_wsman_invoke_retry(self, mock_client_pywsman):
+        result_xml = test_utils.build_soap_xml(
+            [{'ReturnValue': drac_client.RET_SUCCESS}], self.resource_uri)
+        mock_xml = test_utils.mock_wsman_root(result_xml)
+        mock_pywsman_client = mock_client_pywsman.Client.return_value
+        mock_pywsman_client.invoke.side_effect = [None, mock_xml]
+
+        method_name = 'method'
+        client = drac_client.Client(**INFO_DICT)
+        client.wsman_invoke(self.resource_uri, method_name)
+
+        mock_options = mock_client_pywsman.ClientOptions.return_value
+        mock_pywsman_client.invoke.assert_has_calls([
+            mock.call(mock_options, self.resource_uri, method_name, None),
+            mock.call(mock_options, self.resource_uri, method_name, None)
+        ])
 
     def test_wsman_invoke_with_selectors(self, mock_client_pywsman):
         result_xml = test_utils.build_soap_xml(
