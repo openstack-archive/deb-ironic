@@ -1,4 +1,4 @@
-ironic (2015.1~b3-1) UNRELEASED; urgency=medium
+ironic (2015.1~rc1-1) UNRELEASED; urgency=medium
 
   * New upstream release.
   * Now handles rabbitmq & keystone auth credentials & ironic-api endpoint
