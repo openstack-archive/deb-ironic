@@ -14,7 +14,7 @@ if [ "${1}" = "purge" ] ; then
 				rm -f /etc/dbconfig-common/ironic-common.conf
 				if which ucf >/dev/null 2>&1; then
 					ucf --purge /etc/dbconfig-common/ironic-common.conf
-					ucfr --purge nova-common /etc/dbconfig-common/ironic-common.conf
+					ucfr --purge ironic-common /etc/dbconfig-common/ironic-common.conf
 				fi
 			fi
 		fi
