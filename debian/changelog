@@ -1,4 +1,4 @@
-ironic (2015.1.0-2) UNRELEASED; urgency=medium
+ironic (2015.1.0-2) unstable; urgency=medium
 
   * Added pt.po translation of debconf (Closes: #784598).
 
