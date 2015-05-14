@@ -6,8 +6,8 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: ironic 2015.1.0-1\n"
-"Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2015-05-01 14:36+0000\n"
+"Report-Msgid-Bugs-To: ironic@packages.debian.org\n"
+"POT-Creation-Date: 2015-05-14 21:59+0000\n"
 "PO-Revision-Date: 2015-05-07 01:46+0100\n"
 "Last-Translator: Américo Monteiro <a_monteiro@gmx.com>\n"
 "Language-Team: Portuguese <traduz@debianpt.org>\n"
@@ -200,8 +200,8 @@ msgstr ""
 #: ../ironic-common.templates:10001
 msgid "Please select a list of Ironic drivers for this conductor to enable:"
 msgstr ""
-"Por favor seleccione uma lista de drivers do Ironic para este "
-"conductor activar:"
+"Por favor seleccione uma lista de drivers do Ironic para este conductor "
+"activar:"
 
 #. Type: multiselect
 #. Description
@@ -212,8 +212,8 @@ msgid ""
 "activated drivers across all of your ironic-conductor nodes."
 msgstr ""
 "É possível activar múltiplas drivers por cada nó conductor do Ironic para "
-"gerir a implantação e poder. Não é obrigatório usar a mesma lista de "
-"drivers activadas em todos os seus nós ironic-conductor."
+"gerir a implantação e poder. Não é obrigatório usar a mesma lista de drivers "
+"activadas em todos os seus nós ironic-conductor."
 
 #~ msgid "OpenVSwitch"
 #~ msgstr "OpenVSwitch"

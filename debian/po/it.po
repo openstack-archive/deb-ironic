@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: ironic\n"
 "Report-Msgid-Bugs-To: ironic@packages.debian.org\n"
-"POT-Creation-Date: 2015-02-04 12:49+0100\n"
+"POT-Creation-Date: 2015-05-14 21:59+0000\n"
 "PO-Revision-Date: 2014-04-26 14:07+0200\n"
 "Last-Translator: Beatrice Torracca <beatricet@libero.it>\n"
 "Language-Team: Italian <debian-l10n-italian@lists.debian.org>\n"
@@ -179,4 +179,19 @@ msgstr ""
 #. Description
 #: ../ironic-common.templates:9001
 msgid "Please specify the password to use with the authentication server."
+msgstr ""
+
+#. Type: multiselect
+#. Description
+#: ../ironic-common.templates:10001
+msgid "Please select a list of Ironic drivers for this conductor to enable:"
+msgstr ""
+
+#. Type: multiselect
+#. Description
+#: ../ironic-common.templates:10001
+msgid ""
+"It is possible to activate multiple drivers per Ironic conductor node to "
+"manage deployment and power. It is not mandatory to use the same list of "
+"activated drivers across all of your ironic-conductor nodes."
 msgstr ""
