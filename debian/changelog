@@ -1,3 +1,9 @@
+ironic (2015.1.0-3) unstable; urgency=medium
+
+  * Added fr.po thanks to Julien Patriarca (Closes: #786499).
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 30 May 2015 14:45:25 +0000
+
 ironic (2015.1.0-2) unstable; urgency=medium
 
   * Added pt.po translation of debconf (Closes: #784598).
