@@ -119,7 +119,6 @@ Depends: alembic (>= 0.7.2),
          websockify,
          ${misc:Depends},
          ${python:Depends},
-Suggests: python-suds (>= 0.4.0)
 Conflicts: python-cjson
 Description: bare metal hypervisor API for OpenStack - Python lib
  Ironic provision bare metal machines instead of virtual machines. It is a fork
