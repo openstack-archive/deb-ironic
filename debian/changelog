@@ -1,3 +1,9 @@
+ironic (2015.1.0-5) unstable; urgency=medium
+
+  * Rebuilt with SQLAlchemy >= 1.0 (Closes: #794309).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 03 Aug 2015 07:34:26 +0000
+
 ironic (2015.1.0-4) unstable; urgency=medium
 
   * Removes Suggests: python-suds (Closes: #788088).
