@@ -2,6 +2,7 @@ ironic (1:4.0.0-1) experimental; urgency=medium
 
   * New upstream release.
   * Fixed (build-)depends for this release.
+  * Added patch to allow any pytz version.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 07 Sep 2015 23:33:23 +0200
 
