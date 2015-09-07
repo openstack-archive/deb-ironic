@@ -1,3 +1,10 @@
+ironic (1:4.0.0-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Fixed (build-)depends for this release.
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 07 Sep 2015 23:33:23 +0200
+
 ironic (2015.1.0-5) unstable; urgency=medium
 
   * Rebuilt with SQLAlchemy >= 1.0 (Closes: #794309).
