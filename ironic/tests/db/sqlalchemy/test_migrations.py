@@ -39,9 +39,11 @@ import contextlib
 from alembic import script
 import mock
 from oslo_db import exception as db_exc
+from oslo_db.sqlalchemy import enginefacade
 from oslo_db.sqlalchemy import test_base
 from oslo_db.sqlalchemy import test_migrations
 from oslo_db.sqlalchemy import utils as db_utils
+from oslo_log import log as logging
 from oslo_utils import uuidutils
 import sqlalchemy
 import sqlalchemy.exc
@@ -49,7 +51,6 @@ import sqlalchemy.exc
 from ironic.common.i18n import _LE
 from ironic.db.sqlalchemy import migration
 from ironic.db.sqlalchemy import models
-from ironic.openstack.common import log as logging
 from ironic.tests import base
 
 LOG = logging.getLogger(__name__)
@@ -90,9 +91,9 @@ def _is_backend_avail(backend, user, passwd, database):
 
 @contextlib.contextmanager
 def patch_with_engine(engine):
-    with mock.patch(('ironic.db'
-                     '.sqlalchemy.api.get_engine')) as patch_migration:
-        patch_migration.return_value = engine
+    with mock.patch.object(enginefacade.get_legacy_facade(),
+                           'get_engine') as patch_engine:
+        patch_engine.return_value = engine
         yield
 
 
@@ -364,6 +365,16 @@ class MigrationCheckersMixin(object):
         self.assertIsInstance(nodes.c.clean_step.type,
                               sqlalchemy.types.String)
 
+    def _check_789acc877671(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        col_names = [column.name for column in nodes.c]
+        self.assertIn('raid_config', col_names)
+        self.assertIn('target_raid_config', col_names)
+        self.assertIsInstance(nodes.c.raid_config.type,
+                              sqlalchemy.types.String)
+        self.assertIsInstance(nodes.c.target_raid_config.type,
+                              sqlalchemy.types.String)
+
     def _check_2fb93ffd2af1(self, engine, data):
         nodes = db_utils.get_table(engine, 'nodes')
         bigstring = 'a' * 255
@@ -372,6 +383,15 @@ class MigrationCheckersMixin(object):
         nodes.insert().execute(data)
         node = nodes.select(nodes.c.uuid == uuid).execute().first()
         self.assertEqual(bigstring, node['name'])
+
+    def _check_516faf1bb9b1(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        bigstring = 'a' * 255
+        uuid = uuidutils.generate_uuid()
+        data = {'uuid': uuid, 'driver': bigstring}
+        nodes.insert().execute(data)
+        node = nodes.select(nodes.c.uuid == uuid).execute().first()
+        self.assertEqual(bigstring, node['driver'])
 
     def test_upgrade_and_version(self):
         with patch_with_engine(self.engine):

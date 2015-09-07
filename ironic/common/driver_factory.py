@@ -15,27 +15,28 @@
 
 from oslo_concurrency import lockutils
 from oslo_config import cfg
+from oslo_log import log
 from stevedore import dispatch
 
 from ironic.common import exception
+from ironic.common.i18n import _
 from ironic.common.i18n import _LI
-from ironic.openstack.common import log
 
 
 LOG = log.getLogger(__name__)
 
 driver_opts = [
-        cfg.ListOpt('enabled_drivers',
-                    default=['pxe_ipmitool'],
-                    help='Specify the list of drivers to load during service '
-                         'initialization. Missing drivers, or drivers which '
-                         'fail to initialize, will prevent the conductor '
-                         'service from starting. The option default is a '
-                         'recommended set of production-oriented drivers. A '
-                         'complete list of drivers present on your system may '
-                         'be found by enumerating the "ironic.drivers" '
-                         'entrypoint. An example may be found in the '
-                         'developer documentation online.'),
+    cfg.ListOpt('enabled_drivers',
+                default=['pxe_ipmitool'],
+                help=_('Specify the list of drivers to load during service '
+                       'initialization. Missing drivers, or drivers which '
+                       'fail to initialize, will prevent the conductor '
+                       'service from starting. The option default is a '
+                       'recommended set of production-oriented drivers. A '
+                       'complete list of drivers present on your system may '
+                       'be found by enumerating the "ironic.drivers" '
+                       'entrypoint. An example may be found in the '
+                       'developer documentation online.')),
 ]
 
 CONF = cfg.CONF
@@ -119,11 +120,11 @@ class DriverFactory(object):
             return ext.name in CONF.enabled_drivers
 
         cls._extension_manager = (
-                dispatch.NameDispatchExtensionManager(
-                        'ironic.drivers',
-                        _check_func,
-                        invoke_on_load=True,
-                        on_load_failure_callback=_catch_driver_not_found))
+            dispatch.NameDispatchExtensionManager(
+                'ironic.drivers',
+                _check_func,
+                invoke_on_load=True,
+                on_load_failure_callback=_catch_driver_not_found))
 
         # NOTE(deva): if we were unable to load any configured driver, perhaps
         #             because it is not present on the system, raise an error.
@@ -136,7 +137,7 @@ class DriverFactory(object):
             raise exception.DriverNotFound(driver_name=names)
 
         LOG.info(_LI("Loaded the following drivers: %s"),
-                cls._extension_manager.names())
+                 cls._extension_manager.names())
 
     @property
     def names(self):

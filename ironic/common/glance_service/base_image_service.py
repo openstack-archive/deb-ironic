@@ -16,7 +16,6 @@
 
 
 import functools
-import logging
 import os
 import sys
 import time
@@ -24,7 +23,9 @@ import time
 from glanceclient import client
 from glanceclient import exc as glance_exc
 from oslo_config import cfg
+from oslo_log import log
 import sendfile
+import six
 import six.moves.urllib.parse as urlparse
 
 from ironic.common import exception
@@ -32,7 +33,7 @@ from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _LE
 
 
-LOG = logging.getLogger(__name__)
+LOG = log.getLogger(__name__)
 CONF = cfg.CONF
 
 
@@ -126,13 +127,13 @@ class BaseImageService(object):
                 host = self.glance_host
                 port = self.glance_port
                 error_msg = _LE("Error contacting glance server "
-                            "'%(host)s:%(port)s' for '%(method)s', attempt"
-                            " %(attempt)s of %(num_attempts)s failed.")
+                                "'%(host)s:%(port)s' for '%(method)s', attempt"
+                                " %(attempt)s of %(num_attempts)s failed.")
                 LOG.exception(error_msg, {'host': host,
-                                    'port': port,
-                                    'num_attempts': num_attempts,
-                                    'attempt': attempt,
-                                    'method': method})
+                                          'port': port,
+                                          'num_attempts': num_attempts,
+                                          'attempt': attempt,
+                                          'method': method})
                 if attempt == num_attempts:
                     raise exception.GlanceConnectionFailed(host=host,
                                                            port=port,
@@ -146,7 +147,7 @@ class BaseImageService(object):
                 else:
                     new_exc = _translate_image_exception(
                         args[0], exc_value)
-                raise new_exc, None, exc_trace
+                six.reraise(type(new_exc), new_exc, exc_trace)
 
     @check_image_service
     def _detail(self, method='list', **kwargs):

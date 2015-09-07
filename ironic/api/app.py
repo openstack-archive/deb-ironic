@@ -22,16 +22,20 @@ from ironic.api import acl
 from ironic.api import config
 from ironic.api import hooks
 from ironic.api import middleware
+from ironic.common.i18n import _
 
 api_opts = [
-    cfg.StrOpt('auth_strategy',
+    cfg.StrOpt(
+        'auth_strategy',
         default='keystone',
-        help='Method to use for authentication: noauth or keystone.'),
+        help=_('Authentication strategy used by ironic-api: one of "keystone" '
+               'or "noauth". "noauth" should not be used in a production '
+               'environment because all authentication will be disabled.')),
     cfg.BoolOpt('pecan_debug',
                 default=False,
-                help=('Enable pecan debug mode. WARNING: this is insecure '
-                      'and should not be used in production.')),
-    ]
+                help=_('Enable pecan debug mode. WARNING: this is insecure '
+                       'and should not be used in a production environment.')),
+]
 
 CONF = cfg.CONF
 CONF.register_opts(api_opts)

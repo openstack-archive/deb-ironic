@@ -17,27 +17,27 @@ import re
 
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_service import loopingcall
 
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LW
 from ironic.common import utils
-from ironic.openstack.common import log as logging
-from ironic.openstack.common import loopingcall
 
 opts = [
     cfg.IntOpt('check_device_interval',
                default=1,
-               help='After Ironic has completed creating the partition table, '
-                    'it continues to check for activity on the attached iSCSI '
-                    'device status at this interval prior to copying the image'
-                    ' to the node, in seconds'),
+               help=_('After Ironic has completed creating the partition '
+                      'table, it continues to check for activity on the '
+                      'attached iSCSI device status at this interval prior '
+                      'to copying the image to the node, in seconds')),
     cfg.IntOpt('check_device_max_retries',
                default=20,
-               help='The maximum number of times to check that the device is '
-                    'not accessed by another process. If the device is still '
-                    'busy after that, the disk partitioning will be treated as'
-                    ' having failed.'),
+               help=_('The maximum number of times to check that the device '
+                      'is not accessed by another process. If the device is '
+                      'still busy after that, the disk partitioning will be '
+                      'treated as having failed.')),
 ]
 
 CONF = cfg.CONF
@@ -157,8 +157,8 @@ class DiskPartitioner(object):
         max_retries = CONF.disk_partitioner.check_device_max_retries
 
         timer = loopingcall.FixedIntervalLoopingCall(
-                    self._wait_for_disk_to_become_available,
-                    retries, max_retries, pids, fuser_err)
+            self._wait_for_disk_to_become_available,
+            retries, max_retries, pids, fuser_err)
         timer.start(interval=interval).wait()
 
         if retries[0] > max_retries:
@@ -176,7 +176,7 @@ class DiskPartitioner(object):
                     % {'device': self._device, 'fuser_err': fuser_err[0]})
 
 
-_PARTED_PRINT_RE = re.compile(r"^\d+:([\d\.]+)MiB:"
+_PARTED_PRINT_RE = re.compile(r"^(\d+):([\d\.]+)MiB:"
                               "([\d\.]+)MiB:([\d\.]+)MiB:(\w*)::(\w*)")
 
 
@@ -185,14 +185,16 @@ def list_partitions(device):
 
     :param device: The device path.
     :returns: list of dictionaries (one per partition) with keys:
-              start, end, size (in MiB), filesystem, flags
+              number, start, end, size (in MiB), filesystem, flags
     """
     output = utils.execute(
         'parted', '-s', '-m', device, 'unit', 'MiB', 'print',
-        use_standard_locale=True)[0]
+        use_standard_locale=True, run_as_root=True)[0]
+    if isinstance(output, bytes):
+        output = output.decode("utf-8")
     lines = [line for line in output.split('\n') if line.strip()][2:]
     # Example of line: 1:1.00MiB:501MiB:500MiB:ext4::boot
-    fields = ('start', 'end', 'size', 'filesystem', 'flags')
+    fields = ('number', 'start', 'end', 'size', 'filesystem', 'flags')
     result = []
     for line in lines:
         match = _PARTED_PRINT_RE.match(line)
@@ -203,7 +205,7 @@ def list_partitions(device):
                      dict(device=device, line=line))
             continue
         # Cast int fields to ints (some are floats and we round them down)
-        groups = [int(float(x)) if i < 3 else x
+        groups = [int(float(x)) if i < 4 else x
                   for i, x in enumerate(match.groups())]
         result.append(dict(zip(fields, groups)))
     return result

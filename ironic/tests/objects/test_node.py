@@ -71,9 +71,9 @@ class TestNodeObject(base.DbTestCase):
 
                 mock_get_node.assert_called_once_with(uuid)
                 mock_update_node.assert_called_once_with(
-                        uuid, {'properties': {"fake": "property"},
-                               'driver': 'fake-driver',
-                               'driver_internal_info': {}})
+                    uuid, {'properties': {"fake": "property"},
+                           'driver': 'fake-driver',
+                           'driver_internal_info': {}})
                 self.assertEqual(self.context, n._context)
                 self.assertEqual({}, n.driver_internal_info)
 
@@ -116,7 +116,8 @@ class TestNodeObject(base.DbTestCase):
         with mock.patch.object(self.dbapi, 'reserve_node',
                                autospec=True) as mock_reserve:
             node_id = 'non-existent'
-            mock_reserve.side_effect = exception.NodeNotFound(node=node_id)
+            mock_reserve.side_effect = iter(
+                [exception.NodeNotFound(node=node_id)])
             self.assertRaises(exception.NodeNotFound,
                               objects.Node.reserve, self.context, 'fake-tag',
                               node_id)
@@ -133,7 +134,18 @@ class TestNodeObject(base.DbTestCase):
         with mock.patch.object(self.dbapi, 'release_node',
                                autospec=True) as mock_release:
             node_id = 'non-existent'
-            mock_release.side_effect = exception.NodeNotFound(node=node_id)
+            mock_release.side_effect = iter(
+                [exception.NodeNotFound(node=node_id)])
             self.assertRaises(exception.NodeNotFound,
                               objects.Node.release, self.context,
                               'fake-tag', node_id)
+
+    def test_touch_provisioning(self):
+        with mock.patch.object(self.dbapi, 'get_node_by_uuid',
+                               autospec=True) as mock_get_node:
+            mock_get_node.return_value = self.fake_node
+            with mock.patch.object(self.dbapi, 'touch_node_provisioning',
+                                   autospec=True) as mock_touch:
+                node = objects.Node.get(self.context, self.fake_node['uuid'])
+                node.touch_provisioning()
+                mock_touch.assert_called_once_with(node.id)

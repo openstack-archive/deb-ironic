@@ -21,7 +21,7 @@ drivers.  For instance, the MultipleVendorInterface class demonstrates how to
 load more than one interface and wrap them in some logic to route incoming
 vendor_passthru requests appropriately. This can be useful eg. when mixing
 functionality between a power interface and a deploy interface, when both rely
-on seprate vendor_passthru methods.
+on separate vendor_passthru methods.
 """
 
 from ironic.common import boot_devices
@@ -45,11 +45,34 @@ class FakePower(base.PowerInterface):
 
     def set_power_state(self, task, power_state):
         if power_state not in [states.POWER_ON, states.POWER_OFF]:
-            raise exception.InvalidParameterValue(_("set_power_state called "
-                    "with an invalid power state: %s.") % power_state)
+            raise exception.InvalidParameterValue(
+                _("set_power_state called with an invalid power"
+                  "state: %s.") % power_state)
         task.node.power_state = power_state
 
     def reboot(self, task):
+        pass
+
+
+class FakeBoot(base.BootInterface):
+    """Example implementation of a simple boot interface."""
+
+    def get_properties(self):
+        return {}
+
+    def validate(self, task):
+        pass
+
+    def prepare_ramdisk(self, task):
+        pass
+
+    def clean_up_ramdisk(self, task):
+        pass
+
+    def prepare_instance(self, task):
+        pass
+
+    def clean_up_instance(self, task):
         pass
 
 
@@ -155,11 +178,11 @@ class FakeManagement(base.ManagementInterface):
     def validate(self, task):
         pass
 
-    def get_supported_boot_devices(self):
+    def get_supported_boot_devices(self, task):
         return [boot_devices.PXE]
 
     def set_boot_device(self, task, device, persistent=False):
-        if device not in self.get_supported_boot_devices():
+        if device not in self.get_supported_boot_devices(task):
             raise exception.InvalidParameterValue(_(
                 "Invalid boot device %s specified.") % device)
 
@@ -182,3 +205,17 @@ class FakeInspect(base.InspectInterface):
 
     def inspect_hardware(self, task):
         return states.MANAGEABLE
+
+
+class FakeRAID(base.RAIDInterface):
+    """Example implementation of simple RAIDInterface."""
+
+    def get_properties(self):
+        return {}
+
+    def create_configuration(self, task, create_root_volume=True,
+                             create_nonroot_volumes=True):
+        pass
+
+    def delete_configuration(self, task):
+        pass

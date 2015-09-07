@@ -28,8 +28,9 @@ the state leaves the current state unchanged. The node is NOT placed into
 maintenance mode in this case.
 """
 
+from oslo_log import log as logging
+
 from ironic.common import fsm
-from ironic.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -39,11 +40,11 @@ LOG = logging.getLogger(__name__)
 
 # TODO(deva): add add'l state mappings here
 VERBS = {
-        'active': 'deploy',
-        'deleted': 'delete',
-        'manage': 'manage',
-        'provide': 'provide',
-        'inspect': 'inspect',
+    'active': 'deploy',
+    'deleted': 'delete',
+    'manage': 'manage',
+    'provide': 'provide',
+    'inspect': 'inspect',
 }
 """ Mapping of state-changing events that are PUT to the REST API
 
@@ -63,6 +64,15 @@ NOSTATE = None
 This state is used with power_state to represent a lack of knowledge of
 power state, and in target_*_state fields when there is no target.
 """
+
+ENROLL = 'enroll'
+""" Node is enrolled.
+
+This state indicates that Ironic is aware of a node, but is not managing it.
+"""
+
+VERIFYING = 'verifying'
+""" Node power management credentials are being verified. """
 
 MANAGEABLE = 'manageable'
 """ Node is in a manageable state.
@@ -122,6 +132,13 @@ represented in target_provision_state.
 CLEANING = 'cleaning'
 """ Node is being automatically cleaned to prepare it for provisioning. """
 
+CLEANWAIT = 'clean wait'
+""" Node is waiting for a clean step to be finished.
+
+This will be the node's `provision_state` while the node is waiting for
+the driver to finish a cleaning step.
+"""
+
 CLEANFAIL = 'clean failed'
 """ Node failed cleaning. This requires operator intervention to resolve. """
 
@@ -150,8 +167,12 @@ INSPECTFAIL = 'inspect failed'
 """ Node inspection failed. """
 
 
-UPDATE_ALLOWED_STATES = (DEPLOYFAIL, INSPECTING, INSPECTFAIL, CLEANFAIL)
+UPDATE_ALLOWED_STATES = (DEPLOYFAIL, INSPECTING, INSPECTFAIL, CLEANFAIL, ERROR,
+                         VERIFYING)
 """Transitional states in which we allow updating a node."""
+
+DELETE_ALLOWED_STATES = (AVAILABLE, NOSTATE, MANAGEABLE, ENROLL)
+"""States in which node deletion is allowed."""
 
 
 ##############
@@ -174,7 +195,7 @@ REBOOT = 'rebooting'
 def on_exit(old_state, event):
     """Used to log when a state is exited."""
     LOG.debug("Exiting old state '%s' in response to event '%s'",
-        old_state, event)
+              old_state, event)
 
 
 def on_enter(new_state, event):
@@ -189,10 +210,14 @@ watchers['on_enter'] = on_enter
 machine = fsm.FSM()
 
 # Add stable states
+machine.add_state(ENROLL, stable=True, **watchers)
 machine.add_state(MANAGEABLE, stable=True, **watchers)
 machine.add_state(AVAILABLE, stable=True, **watchers)
 machine.add_state(ACTIVE, stable=True, **watchers)
 machine.add_state(ERROR, stable=True, **watchers)
+
+# Add verifying state
+machine.add_state(VERIFYING, target=MANAGEABLE, **watchers)
 
 # Add deploy* states
 # NOTE(deva): Juno shows a target_provision_state of DEPLOYDONE
@@ -203,6 +228,7 @@ machine.add_state(DEPLOYFAIL, target=ACTIVE, **watchers)
 
 # Add clean* states
 machine.add_state(CLEANING, target=AVAILABLE, **watchers)
+machine.add_state(CLEANWAIT, target=AVAILABLE, **watchers)
 machine.add_state(CLEANFAIL, target=AVAILABLE, **watchers)
 
 # Add delete* states
@@ -261,12 +287,14 @@ machine.add_transition(CLEANING, AVAILABLE, 'done')
 
 # If cleaning fails, wait for operator intervention
 machine.add_transition(CLEANING, CLEANFAIL, 'fail')
+machine.add_transition(CLEANWAIT, CLEANFAIL, 'fail')
 
-# A node that fails cleaning may be put back through cleaning
-machine.add_transition(CLEANFAIL, CLEANING, 'clean')
+# Cleaning may also wait on external callbacks
+machine.add_transition(CLEANING, CLEANWAIT, 'wait')
+machine.add_transition(CLEANWAIT, CLEANING, 'resume')
 
-# An operator may want to hold a CLEANFAIL node in operator for zapping or
-# outside-of-Ironic operations (like replacing hardware)
+# An operator may want to move a CLEANFAIL node to MANAGEABLE, to perform
+# other actions like zapping
 machine.add_transition(CLEANFAIL, MANAGEABLE, 'manage')
 
 # From MANAGEABLE, a node may move to available after going through cleaning
@@ -298,3 +326,12 @@ machine.add_transition(INSPECTFAIL, MANAGEABLE, 'manage')
 
 # Reinitiate the inspect after inspectfail.
 machine.add_transition(INSPECTFAIL, INSPECTING, 'inspect')
+
+# Start power credentials verification
+machine.add_transition(ENROLL, VERIFYING, 'manage')
+
+# Verification can succeed
+machine.add_transition(VERIFYING, MANAGEABLE, 'done')
+
+# Verification can fail with setting last_error and rolling back to ENROLL
+machine.add_transition(VERIFYING, ENROLL, 'fail')

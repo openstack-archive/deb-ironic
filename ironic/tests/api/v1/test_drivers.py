@@ -16,6 +16,7 @@
 import json
 
 import mock
+from six.moves import http_client
 from testtools.matchers import HasLength
 
 from ironic.api.controllers.v1 import driver
@@ -45,10 +46,10 @@ class TestListDrivers(base.FunctionalTest):
         expected = sorted([
             {'name': self.d1, 'hosts': [self.h1]},
             {'name': self.d2, 'hosts': [self.h1, self.h2]},
-        ])
+        ], key=lambda d: d['name'])
         data = self.get_json('/drivers')
         self.assertThat(data['drivers'], HasLength(2))
-        drivers = sorted(data['drivers'])
+        drivers = sorted(data['drivers'], key=lambda d: d['name'])
         for i in range(len(expected)):
             d = drivers[i]
             self.assertEqual(expected[i]['name'], d['name'])
@@ -71,60 +72,63 @@ class TestListDrivers(base.FunctionalTest):
 
     def test_drivers_get_one_not_found(self):
         response = self.get_json('/drivers/%s' % self.d1, expect_errors=True)
-        self.assertEqual(404, response.status_int)
+        self.assertEqual(http_client.NOT_FOUND, response.status_int)
 
     @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
     def test_driver_vendor_passthru_sync(self, mocked_driver_vendor_passthru):
         self.register_fake_conductors()
-        mocked_driver_vendor_passthru.return_value = ({
-            'return_key': 'return_value',
-        }, False)
+        mocked_driver_vendor_passthru.return_value = {
+            'return': {'return_key': 'return_value'},
+            'async': False,
+            'attach': False}
         response = self.post_json(
             '/drivers/%s/vendor_passthru/do_test' % self.d1,
             {'test_key': 'test_value'})
-        self.assertEqual(200, response.status_int)
-        self.assertEqual(mocked_driver_vendor_passthru.return_value[0],
+        self.assertEqual(http_client.OK, response.status_int)
+        self.assertEqual(mocked_driver_vendor_passthru.return_value['return'],
                          response.json)
 
     @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
     def test_driver_vendor_passthru_async(self, mocked_driver_vendor_passthru):
         self.register_fake_conductors()
-        mocked_driver_vendor_passthru.return_value = (None, True)
+        mocked_driver_vendor_passthru.return_value = {'return': None,
+                                                      'async': True,
+                                                      'attach': False}
         response = self.post_json(
             '/drivers/%s/vendor_passthru/do_test' % self.d1,
             {'test_key': 'test_value'})
-        self.assertEqual(202, response.status_int)
-        self.assertIsNone(mocked_driver_vendor_passthru.return_value[0])
+        self.assertEqual(http_client.ACCEPTED, response.status_int)
+        self.assertIsNone(mocked_driver_vendor_passthru.return_value['return'])
 
     @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
     def test_driver_vendor_passthru_put(self, mocked_driver_vendor_passthru):
         self.register_fake_conductors()
-        return_value = (None, 'async')
+        return_value = {'return': None, 'async': True, 'attach': False}
         mocked_driver_vendor_passthru.return_value = return_value
         response = self.put_json(
             '/drivers/%s/vendor_passthru/do_test' % self.d1,
             {'test_key': 'test_value'})
-        self.assertEqual(202, response.status_int)
-        self.assertEqual(return_value[0], response.json)
+        self.assertEqual(http_client.ACCEPTED, response.status_int)
+        self.assertEqual(return_value['return'], response.json)
 
     @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
     def test_driver_vendor_passthru_get(self, mocked_driver_vendor_passthru):
         self.register_fake_conductors()
-        return_value = ('foo', 'sync')
+        return_value = {'return': 'foo', 'async': False, 'attach': False}
         mocked_driver_vendor_passthru.return_value = return_value
         response = self.get_json(
             '/drivers/%s/vendor_passthru/do_test' % self.d1)
-        self.assertEqual(return_value[0], response)
+        self.assertEqual(return_value['return'], response)
 
     @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
     def test_driver_vendor_passthru_delete(self, mock_driver_vendor_passthru):
         self.register_fake_conductors()
-        return_value = (None, 'async')
+        return_value = {'return': None, 'async': True, 'attach': False}
         mock_driver_vendor_passthru.return_value = return_value
         response = self.delete(
             '/drivers/%s/vendor_passthru/do_test' % self.d1)
-        self.assertEqual(202, response.status_int)
-        self.assertEqual(return_value[0], response.json)
+        self.assertEqual(http_client.ACCEPTED, response.status_int)
+        self.assertEqual(return_value['return'], response.json)
 
     def test_driver_vendor_passthru_driver_not_found(self):
         # tests when given driver is not found
@@ -134,7 +138,7 @@ class TestListDrivers(base.FunctionalTest):
             {'test_key': 'test_value'},
             expect_errors=True)
 
-        self.assertEqual(404, response.status_int)
+        self.assertEqual(http_client.NOT_FOUND, response.status_int)
 
     def test_driver_vendor_passthru_method_not_found(self):
         response = self.post_json(
@@ -142,7 +146,7 @@ class TestListDrivers(base.FunctionalTest):
             {'test_key': 'test_value'},
             expect_errors=True)
 
-        self.assertEqual(400, response.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_int)
         error = json.loads(response.json['error_message'])
         self.assertEqual('Missing argument: "method"',
                          error['faultstring'])
@@ -158,7 +162,7 @@ class TestListDrivers(base.FunctionalTest):
         data = self.get_json(path)
         self.assertEqual(return_value, data)
         get_methods_mock.assert_called_once_with(mock.ANY, self.d1,
-                                                  topic=mock.ANY)
+                                                 topic=mock.ANY)
 
         # Now let's test the cache: Reset the mock
         get_methods_mock.reset_mock()
@@ -212,11 +216,11 @@ class TestDriverProperties(base.FunctionalTest):
         driver._DRIVER_PROPERTIES = {}
         driver_name = 'bad_driver'
         mock_topic.side_effect = exception.DriverNotFound(
-                driver_name=driver_name)
+            driver_name=driver_name)
         mock_properties.return_value = {'prop1': 'Property 1. Required.'}
         ret = self.get_json('/drivers/%s/properties' % driver_name,
                             expect_errors=True)
-        self.assertEqual(404, ret.status_int)
+        self.assertEqual(http_client.NOT_FOUND, ret.status_int)
         mock_topic.assert_called_once_with(driver_name)
         self.assertFalse(mock_properties.called)
 
@@ -227,10 +231,10 @@ class TestDriverProperties(base.FunctionalTest):
         driver_name = 'driver'
         mock_topic.return_value = 'driver_topic'
         mock_properties.side_effect = exception.DriverNotFound(
-                driver_name=driver_name)
+            driver_name=driver_name)
         ret = self.get_json('/drivers/%s/properties' % driver_name,
                             expect_errors=True)
-        self.assertEqual(404, ret.status_int)
+        self.assertEqual(http_client.NOT_FOUND, ret.status_int)
         mock_topic.assert_called_once_with(driver_name)
         mock_properties.assert_called_once_with(mock.ANY, driver_name,
                                                 topic=mock_topic.return_value)

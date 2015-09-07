@@ -2,8 +2,6 @@
 #
 # Copyright © 2012 eNovance <licensing@enovance.com>
 #
-# Author: Julien Danjou <julien@danjou.info>
-#
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
 # a copy of the License at
@@ -19,31 +17,32 @@
 import signal
 import socket
 
-from oslo import messaging
 from oslo_config import cfg
 from oslo_context import context
+from oslo_log import log
+import oslo_messaging as messaging
+from oslo_service import service
 from oslo_utils import importutils
 
 from ironic.common import config
+from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.common import rpc
 from ironic.objects import base as objects_base
-from ironic.openstack.common import log
-from ironic.openstack.common import service
 
 
 service_opts = [
     cfg.IntOpt('periodic_interval',
                default=60,
-               help='Seconds between running periodic tasks.'),
+               help=_('Seconds between running periodic tasks.')),
     cfg.StrOpt('host',
                default=socket.getfqdn(),
-               help='Name of this node.  This can be an opaque identifier.  '
-               'It is not necessarily a hostname, FQDN, or IP address. '
-               'However, the node name must be valid within '
-               'an AMQP key, and if using ZeroMQ, a valid '
-               'hostname, FQDN, or IP address.'),
+               help=_('Name of this node.  This can be an opaque identifier. '
+                      'It is not necessarily a hostname, FQDN, or IP address. '
+                      'However, the node name must be valid within '
+                      'an AMQP key, and if using ZeroMQ, a valid '
+                      'hostname, FQDN, or IP address.')),
 ]
 
 cfg.CONF.register_opts(service_opts)
@@ -76,9 +75,9 @@ class RPCService(service.Service):
         self.handle_signal()
         self.manager.init_host()
         self.tg.add_dynamic_timer(
-                self.manager.periodic_tasks,
-                periodic_interval_max=cfg.CONF.periodic_interval,
-                context=admin_context)
+            self.manager.periodic_tasks,
+            periodic_interval_max=cfg.CONF.periodic_interval,
+            context=admin_context)
 
         LOG.info(_LI('Created RPC server for service %(service)s on host '
                      '%(host)s.'),
@@ -118,9 +117,8 @@ class RPCService(service.Service):
 
 
 def prepare_service(argv=[]):
-    config.parse_args(argv)
-    cfg.set_defaults(log.log_opts,
-                     default_log_levels=['amqp=WARN',
+    log.register_options(cfg.CONF)
+    log.set_defaults(default_log_levels=['amqp=WARN',
                                          'amqplib=WARN',
                                          'qpid.messaging=INFO',
                                          'oslo.messaging=INFO',
@@ -136,4 +134,5 @@ def prepare_service(argv=[]):
                                          'ironic.openstack.common=WARN',
                                          'urllib3.connectionpool=WARN',
                                          ])
-    log.setup('ironic')
+    config.parse_args(argv)
+    log.setup(cfg.CONF, 'ironic')

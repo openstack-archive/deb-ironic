@@ -78,7 +78,7 @@ the node vendor passthru endpoint:
                   raise MissingParameterValue()
 
       @base.driver_passthru(['GET'], async=False)
-      def authentication_types(self, context **kwargs):
+      def authentication_types(self, context, **kwargs):
           return {"types": ["NONE", "MD5", "MD2"]}
 
       @base.passthru(['POST'])
@@ -113,7 +113,7 @@ Both decorators accepts the same parameters:
       ...
 
 * description: A string containing a nice description about what that
-  method is suppose to do. Defaults to "" (empty string).
+  method is supposed to do. Defaults to "" (empty string).
 
 .. _VendorInterface: ../api/ironic.drivers.base.html#ironic.drivers.base.VendorInterface
 
@@ -124,3 +124,8 @@ Both decorators accepts the same parameters:
    Please avoid having a synchronous method for slow/long-running
    operations **or** if the method does talk to a BMC; BMCs are flaky
    and very easy to break.
+
+.. WARNING::
+   Each asynchronous request consumes a worker thread in the
+   ``ironic-conductor`` process. This can lead to starvation of the
+   thread pool, resulting in a denial of service.

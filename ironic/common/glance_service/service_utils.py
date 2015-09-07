@@ -16,20 +16,21 @@
 
 import copy
 import itertools
-import logging
 import random
 
 from oslo_config import cfg
+from oslo_log import log
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
+from oslo_utils import uuidutils
 import six
 import six.moves.urllib.parse as urlparse
 
 from ironic.common import exception
-
+from ironic.common import image_service
 
 CONF = cfg.CONF
-LOG = logging.getLogger(__name__)
+LOG = log.getLogger(__name__)
 
 _GLANCE_API_SERVER = None
 """ iterator that cycles (indefinitely) over glance API servers. """
@@ -76,10 +77,15 @@ def _extract_attributes(image):
 
 
 def _convert_timestamps_to_datetimes(image_meta):
-    """Returns image with timestamp fields converted to datetime objects."""
+    """Convert timestamps to datetime objects
+
+    Returns image metadata with timestamp fields converted to naive UTC
+    datetime objects.
+    """
     for attr in ['created_at', 'updated_at', 'deleted_at']:
         if image_meta.get(attr):
-            image_meta[attr] = timeutils.parse_isotime(image_meta[attr])
+            image_meta[attr] = timeutils.normalize_time(
+                timeutils.parse_isotime(image_meta[attr]))
     return image_meta
 
 _CONVERT_PROPS = ('block_device_mapping', 'mappings')
@@ -150,7 +156,7 @@ def _get_api_server():
 
     if not _GLANCE_API_SERVER:
         _GLANCE_API_SERVER = _get_api_server_iterator()
-    return _GLANCE_API_SERVER.next()
+    return six.next(_GLANCE_API_SERVER)
 
 
 def parse_image_ref(image_href):
@@ -242,4 +248,20 @@ def is_image_available(context, image):
 def is_glance_image(image_href):
     if not isinstance(image_href, six.string_types):
         return False
-    return image_href.startswith('glance://') or '/' not in image_href
+    return (image_href.startswith('glance://') or
+            uuidutils.is_uuid_like(image_href))
+
+
+def is_image_href_ordinary_file_name(image_href):
+    """judge if image_href is a ordinary file name.
+
+    This method judges if image_href is a ordinary file name or not,
+    which is a file supposed to be stored in share file system.
+    The ordinary file name is neither glance image href
+    nor image service href.
+
+    :returns: True if image_href is ordinary file name, False otherwise.
+    """
+    return not (is_glance_image(image_href) or
+                urlparse.urlparse(image_href).scheme.lower() in
+                image_service.protocol_mapping)

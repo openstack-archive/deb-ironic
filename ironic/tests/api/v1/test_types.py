@@ -16,7 +16,8 @@
 #    under the License.
 
 import mock
-from oslo_utils import uuidutils
+import six
+from six.moves import http_client
 import webtest
 import wsme
 from wsme import types as wtypes
@@ -53,36 +54,36 @@ class TestUuidType(base.TestCase):
 
 class TestNameType(base.TestCase):
 
-    def test_valid_name(self):
+    @mock.patch("pecan.request")
+    def test_valid_name(self, mock_pecan_req):
+        mock_pecan_req.version.minor = 10
         test_name = 'hal-9000'
         self.assertEqual(test_name, types.NameType.validate(test_name))
 
-    def test_invalid_name(self):
+    @mock.patch("pecan.request")
+    def test_invalid_name(self, mock_pecan_req):
+        mock_pecan_req.version.minor = 10
         self.assertRaises(exception.InvalidName,
                           types.NameType.validate, '-this is not valid-')
 
 
 class TestUuidOrNameType(base.TestCase):
 
-    @mock.patch.object(uuidutils, 'is_uuid_like')
-    @mock.patch.object(utils, 'is_hostname_safe')
-    def test_valid_uuid(self, host_mock, uuid_mock):
+    @mock.patch("pecan.request")
+    def test_valid_uuid(self, mock_pecan_req):
+        mock_pecan_req.version.minor = 10
         test_uuid = '1a1a1a1a-2b2b-3c3c-4d4d-5e5e5e5e5e5e'
-        host_mock.return_value = False
-        uuid_mock.return_value = True
         self.assertTrue(types.UuidOrNameType.validate(test_uuid))
-        uuid_mock.assert_called_once_with(test_uuid)
 
-    @mock.patch.object(uuidutils, 'is_uuid_like')
-    @mock.patch.object(utils, 'is_hostname_safe')
-    def test_valid_name(self, host_mock, uuid_mock):
+    @mock.patch("pecan.request")
+    def test_valid_name(self, mock_pecan_req):
+        mock_pecan_req.version.minor = 10
         test_name = 'dc16-database5'
-        uuid_mock.return_value = False
-        host_mock.return_value = True
         self.assertTrue(types.UuidOrNameType.validate(test_name))
-        host_mock.assert_called_once_with(test_name)
 
-    def test_invalid_uuid_or_name(self):
+    @mock.patch("pecan.request")
+    def test_invalid_uuid_or_name(self, mock_pecan_req):
+        mock_pecan_req.version.minor = 10
         self.assertRaises(exception.InvalidUuidOrName,
                           types.UuidOrNameType.validate, 'inval#uuid%or*name')
 
@@ -116,8 +117,8 @@ class TestJsonPatchType(base.TestCase):
 
     def _patch_json(self, params, expect_errors=False):
         return self.app.patch_json('/test', params=params,
-                              headers={'Accept': 'application/json'},
-                              expect_errors=expect_errors)
+                                   headers={'Accept': 'application/json'},
+                                   expect_errors=expect_errors)
 
     def test_valid_patches(self):
         valid_patches = [{'path': '/extra/foo', 'op': 'remove'},
@@ -133,68 +134,68 @@ class TestJsonPatchType(base.TestCase):
                          {'path': '/dict', 'op': 'add',
                           'value': {'cat': 'meow'}}]
         ret = self._patch_json(valid_patches, False)
-        self.assertEqual(200, ret.status_int)
-        self.assertEqual(sorted(valid_patches), sorted(ret.json))
+        self.assertEqual(http_client.OK, ret.status_int)
+        self.assertItemsEqual(valid_patches, ret.json)
 
     def test_cannot_update_internal_attr(self):
         patch = [{'path': '/internal', 'op': 'replace', 'value': 'foo'}]
         ret = self._patch_json(patch, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
     def test_cannot_update_internal_dict_attr(self):
         patch = [{'path': '/internal/test', 'op': 'replace',
                  'value': 'foo'}]
         ret = self._patch_json(patch, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
     def test_mandatory_attr(self):
         patch = [{'op': 'replace', 'path': '/mandatory', 'value': 'foo'}]
         ret = self._patch_json(patch, False)
-        self.assertEqual(200, ret.status_int)
+        self.assertEqual(http_client.OK, ret.status_int)
         self.assertEqual(patch, ret.json)
 
     def test_cannot_remove_mandatory_attr(self):
         patch = [{'op': 'remove', 'path': '/mandatory'}]
         ret = self._patch_json(patch, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
     def test_missing_required_fields_path(self):
         missing_path = [{'op': 'remove'}]
         ret = self._patch_json(missing_path, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
     def test_missing_required_fields_op(self):
         missing_op = [{'path': '/foo'}]
         ret = self._patch_json(missing_op, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
     def test_invalid_op(self):
         patch = [{'path': '/foo', 'op': 'invalid'}]
         ret = self._patch_json(patch, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
     def test_invalid_path(self):
         patch = [{'path': 'invalid-path', 'op': 'remove'}]
         ret = self._patch_json(patch, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
     def test_cannot_add_with_no_value(self):
         patch = [{'path': '/extra/foo', 'op': 'add'}]
         ret = self._patch_json(patch, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
     def test_cannot_replace_with_no_value(self):
         patch = [{'path': '/foo', 'op': 'replace'}]
         ret = self._patch_json(patch, True)
-        self.assertEqual(400, ret.status_int)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_int)
         self.assertTrue(ret.json['faultstring'])
 
 
@@ -245,7 +246,7 @@ class TestJsonType(base.TestCase):
         value = vt.validate({'foo': 'bar'})
         self.assertEqual({'foo': 'bar'}, value)
         value = vt.validate(None)
-        self.assertEqual(None, value)
+        self.assertIsNone(value)
 
     def test_invalid_values(self):
         vt = types.jsontype
@@ -255,9 +256,24 @@ class TestJsonType(base.TestCase):
         vts = str(types.jsontype)
         self.assertIn(str(wtypes.text), vts)
         self.assertIn(str(int), vts)
-        self.assertIn(str(long), vts)
+        if six.PY2:
+            self.assertIn(str(long), vts)
         self.assertIn(str(float), vts)
         self.assertIn(str(types.BooleanType), vts)
         self.assertIn(str(list), vts)
         self.assertIn(str(dict), vts)
         self.assertIn(str(None), vts)
+
+
+class TestListType(base.TestCase):
+
+    def test_list_type(self):
+        v = types.ListType()
+        self.assertItemsEqual(['foo', 'bar'], v.validate('foo,bar'))
+        self.assertItemsEqual(['cat', 'meow'], v.validate("cat  ,  meow"))
+        self.assertItemsEqual(['spongebob', 'squarepants'],
+                              v.validate("SpongeBob,SquarePants"))
+        self.assertItemsEqual(['foo', 'bar'],
+                              v.validate("foo, ,,bar"))
+        self.assertItemsEqual(['foo', 'bar'],
+                              v.validate("foo,foo,foo,bar"))

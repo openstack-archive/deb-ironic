@@ -40,9 +40,9 @@ Prerequisites
   managing HP Proliant hardware.
 
   Install ``proliantutils`` [2]_ module on the Ironic conductor node. Minimum
-  version required is 2.1.0.::
+  version required is 2.1.1.::
 
-   $ pip install "proliantutils>=2.1.0"
+   $ pip install "proliantutils>=2.1.1"
 
 * ``ipmitool`` command must be present on the service node(s) where
   ``ironic-conductor`` is running. On most distros, this is provided as part
@@ -82,8 +82,8 @@ It has been tested with the following servers:
 * ProLiant DL380e Gen8
 * ProLiant DL580 Gen8 UEFI
 * ProLiant DL180 Gen9 UEFI
+* ProLiant DL360 Gen9 UEFI
 * ProLiant DL380 Gen9 UEFI
-* ProLiant DL580 Gen9 UEFI
 
 For more up-to-date information on server platform support info, refer
 iLO driver wiki [6]_.
@@ -102,10 +102,11 @@ Features
   (like PXE driver), so this driver has the  benefit of security
   enhancement with the same performance. Hence it segregates management info
   from data channel.
-* Support for Out-Of-Band cleaning operations.
+* Support for out-of-band cleaning operations.
 * Remote Console
 * HW Sensors
 * Works well for machines with resource constraints (lesser amount of memory).
+* Support for out-of-band hardware inspection.
 
 Requirements
 ~~~~~~~~~~~~
@@ -147,17 +148,8 @@ Deploy Process
 
 Configuring and Enabling the driver
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-1. Prepare an ISO deploy ramdisk image from ``diskimage-builder`` [3]_.  This
-   can be done by adding the ``iso`` element to the ``ramdisk-image-create``
-   command.  This command creates the deploy kernel/ramdisk as well as a
-   bootable ISO image containing the deploy kernel and ramdisk.
 
-   The below command creates files named ``deploy-ramdisk.kernel``,
-   ``deploy-ramdisk.initramfs`` and ``deploy-ramdisk.iso`` in the current
-   working directory.::
-
-    cd <path-to-diskimage-builder>
-    ./bin/ramdisk-image-create -o deploy-ramdisk ubuntu deploy-ironic iso
+1. Build a deploy ISO image, see :ref:`BuildingDibBasedDeployRamdisk`
 
 2. Upload this image to Glance.::
 
@@ -260,6 +252,10 @@ Node cleaning
 ~~~~~~~~~~~~~
 Refer to ilo_node_cleaning_ for more information.
 
+Hardware Inspection
+~~~~~~~~~~~~~~~~~~~
+Refer to hardware_inspection_ for more information.
+
 agent_ilo driver
 ^^^^^^^^^^^^^^^^
 
@@ -282,8 +278,8 @@ This driver should work on HP Proliant Gen8 Servers and above with iLO 4.
 It has been tested with the following servers:
 
 * ProLiant DL380e Gen8
+* ProLiant DL360 Gen9 UEFI
 * ProLiant DL380 Gen9 UEFI
-* ProLiant DL580 Gen9 UEFI
 
 This driver supports only Gen 8 Class 0 systems (BIOS only).  For
 more up-to-date information, check the iLO driver wiki [6]_.
@@ -298,9 +294,9 @@ Features
 * IPA deployed instances always boots from local disk.
 * Segregates management info from data channel.
 * UEFI Boot Support
-* UEFI Secure Boot Support
 * Support to use default in-band cleaning operations supported by
   Ironic Python Agent. For more details, see :ref:`InbandvsOutOfBandCleaning`.
+* Support for out-of-band hardware inspection.
 
 Requirements
 ~~~~~~~~~~~~
@@ -335,18 +331,8 @@ Deploy Process
 
 Configuring and Enabling the driver
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-1. Prepare an ISO deploy Ironic Python Agent image containing the agent [5]_.
-   This can be done by using the iso-image-create script found within
-   the agent. The below set of commands will create a file ``ipa-ramdisk.iso``
-   in the below directory ``UPLOAD``::
 
-    $ cd <directory-containing-ironic-python-agent>
-    $ cd ./imagebuild/coreos
-    $ make iso
-    $ cd UPLOAD
-    $ ls
-    $ coreos_production_pxe_image-oem.cpio.gz  coreos_production_pxe.vmlinuz  ipa-coreos.iso
-
+1. Build a deploy ISO image, see :ref:`BuildingCoreOSDeployRamdisk`.
 
 2. Upload the IPA ramdisk image to Glance.::
 
@@ -354,6 +340,7 @@ Configuring and Enabling the driver
 
 3. Configure Glance image service with its storage backend as Swift. See
    [4]_ for configuration instructions.
+
 4. Set a temp-url key for Glance user in Swift. For example, if you have
    configured Glance with user ``glance-swift`` and tenant as ``service``,
    then run the below command::
@@ -442,13 +429,13 @@ Boot modes
 ~~~~~~~~~~
 Refer to `Boot mode support`_ section for more information.
 
-UEFI Secure Boot
-~~~~~~~~~~~~~~~~
-Refer to `UEFI Secure Boot support`_ section for more information.
-
 Node Cleaning
 ~~~~~~~~~~~~~
 Refer to ilo_node_cleaning_ for more information.
+
+Hardware Inspection
+~~~~~~~~~~~~~~~~~~~
+Refer to hardware_inspection_ for more information.
 
 pxe_ilo driver
 ^^^^^^^^^^^^^^
@@ -473,6 +460,8 @@ It has been tested with the following servers:
 * ProLiant DL380e Gen8
 * ProLiant DL380e Gen8
 * ProLiant DL580 Gen8 (BIOS/UEFI)
+* ProLiant DL360 Gen9 UEFI
+* ProLiant DL380 Gen9 UEFI
 
 The driver doesn't work on BIOS mode on DL580 Gen8 and Gen9 systems due to
 an issue in the firmware.  For information on this, refer iLO driver
@@ -485,7 +474,8 @@ Features
 * Automatic detection of current boot mode.
 * Automatic setting of the required boot mode if UEFI boot mode is requested
   by the nova flavor's extra spec.
-* Support for Out-Of-Band cleaning operations.
+* Support for out-of-band cleaning operations.
+* Support for out-of-band hardware inspection.
 
 Requirements
 ~~~~~~~~~~~~
@@ -493,13 +483,8 @@ None.
 
 Configuring and Enabling the driver
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-1. Prepare an ISO deploy ramdisk image from ``diskimage-builder`` [3]_.
 
-   The below command creates a file named ``deploy-ramdisk.kernel`` and
-   ``deploy-ramdisk.initramfs`` in the current working directory::
-
-    cd <path-to-diskimage-builder>
-    ./bin/ramdisk-image-create -o deploy-ramdisk ubuntu deploy-ironic
+1. Build a deploy image, see :ref:`BuildingDibBasedDeployRamdisk`
 
 2. Upload this image to Glance.::
 
@@ -524,8 +509,8 @@ Nodes configured for iLO driver should have the ``driver`` property set to
 - ``ilo_address``: IP address or hostname of the iLO.
 - ``ilo_username``: Username for the iLO with administrator privileges.
 - ``ilo_password``: Password for the above iLO user.
-- ``pxe_deploy_kernel``: The Glance UUID of the deployment kernel.
-- ``pxe_deploy_ramdisk``: The Glance UUID of the deployment ramdisk.
+- ``deploy_kernel``: The Glance UUID of the deployment kernel.
+- ``deploy_ramdisk``: The Glance UUID of the deployment ramdisk.
 - ``client_port``: (optional) Port to be used for iLO operations if you are
   using a custom port on the iLO. Default port used is 443.
 - ``client_timeout``: (optional) Timeout for iLO operations. Default timeout
@@ -536,7 +521,7 @@ Nodes configured for iLO driver should have the ``driver`` property set to
 For example, you could run a similar command like below to enroll the Proliant
 node::
 
-  ironic node-create -d pxe_ilo ilo_address=<ilo-ip-address> -i ilo_username=<ilo-username> -i ilo_password=<ilo-password> -i pxe_deploy_kernel=<glance-uuid-of-pxe-deploy-kernel> pxe_deploy_ramdisk=<glance-uuid-of-deploy-ramdisk>
+  ironic node-create -d pxe_ilo -i ilo_address=<ilo-ip-address> -i ilo_username=<ilo-username> -i ilo_password=<ilo-password> -i deploy_kernel=<glance-uuid-of-pxe-deploy-kernel> -i deploy_ramdisk=<glance-uuid-of-deploy-ramdisk>
 
 Boot modes
 ~~~~~~~~~~
@@ -545,6 +530,10 @@ Refer to `Boot mode support`_ section for more information.
 Node Cleaning
 ~~~~~~~~~~~~~
 Refer to ilo_node_cleaning_ for more information.
+
+Hardware Inspection
+~~~~~~~~~~~~~~~~~~~
+Refer to hardware_inspection_ for more information.
 
 Functionalities across drivers
 ==============================
@@ -595,11 +584,12 @@ The boot modes can be configured in Ironic in the following way:
   machine that matches with user specified flavors.
 
 
-Currently for UEFI boot mode, automatic creation of boot ISO doesn't
-work. The boot ISO for the deploy image needs to be built separately and the
-deploy image's ``boot_iso`` property in Glance should contain the Glance UUID
-of the boot ISO. For building boot ISO, add ``iso`` element to the
-diskimage-builder command to build the image.  For example::
+The automatic boot ISO creation for UEFI boot mode has been enabled in Kilo.
+The manual creation of boot ISO for UEFI boot mode is also supported.
+For the latter, the boot ISO for the deploy image needs to be built
+separately and the deploy image's ``boot_iso`` property in Glance should
+contain the Glance UUID of the boot ISO. For building boot ISO, add ``iso``
+element to the diskimage-builder command to build the image.  For example::
 
   disk-image-create ubuntu baremetal iso
 
@@ -608,7 +598,6 @@ UEFI Secure Boot support
 The following drivers support UEFI secure boot deploy:
 
 * ``iscsi_ilo``
-* ``agent_ilo``
 
 The UEFI secure boot mode can be configured in Ironic by adding
 ``secure_boot`` parameter in the ``capabilities`` parameter  within
@@ -620,6 +609,8 @@ The UEFI secure boot mode can be configured in Ironic by adding
 To enable ``secure_boot`` on a node add it to ``capabilities`` as below::
 
  ironic node-update <node-uuid> add properties/capabilities='secure_boot:true'
+
+Alternatively use hardware_inspection_ to populate the secure boot capability.
 
 Nodes having ``secure_boot`` set to ``true`` may be requested by adding an
 ``extra_spec`` to the Nova flavor::
@@ -642,6 +633,34 @@ specified flavors but deployment would not use its secure boot capability.
 Secure boot deploy would happen only when it is explicitly specified through
 flavor.
 
+Use element ``ubuntu-signed`` or ``fedora`` to build signed deploy iso and
+user images from ``diskimage-builder`` [3]_.
+
+The below command creates files named ``deploy-ramdisk.kernel``,
+``deploy-ramdisk.initramfs`` and ``deploy-ramdisk.iso`` in the current
+working directory.::
+
+ cd <path-to-diskimage-builder>
+ ./bin/ramdisk-image-create -o deploy-ramdisk ubuntu-signed deploy-ironic iso
+
+The below command creates files named cloud-image-boot.iso, cloud-image.initrd,
+cloud-image.vmlinuz and cloud-image.qcow2 in the current working directory.::
+
+ cd <path-to-diskimage-builder>
+ ./bin/disk-image-create -o cloud-image ubuntu-signed baremetal iso
+
+.. note::
+   In UEFI secure boot, digitally signed bootloader should be able to validate
+   digital signatures of kernel during boot process. This requires that the
+   bootloader contains the digital signatures of the kernel.
+   For ``iscsi_ilo`` driver, it is recommended that ``boot_iso`` property for
+   user image contains the Glance UUID of the boot ISO.
+   If ``boot_iso`` property is not updated in Glance for the user image, it
+   would create the ``boot_iso`` using bootloader from the deploy iso. This
+   ``boot_iso`` will be able to boot the user image in UEFI secure boot
+   environment only if the bootloader is signed and can validate digital
+   signatures of user image kernel.
+
 Ensure the public key of the signed image is loaded into baremetal to deploy
 signed images.
 For HP Proliant Gen9 servers, one can enroll public key using iLO System
@@ -649,6 +668,9 @@ Utilities UI. Please refer to section ``Accessing Secure Boot options`` in
 HP UEFI System Utilities User Guide. [7]_
 One can also refer to white paper on Secure Boot for Linux on HP Proliant
 servers for additional details. [8]_
+
+For more up-to-date information, refer to the ``UEFI Secure Boot support``
+section in the iLO driver (Kilo release) wiki [10]_.
 
 .. _ilo_node_cleaning:
 
@@ -702,6 +724,64 @@ Supported Cleaning Operations
 
 For more information on node cleaning, see [9]_.
 
+.. _hardware_inspection:
+
+Hardware Inspection
+^^^^^^^^^^^^^^^^^^^
+
+The following iLO drivers support hardware inspection:
+
+* ``pxe_ilo``
+* ``iscsi_ilo``
+* ``agent_ilo``
+
+.. note::
+
+   * The RAID needs to be pre-configured prior to inspection otherwise
+     proliantutils returns 0 for disk size.
+   * The iLO firmware version needs to be 2.10 or above for nic_capacity to be
+     discovered.
+
+The inspection process will discover the following essential properties
+(properties required for scheduling deployment):
+
+* ``memory_mb``: memory size
+
+* ``cpus``: number of cpus
+
+* ``cpu_arch``: cpu architecture
+
+* ``local_gb``: disk size
+
+Inspection can also discover the following extra capabilities for iLO drivers:
+
+* ``ilo_firmware_version``: iLO firmware version
+
+* ``rom_firmware_version``: ROM firmware version
+
+* ``secure_boot``: secure boot is supported or not. The possible values are
+  'true' or 'false'. The value is returned as 'true' if secure boot is supported
+  by the server.
+
+* ``server_model``: server model
+
+* ``pci_gpu_devices``: number of gpu devices connected to the baremetal.
+
+* ``nic_capacity``: the max speed of the embedded NIC adapter.
+
+The operator can specify these capabilities in nova flavor for node to be selected
+for scheduling::
+
+  nova flavor-key my-baremetal-flavor set capabilities:server_model="<in> Gen8"
+
+  nova flavor-key my-baremetal-flavor set capabilities:pci_gpu_devices="> 0"
+
+  nova flavor-key my-baremetal-flavor set capabilities:nic_capacity="10Gb"
+
+  nova flavor-key my-baremetal-flavor set capabilities:ilo_firmware_version="<in> 2.10"
+
+  nova flavor-key my-baremetal-flavor set capabilities:secure_boot="true"
+
 References
 ==========
 .. [1] HP iLO 4 User Guide - http://h20628.www2.hp.com/km-ext/kmcsdirect/emr_na-c03334051-11.pdf
@@ -713,4 +793,4 @@ References
 .. [7] HP UEFI System Utilities User Guide - http://www.hp.com/ctg/Manual/c04398276.pdf
 .. [8] Secure Boot for Linux on HP Proliant servers http://h20195.www2.hp.com/V2/getpdf.aspx/4AA5-4496ENW.pdf
 .. [9] http://docs.openstack.org/developer/ironic/deploy/cleaning.html
-
+.. [10] https://wiki.openstack.org/wiki/Ironic/Drivers/iLODrivers/Kilo

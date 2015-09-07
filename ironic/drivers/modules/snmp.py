@@ -30,6 +30,8 @@ models.
 import abc
 
 from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_service import loopingcall
 from oslo_utils import importutils
 import six
 
@@ -39,8 +41,6 @@ from ironic.common.i18n import _LW
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.drivers import base
-from ironic.openstack.common import log as logging
-from ironic.openstack.common import loopingcall
 
 pysnmp = importutils.try_import('pysnmp')
 if pysnmp:
@@ -55,8 +55,8 @@ else:
 opts = [
     cfg.IntOpt('power_timeout',
                default=10,
-               help='Seconds to wait for power action to be completed')
-    ]
+               help=_('Seconds to wait for power action to be completed'))
+]
 
 LOG = logging.getLogger(__name__)
 
@@ -155,12 +155,12 @@ class SNMPClient(object):
         if error_indication:
             # SNMP engine-level error.
             raise exception.SNMPFailure(operation="GET",
-                    error=error_indication)
+                                        error=error_indication)
 
         if error_status:
             # SNMP PDU error.
             raise exception.SNMPFailure(operation="GET",
-                    error=error_status.prettyPrint())
+                                        error=error_status.prettyPrint())
 
         # We only expect a single value back
         name, val = var_binds[0]
@@ -185,12 +185,12 @@ class SNMPClient(object):
         if error_indication:
             # SNMP engine-level error.
             raise exception.SNMPFailure(operation="SET",
-                    error=error_indication)
+                                        error=error_indication)
 
         if error_status:
             # SNMP PDU error.
             raise exception.SNMPFailure(operation="SET",
-                    error=error_status.prettyPrint())
+                                        error=error_status.prettyPrint())
 
 
 def _get_client(snmp_info):
@@ -398,15 +398,41 @@ class SNMPDriverAten(SNMPDriverSimple):
         return self.oid_enterprise + self.oid_device + (outlet, 0,)
 
 
-class SNMPDriverAPC(SNMPDriverSimple):
-    """SNMP driver class for APC PDU devices.
+class SNMPDriverAPCMasterSwitch(SNMPDriverSimple):
+    """SNMP driver class for APC MasterSwitch PDU devices.
 
-    SNMP objects for APC PDU:
+    SNMP objects for APC SNMPDriverAPCMasterSwitch PDU:
     1.3.6.1.4.1.318.1.1.4.4.2.1.3 sPDUOutletCtl
     Values: 1=On, 2=Off, 3=PowerCycle, [...more options follow]
     """
 
     oid_device = (318, 1, 1, 4, 4, 2, 1, 3)
+    value_power_on = 1
+    value_power_off = 2
+
+
+class SNMPDriverAPCMasterSwitchPlus(SNMPDriverSimple):
+    """SNMP driver class for APC MasterSwitchPlus PDU devices.
+
+    SNMP objects for APC SNMPDriverAPCMasterSwitchPlus PDU:
+    1.3.6.1.4.1.318.1.1.6.5.1.1.5 sPDUOutletControlMSPOutletCommand
+    Values: 1=On, 3=Off, [...more options follow]
+    """
+
+    oid_device = (318, 1, 1, 6, 5, 1, 1, 5)
+    value_power_on = 1
+    value_power_off = 3
+
+
+class SNMPDriverAPCRackPDU(SNMPDriverSimple):
+    """SNMP driver class for APC RackPDU devices.
+
+    SNMP objects for APC SNMPDriverAPCMasterSwitch PDU:
+    # 1.3.6.1.4.1.318.1.1.12.3.3.1.1.4 rPDUOutletControlOutletCommand
+    Values: 1=On, 2=Off, 3=PowerCycle, [...more options follow]
+    """
+
+    oid_device = (318, 1, 1, 12, 3, 3, 1, 1, 4)
     value_power_on = 1
     value_power_off = 2
 
@@ -522,11 +548,14 @@ class SNMPDriverEatonPower(SNMPDriverBase):
 
 # A dictionary of supported drivers keyed by snmp_driver attribute
 DRIVER_CLASSES = {
-        'apc': SNMPDriverAPC,
-        'aten': SNMPDriverAten,
-        'cyberpower': SNMPDriverCyberPower,
-        'eatonpower': SNMPDriverEatonPower,
-        'teltronix': SNMPDriverTeltronix
+    'apc': SNMPDriverAPCMasterSwitch,
+    'apc_masterswitch': SNMPDriverAPCMasterSwitch,
+    'apc_masterswitchplus': SNMPDriverAPCMasterSwitchPlus,
+    'apc_rackpdu': SNMPDriverAPCRackPDU,
+    'aten': SNMPDriverAten,
+    'cyberpower': SNMPDriverCyberPower,
+    'eatonpower': SNMPDriverEatonPower,
+    'teltronix': SNMPDriverTeltronix
 }
 
 

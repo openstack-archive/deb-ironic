@@ -21,6 +21,7 @@ import shutil
 import stat
 import tempfile
 import time
+import types
 
 import mock
 from oslo_concurrency import processutils
@@ -32,6 +33,7 @@ import testtools
 from ironic.common import boot_devices
 from ironic.common import disk_partitioner
 from ironic.common import exception
+from ironic.common import image_service
 from ironic.common import images
 from ironic.common import states
 from ironic.common import utils as common_utils
@@ -40,13 +42,18 @@ from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils as utils
 from ironic.drivers.modules import image_cache
+from ironic.drivers.modules import pxe
 from ironic.tests import base as tests_base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
 from ironic.tests.objects import utils as obj_utils
 
-_PXECONF_DEPLOY = """
+INST_INFO_DICT = db_utils.get_test_pxe_instance_info()
+DRV_INFO_DICT = db_utils.get_test_pxe_driver_info()
+DRV_INTERNAL_INFO_DICT = db_utils.get_test_pxe_driver_internal_info()
+
+_PXECONF_DEPLOY = b"""
 default deploy
 
 label deploy
@@ -61,6 +68,10 @@ append initrd=ramdisk root={{ ROOT }}
 label boot_whole_disk
 COM32 chain.c32
 append mbr:{{ DISK_IDENTIFIER }}
+
+label trusted_boot
+kernel mboot
+append tboot.gz --- kernel root={{ ROOT }} --- ramdisk
 """
 
 _PXECONF_BOOT_PARTITION = """
@@ -78,6 +89,11 @@ append initrd=ramdisk root=UUID=12345678-1234-1234-1234-1234567890abcdef
 label boot_whole_disk
 COM32 chain.c32
 append mbr:{{ DISK_IDENTIFIER }}
+
+label trusted_boot
+kernel mboot
+append tboot.gz --- kernel root=UUID=12345678-1234-1234-1234-1234567890abcdef \
+--- ramdisk
 """
 
 _PXECONF_BOOT_WHOLE_DISK = """
@@ -95,9 +111,35 @@ append initrd=ramdisk root={{ ROOT }}
 label boot_whole_disk
 COM32 chain.c32
 append mbr:0x12345678
+
+label trusted_boot
+kernel mboot
+append tboot.gz --- kernel root={{ ROOT }} --- ramdisk
 """
 
-_IPXECONF_DEPLOY = """
+_PXECONF_TRUSTED_BOOT = """
+default trusted_boot
+
+label deploy
+kernel deploy_kernel
+append initrd=deploy_ramdisk
+ipappend 3
+
+label boot_partition
+kernel kernel
+append initrd=ramdisk root=UUID=12345678-1234-1234-1234-1234567890abcdef
+
+label boot_whole_disk
+COM32 chain.c32
+append mbr:{{ DISK_IDENTIFIER }}
+
+label trusted_boot
+kernel mboot
+append tboot.gz --- kernel root=UUID=12345678-1234-1234-1234-1234567890abcdef \
+--- ramdisk
+"""
+
+_IPXECONF_DEPLOY = b"""
 #!ipxe
 
 dhcp
@@ -166,7 +208,7 @@ append mbr:0x12345678
 boot
 """
 
-_UEFI_PXECONF_DEPLOY = """
+_UEFI_PXECONF_DEPLOY = b"""
 default=deploy
 
 image=deploy_kernel
@@ -220,22 +262,86 @@ image=chain.c32
         append="mbr:0x12345678"
 """
 
+_UEFI_PXECONF_DEPLOY_GRUB = b"""
+set default=deploy
+set timeout=5
+set hidden_timeout_quiet=false
+
+menuentry "deploy"  {
+    linuxefi deploy_kernel "ro text"
+    initrdefi deploy_ramdisk
+}
+
+menuentry "boot_partition"  {
+    linuxefi kernel "root=(( ROOT ))"
+    initrdefi ramdisk
+}
+
+menuentry "boot_whole_disk"  {
+    linuxefi chain.c32 mbr:(( DISK_IDENTIFIER ))
+}
+"""
+
+_UEFI_PXECONF_BOOT_PARTITION_GRUB = """
+set default=boot_partition
+set timeout=5
+set hidden_timeout_quiet=false
+
+menuentry "deploy"  {
+    linuxefi deploy_kernel "ro text"
+    initrdefi deploy_ramdisk
+}
+
+menuentry "boot_partition"  {
+    linuxefi kernel "root=UUID=12345678-1234-1234-1234-1234567890abcdef"
+    initrdefi ramdisk
+}
+
+menuentry "boot_whole_disk"  {
+    linuxefi chain.c32 mbr:(( DISK_IDENTIFIER ))
+}
+"""
+
+_UEFI_PXECONF_BOOT_WHOLE_DISK_GRUB = """
+set default=boot_whole_disk
+set timeout=5
+set hidden_timeout_quiet=false
+
+menuentry "deploy"  {
+    linuxefi deploy_kernel "ro text"
+    initrdefi deploy_ramdisk
+}
+
+menuentry "boot_partition"  {
+    linuxefi kernel "root=(( ROOT ))"
+    initrdefi ramdisk
+}
+
+menuentry "boot_whole_disk"  {
+    linuxefi chain.c32 mbr:0x12345678
+}
+"""
+
 
 @mock.patch.object(time, 'sleep', lambda seconds: None)
 class PhysicalWorkTestCase(tests_base.TestCase):
 
     def _mock_calls(self, name_list):
-        patch_list = [mock.patch.object(utils, name) for name in name_list]
+        patch_list = [mock.patch.object(utils, name,
+                                        spec_set=types.FunctionType)
+                      for name in name_list]
         mock_list = [patcher.start() for patcher in patch_list]
         for patcher in patch_list:
             self.addCleanup(patcher.stop)
 
-        parent_mock = mock.MagicMock()
+        parent_mock = mock.MagicMock(spec=[])
         for mocker, name in zip(mock_list, name_list):
             parent_mock.attach_mock(mocker, name)
         return parent_mock
 
-    def _test_deploy_partition_image(self, boot_option=None, boot_mode=None):
+    @mock.patch.object(common_utils, 'mkfs', autospec=True)
+    def _test_deploy_partition_image(self, mock_mkfs, boot_option=None,
+                                     boot_mode=None):
         """Check loosely all functions are called with right args."""
         address = '127.0.0.1'
         port = 3306
@@ -256,8 +362,8 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
                      'logout_iscsi', 'delete_iscsi', 'make_partitions',
-                     'is_block_device', 'populate_image', 'mkfs',
-                     'block_uuid', 'notify', 'destroy_disk_metadata']
+                     'is_block_device', 'populate_image', 'block_uuid',
+                     'notify', 'destroy_disk_metadata']
         parent_mock = self._mock_calls(name_list)
         parent_mock.get_dev.return_value = dev
         parent_mock.get_image_mb.return_value = 1
@@ -267,7 +373,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                                                     'swap': swap_part}
 
         make_partitions_expected_args = [dev, root_mb, swap_mb, ephemeral_mb,
-                                         configdrive_mb]
+                                         configdrive_mb, node_uuid]
         make_partitions_expected_kwargs = {'commit': True}
         deploy_kwargs = {}
 
@@ -284,11 +390,11 @@ class PhysicalWorkTestCase(tests_base.TestCase):
             make_partitions_expected_kwargs['boot_mode'] = 'bios'
 
         # If no boot_option, then it should default to netboot.
-        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+        calls_expected = [mock.call.get_image_mb(image_path),
+                          mock.call.get_dev(address, port, iqn, lun),
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
                           mock.call.is_block_device(dev),
-                          mock.call.get_image_mb(image_path),
                           mock.call.destroy_disk_metadata(dev, node_uuid),
                           mock.call.make_partitions(
                               *make_partitions_expected_args,
@@ -296,8 +402,6 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.is_block_device(root_part),
                           mock.call.is_block_device(swap_part),
                           mock.call.populate_image(image_path, root_part),
-                          mock.call.mkfs(dev=swap_part, fs='swap',
-                                         label='swap1'),
                           mock.call.block_uuid(root_part),
                           mock.call.logout_iscsi(address, port, iqn),
                           mock.call.delete_iscsi(address, port, iqn)]
@@ -311,6 +415,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
             'root uuid': root_uuid,
             'efi system partition uuid': None}
         self.assertEqual(expected_uuid_dict, uuids_dict_returned)
+        mock_mkfs.assert_called_once_with('swap', swap_part, 'swap1')
 
     def test_deploy_partition_image_without_boot_option(self):
         self._test_deploy_partition_image()
@@ -336,10 +441,33 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         self._test_deploy_partition_image(boot_option="netboot",
                                           boot_mode="uefi")
 
+    @mock.patch.object(utils, 'get_image_mb', return_value=129, autospec=True)
+    def test_deploy_partition_image_image_exceeds_root_partition(self,
+                                                                 gim_mock):
+        address = '127.0.0.1'
+        port = 3306
+        iqn = 'iqn.xyz'
+        lun = 1
+        image_path = '/tmp/xyz/image'
+        root_mb = 128
+        swap_mb = 64
+        ephemeral_mb = 0
+        ephemeral_format = None
+        node_uuid = "12345678-1234-1234-1234-1234567890abcxyz"
+
+        self.assertRaises(exception.InstanceDeployFailure,
+                          utils.deploy_partition_image, address, port, iqn,
+                          lun, image_path, root_mb, swap_mb, ephemeral_mb,
+                          ephemeral_format, node_uuid)
+
+        gim_mock.assert_called_once_with(image_path)
+
     # We mock utils.block_uuid separately here because we can't predict
     # the order in which it will be called.
-    @mock.patch.object(utils, 'block_uuid')
-    def test_deploy_partition_image_localboot_uefi(self, block_uuid_mock):
+    @mock.patch.object(utils, 'block_uuid', autospec=True)
+    @mock.patch.object(common_utils, 'mkfs', autospec=True)
+    def test_deploy_partition_image_localboot_uefi(self, mock_mkfs,
+                                                   block_uuid_mock):
         """Check loosely all functions are called with right args."""
         address = '127.0.0.1'
         port = 3306
@@ -362,8 +490,8 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
                      'logout_iscsi', 'delete_iscsi', 'make_partitions',
-                     'is_block_device', 'populate_image', 'mkfs',
-                     'notify', 'destroy_disk_metadata']
+                     'is_block_device', 'populate_image', 'notify',
+                     'destroy_disk_metadata']
         parent_mock = self._mock_calls(name_list)
         parent_mock.get_dev.return_value = dev
         parent_mock.get_image_mb.return_value = 1
@@ -381,26 +509,23 @@ class PhysicalWorkTestCase(tests_base.TestCase):
             'efi system partition': efi_system_part}
 
         # If no boot_option, then it should default to netboot.
-        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+        calls_expected = [mock.call.get_image_mb(image_path),
+                          mock.call.get_dev(address, port, iqn, lun),
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
                           mock.call.is_block_device(dev),
-                          mock.call.get_image_mb(image_path),
                           mock.call.destroy_disk_metadata(dev, node_uuid),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
                                                     configdrive_mb,
+                                                    node_uuid,
                                                     commit=True,
                                                     boot_option="local",
                                                     boot_mode="uefi"),
                           mock.call.is_block_device(root_part),
                           mock.call.is_block_device(swap_part),
                           mock.call.is_block_device(efi_system_part),
-                          mock.call.mkfs(dev=efi_system_part, fs='vfat',
-                                         label='efi-part'),
                           mock.call.populate_image(image_path, root_part),
-                          mock.call.mkfs(dev=swap_part, fs='swap',
-                                         label='swap1'),
                           mock.call.logout_iscsi(address, port, iqn),
                           mock.call.delete_iscsi(address, port, iqn)]
 
@@ -416,6 +541,9 @@ class PhysicalWorkTestCase(tests_base.TestCase):
             'root uuid': root_uuid,
             'efi system partition uuid': efi_system_part_uuid}
         self.assertEqual(expected_uuid_dict, uuid_dict_returned)
+        expected_calls = [mock.call('vfat', efi_system_part, 'efi-part'),
+                          mock.call('swap', swap_part, 'swap1')]
+        mock_mkfs.assert_has_calls(expected_calls)
 
     def test_deploy_partition_image_without_swap(self):
         """Check loosely all functions are called with right args."""
@@ -445,15 +573,16 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         parent_mock.is_block_device.return_value = True
         parent_mock.block_uuid.return_value = root_uuid
         parent_mock.make_partitions.return_value = {'root': root_part}
-        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+        calls_expected = [mock.call.get_image_mb(image_path),
+                          mock.call.get_dev(address, port, iqn, lun),
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
                           mock.call.is_block_device(dev),
-                          mock.call.get_image_mb(image_path),
                           mock.call.destroy_disk_metadata(dev, node_uuid),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
                                                     configdrive_mb,
+                                                    node_uuid,
                                                     commit=True,
                                                     boot_option="netboot",
                                                     boot_mode="bios"),
@@ -473,7 +602,8 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         self.assertEqual(calls_expected, parent_mock.mock_calls)
         self.assertEqual(root_uuid, uuid_dict_returned['root uuid'])
 
-    def test_deploy_partition_image_with_ephemeral(self):
+    @mock.patch.object(common_utils, 'mkfs', autospec=True)
+    def test_deploy_partition_image_with_ephemeral(self, mock_mkfs):
         """Check loosely all functions are called with right args."""
         address = '127.0.0.1'
         port = 3306
@@ -495,25 +625,25 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
                      'logout_iscsi', 'delete_iscsi', 'make_partitions',
-                     'is_block_device', 'populate_image', 'mkfs',
-                     'block_uuid', 'notify', 'destroy_disk_metadata']
+                     'is_block_device', 'populate_image', 'block_uuid',
+                     'notify', 'destroy_disk_metadata']
         parent_mock = self._mock_calls(name_list)
         parent_mock.get_dev.return_value = dev
         parent_mock.get_image_mb.return_value = 1
         parent_mock.is_block_device.return_value = True
         parent_mock.block_uuid.return_value = root_uuid
-        parent_mock.make_partitions.return_value = {'swap': swap_part,
-                                                   'ephemeral': ephemeral_part,
-                                                   'root': root_part}
-        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+        parent_mock.make_partitions.return_value = {
+            'swap': swap_part, 'ephemeral': ephemeral_part, 'root': root_part}
+        calls_expected = [mock.call.get_image_mb(image_path),
+                          mock.call.get_dev(address, port, iqn, lun),
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
                           mock.call.is_block_device(dev),
-                          mock.call.get_image_mb(image_path),
                           mock.call.destroy_disk_metadata(dev, node_uuid),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
                                                     configdrive_mb,
+                                                    node_uuid,
                                                     commit=True,
                                                     boot_option="netboot",
                                                     boot_mode="bios"),
@@ -521,11 +651,6 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.is_block_device(swap_part),
                           mock.call.is_block_device(ephemeral_part),
                           mock.call.populate_image(image_path, root_part),
-                          mock.call.mkfs(dev=swap_part, fs='swap',
-                                         label='swap1'),
-                          mock.call.mkfs(dev=ephemeral_part,
-                                         fs=ephemeral_format,
-                                         label='ephemeral0'),
                           mock.call.block_uuid(root_part),
                           mock.call.logout_iscsi(address, port, iqn),
                           mock.call.delete_iscsi(address, port, iqn)]
@@ -539,8 +664,13 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         self.assertEqual(calls_expected, parent_mock.mock_calls)
         self.assertEqual(root_uuid, uuid_dict_returned['root uuid'])
+        expected_calls = [mock.call('swap', swap_part, 'swap1'),
+                          mock.call(ephemeral_format, ephemeral_part,
+                                    'ephemeral0')]
+        mock_mkfs.assert_has_calls(expected_calls)
 
-    def test_deploy_partition_image_preserve_ephemeral(self):
+    @mock.patch.object(common_utils, 'mkfs', autospec=True)
+    def test_deploy_partition_image_preserve_ephemeral(self, mock_mkfs):
         """Check if all functions are called with right args."""
         address = '127.0.0.1'
         port = 3306
@@ -562,25 +692,25 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
                      'logout_iscsi', 'delete_iscsi', 'make_partitions',
-                     'is_block_device', 'populate_image', 'mkfs',
-                     'block_uuid', 'notify', 'get_dev_block_size']
+                     'is_block_device', 'populate_image', 'block_uuid',
+                     'notify', 'get_dev_block_size']
         parent_mock = self._mock_calls(name_list)
         parent_mock.get_dev.return_value = dev
         parent_mock.get_image_mb.return_value = 1
         parent_mock.is_block_device.return_value = True
         parent_mock.block_uuid.return_value = root_uuid
-        parent_mock.make_partitions.return_value = {'swap': swap_part,
-                                                   'ephemeral': ephemeral_part,
-                                                   'root': root_part}
+        parent_mock.make_partitions.return_value = {
+            'swap': swap_part, 'ephemeral': ephemeral_part, 'root': root_part}
         parent_mock.block_uuid.return_value = root_uuid
-        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+        calls_expected = [mock.call.get_image_mb(image_path),
+                          mock.call.get_dev(address, port, iqn, lun),
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
                           mock.call.is_block_device(dev),
-                          mock.call.get_image_mb(image_path),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
                                                     configdrive_mb,
+                                                    node_uuid,
                                                     commit=False,
                                                     boot_option="netboot",
                                                     boot_mode="bios"),
@@ -588,8 +718,6 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                           mock.call.is_block_device(swap_part),
                           mock.call.is_block_device(ephemeral_part),
                           mock.call.populate_image(image_path, root_part),
-                          mock.call.mkfs(dev=swap_part, fs='swap',
-                                         label='swap1'),
                           mock.call.block_uuid(root_part),
                           mock.call.logout_iscsi(address, port, iqn),
                           mock.call.delete_iscsi(address, port, iqn)]
@@ -601,8 +729,9 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         self.assertEqual(calls_expected, parent_mock.mock_calls)
         self.assertFalse(parent_mock.get_dev_block_size.called)
         self.assertEqual(root_uuid, uuid_dict_returned['root uuid'])
+        mock_mkfs.assert_called_once_with('swap', swap_part, 'swap1')
 
-    @mock.patch.object(common_utils, 'unlink_without_raise')
+    @mock.patch.object(common_utils, 'unlink_without_raise', autospec=True)
     def test_deploy_partition_image_with_configdrive(self, mock_unlink):
         """Check loosely all functions are called with right args."""
         address = '127.0.0.1'
@@ -637,17 +766,18 @@ class PhysicalWorkTestCase(tests_base.TestCase):
                                                     'configdrive':
                                                         configdrive_part}
         parent_mock._get_configdrive.return_value = (10, 'configdrive-path')
-        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+        calls_expected = [mock.call.get_image_mb(image_path),
+                          mock.call.get_dev(address, port, iqn, lun),
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
                           mock.call.is_block_device(dev),
-                          mock.call.get_image_mb(image_path),
                           mock.call.destroy_disk_metadata(dev, node_uuid),
                           mock.call._get_configdrive(configdrive_url,
                                                      node_uuid),
                           mock.call.make_partitions(dev, root_mb, swap_mb,
                                                     ephemeral_mb,
                                                     configdrive_mb,
+                                                    node_uuid,
                                                     commit=True,
                                                     boot_option="netboot",
                                                     boot_mode="bios"),
@@ -668,7 +798,7 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         self.assertEqual(root_uuid, uuid_dict_returned['root uuid'])
         mock_unlink.assert_called_once_with('configdrive-path')
 
-    @mock.patch.object(utils, 'get_disk_identifier')
+    @mock.patch.object(utils, 'get_disk_identifier', autospec=True)
     def test_deploy_whole_disk_image(self, mock_gdi):
         """Check loosely all functions are called with right args."""
         address = '127.0.0.1'
@@ -700,25 +830,26 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         self.assertEqual(calls_expected, parent_mock.mock_calls)
         self.assertEqual('0x12345678', uuid_dict_returned['disk identifier'])
 
-    @mock.patch.object(common_utils, 'execute')
+    @mock.patch.object(common_utils, 'execute', autospec=True)
     def test_verify_iscsi_connection_raises(self, mock_exec):
         iqn = 'iqn.xyz'
         mock_exec.return_value = ['iqn.abc', '']
         self.assertRaises(exception.InstanceDeployFailure,
-                utils.verify_iscsi_connection, iqn)
+                          utils.verify_iscsi_connection, iqn)
         self.assertEqual(3, mock_exec.call_count)
 
-    @mock.patch.object(os.path, 'exists')
+    @mock.patch.object(os.path, 'exists', autospec=True)
     def test_check_file_system_for_iscsi_device_raises(self, mock_os):
         iqn = 'iqn.xyz'
         ip = "127.0.0.1"
         port = "22"
         mock_os.return_value = False
         self.assertRaises(exception.InstanceDeployFailure,
-                utils.check_file_system_for_iscsi_device, ip, port, iqn)
+                          utils.check_file_system_for_iscsi_device,
+                          ip, port, iqn)
         self.assertEqual(3, mock_os.call_count)
 
-    @mock.patch.object(os.path, 'exists')
+    @mock.patch.object(os.path, 'exists', autospec=True)
     def test_check_file_system_for_iscsi_device(self, mock_os):
         iqn = 'iqn.xyz'
         ip = "127.0.0.1"
@@ -731,32 +862,35 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         utils.check_file_system_for_iscsi_device(ip, port, iqn)
         mock_os.assert_called_once_with(check_dir)
 
-    @mock.patch.object(common_utils, 'execute')
+    @mock.patch.object(common_utils, 'execute', autospec=True)
     def test_verify_iscsi_connection(self, mock_exec):
         iqn = 'iqn.xyz'
         mock_exec.return_value = ['iqn.xyz', '']
         utils.verify_iscsi_connection(iqn)
-        mock_exec.assert_called_once_with('iscsiadm',
-                  '-m', 'node',
-                  '-S',
-                  run_as_root=True,
-                  check_exit_code=[0])
+        mock_exec.assert_called_once_with(
+            'iscsiadm',
+            '-m', 'node',
+            '-S',
+            run_as_root=True,
+            check_exit_code=[0])
 
-    @mock.patch.object(common_utils, 'execute')
+    @mock.patch.object(common_utils, 'execute', autospec=True)
     def test_force_iscsi_lun_update(self, mock_exec):
         iqn = 'iqn.xyz'
         utils.force_iscsi_lun_update(iqn)
-        mock_exec.assert_called_once_with('iscsiadm',
-                  '-m', 'node',
-                  '-T', iqn,
-                  '-R',
-                  run_as_root=True,
-                  check_exit_code=[0])
+        mock_exec.assert_called_once_with(
+            'iscsiadm',
+            '-m', 'node',
+            '-T', iqn,
+            '-R',
+            run_as_root=True,
+            check_exit_code=[0])
 
-    @mock.patch.object(common_utils, 'execute')
-    @mock.patch.object(utils, 'verify_iscsi_connection')
-    @mock.patch.object(utils, 'force_iscsi_lun_update')
-    @mock.patch.object(utils, 'check_file_system_for_iscsi_device')
+    @mock.patch.object(common_utils, 'execute', autospec=True)
+    @mock.patch.object(utils, 'verify_iscsi_connection', autospec=True)
+    @mock.patch.object(utils, 'force_iscsi_lun_update', autospec=True)
+    @mock.patch.object(utils, 'check_file_system_for_iscsi_device',
+                       autospec=True)
     def test_login_iscsi_calls_verify_and_update(self,
                                                  mock_check_dev,
                                                  mock_update,
@@ -767,7 +901,8 @@ class PhysicalWorkTestCase(tests_base.TestCase):
         iqn = 'iqn.xyz'
         mock_exec.return_value = ['iqn.xyz', '']
         utils.login_iscsi(address, port, iqn)
-        mock_exec.assert_called_once_with('iscsiadm',
+        mock_exec.assert_called_once_with(
+            'iscsiadm',
             '-m', 'node',
             '-p', '%s:%s' % (address, port),
             '-T', iqn,
@@ -809,22 +944,24 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
         name_list = ['get_dev', 'get_image_mb', 'discovery', 'login_iscsi',
                      'logout_iscsi', 'delete_iscsi', 'work_on_disk']
-        patch_list = [mock.patch.object(utils, name) for name in name_list]
+        patch_list = [mock.patch.object(utils, name,
+                                        spec_set=types.FunctionType)
+                      for name in name_list]
         mock_list = [patcher.start() for patcher in patch_list]
         for patcher in patch_list:
             self.addCleanup(patcher.stop)
 
-        parent_mock = mock.MagicMock()
+        parent_mock = mock.MagicMock(spec=[])
         for mocker, name in zip(mock_list, name_list):
             parent_mock.attach_mock(mocker, name)
 
         parent_mock.get_dev.return_value = dev
         parent_mock.get_image_mb.return_value = 1
         parent_mock.work_on_disk.side_effect = TestException
-        calls_expected = [mock.call.get_dev(address, port, iqn, lun),
+        calls_expected = [mock.call.get_image_mb(image_path),
+                          mock.call.get_dev(address, port, iqn, lun),
                           mock.call.discovery(address, port),
                           mock.call.login_iscsi(address, port, iqn),
-                          mock.call.get_image_mb(image_path),
                           mock.call.work_on_disk(dev, root_mb, swap_mb,
                                                  ephemeral_mb,
                                                  ephemeral_format, image_path,
@@ -845,10 +982,13 @@ class PhysicalWorkTestCase(tests_base.TestCase):
 
 class SwitchPxeConfigTestCase(tests_base.TestCase):
 
-    def _create_config(self, ipxe=False, boot_mode=None):
+    def _create_config(self, ipxe=False, boot_mode=None, boot_loader='elilo'):
         (fd, fname) = tempfile.mkstemp()
         if boot_mode == 'uefi':
-            pxe_cfg = _UEFI_PXECONF_DEPLOY
+            if boot_loader == 'grub':
+                pxe_cfg = _UEFI_PXECONF_DEPLOY_GRUB
+            else:
+                pxe_cfg = _UEFI_PXECONF_DEPLOY
         else:
             pxe_cfg = _IPXECONF_DEPLOY if ipxe else _PXECONF_DEPLOY
         os.write(fd, pxe_cfg)
@@ -878,6 +1018,17 @@ class SwitchPxeConfigTestCase(tests_base.TestCase):
             pxeconf = f.read()
         self.assertEqual(_PXECONF_BOOT_WHOLE_DISK, pxeconf)
 
+    def test_switch_pxe_config_trusted_boot(self):
+        boot_mode = 'bios'
+        fname = self._create_config()
+        utils.switch_pxe_config(fname,
+                                '12345678-1234-1234-1234-1234567890abcdef',
+                                boot_mode,
+                                False, True)
+        with open(fname, 'r') as f:
+            pxeconf = f.read()
+        self.assertEqual(_PXECONF_TRUSTED_BOOT, pxeconf)
+
     def test_switch_ipxe_config_partition_image(self):
         boot_mode = 'bios'
         cfg.CONF.set_override('ipxe_enabled', True, 'pxe')
@@ -902,7 +1053,7 @@ class SwitchPxeConfigTestCase(tests_base.TestCase):
             pxeconf = f.read()
         self.assertEqual(_IPXECONF_BOOT_WHOLE_DISK, pxeconf)
 
-    def test_switch_uefi_pxe_config_partition_image(self):
+    def test_switch_uefi_elilo_pxe_config_partition_image(self):
         boot_mode = 'uefi'
         fname = self._create_config(boot_mode=boot_mode)
         utils.switch_pxe_config(fname,
@@ -913,7 +1064,7 @@ class SwitchPxeConfigTestCase(tests_base.TestCase):
             pxeconf = f.read()
         self.assertEqual(_UEFI_PXECONF_BOOT_PARTITION, pxeconf)
 
-    def test_switch_uefi_config_whole_disk_image(self):
+    def test_switch_uefi_elilo_config_whole_disk_image(self):
         boot_mode = 'uefi'
         fname = self._create_config(boot_mode=boot_mode)
         utils.switch_pxe_config(fname,
@@ -923,6 +1074,28 @@ class SwitchPxeConfigTestCase(tests_base.TestCase):
         with open(fname, 'r') as f:
             pxeconf = f.read()
         self.assertEqual(_UEFI_PXECONF_BOOT_WHOLE_DISK, pxeconf)
+
+    def test_switch_uefi_grub_pxe_config_partition_image(self):
+        boot_mode = 'uefi'
+        fname = self._create_config(boot_mode=boot_mode, boot_loader='grub')
+        utils.switch_pxe_config(fname,
+                                '12345678-1234-1234-1234-1234567890abcdef',
+                                boot_mode,
+                                False)
+        with open(fname, 'r') as f:
+            pxeconf = f.read()
+        self.assertEqual(_UEFI_PXECONF_BOOT_PARTITION_GRUB, pxeconf)
+
+    def test_switch_uefi_grub_config_whole_disk_image(self):
+        boot_mode = 'uefi'
+        fname = self._create_config(boot_mode=boot_mode, boot_loader='grub')
+        utils.switch_pxe_config(fname,
+                                '0x12345678',
+                                boot_mode,
+                                True)
+        with open(fname, 'r') as f:
+            pxeconf = f.read()
+        self.assertEqual(_UEFI_PXECONF_BOOT_WHOLE_DISK_GRUB, pxeconf)
 
 
 @mock.patch('time.sleep', lambda sec: None)
@@ -938,8 +1111,8 @@ class OtherFunctionTestCase(db_base.DbTestCase):
         actual = utils.get_dev('1.2.3.4', 5678, 'iqn.fake', 9)
         self.assertEqual(expected, actual)
 
-    @mock.patch.object(os, 'stat')
-    @mock.patch.object(stat, 'S_ISBLK')
+    @mock.patch.object(os, 'stat', autospec=True)
+    @mock.patch.object(stat, 'S_ISBLK', autospec=True)
     def test_is_block_device_works(self, mock_is_blk, mock_os):
         device = '/dev/disk/by-path/ip-1.2.3.4:5678-iscsi-iqn.fake-lun-9'
         mock_is_blk.return_value = True
@@ -947,7 +1120,7 @@ class OtherFunctionTestCase(db_base.DbTestCase):
         self.assertTrue(utils.is_block_device(device))
         mock_is_blk.assert_called_once_with(mock_os().st_mode)
 
-    @mock.patch.object(os, 'stat')
+    @mock.patch.object(os, 'stat', autospec=True)
     def test_is_block_device_raises(self, mock_os):
         device = '/dev/disk/by-path/ip-1.2.3.4:5678-iscsi-iqn.fake-lun-9'
         mock_os.side_effect = OSError
@@ -955,8 +1128,8 @@ class OtherFunctionTestCase(db_base.DbTestCase):
                           utils.is_block_device, device)
         mock_os.assert_has_calls([mock.call(device)] * 3)
 
-    @mock.patch.object(os.path, 'getsize')
-    @mock.patch.object(images, 'converted_size')
+    @mock.patch.object(os.path, 'getsize', autospec=True)
+    @mock.patch.object(images, 'converted_size', autospec=True)
     def test_get_image_mb(self, mock_csize, mock_getsize):
         mb = 1024 * 1024
 
@@ -1004,6 +1177,53 @@ class OtherFunctionTestCase(db_base.DbTestCase):
         self.assertRaises(exception.InvalidParameterValue,
                           utils.parse_root_device_hints, self.node)
 
+    @mock.patch.object(utils, 'LOG', autospec=True)
+    @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
+    @mock.patch.object(task_manager.TaskManager, 'process_event',
+                       autospec=True)
+    def _test_set_failed_state(self, mock_event, mock_power, mock_log,
+                               event_value=None, power_value=None,
+                               log_calls=None):
+        err_msg = 'some failure'
+        mock_event.side_effect = event_value
+        mock_power.side_effect = power_value
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            utils.set_failed_state(task, err_msg)
+            mock_event.assert_called_once_with(task, 'fail')
+            mock_power.assert_called_once_with(task, states.POWER_OFF)
+            self.assertEqual(err_msg, task.node.last_error)
+            if log_calls:
+                mock_log.exception.assert_has_calls(log_calls)
+            else:
+                self.assertFalse(mock_log.called)
+
+    def test_set_failed_state(self):
+        exc_state = exception.InvalidState('invalid state')
+        exc_param = exception.InvalidParameterValue('invalid parameter')
+        mock_call = mock.call(mock.ANY)
+        self._test_set_failed_state()
+        calls = [mock_call]
+        self._test_set_failed_state(event_value=iter([exc_state] * len(calls)),
+                                    log_calls=calls)
+        calls = [mock_call]
+        self._test_set_failed_state(power_value=iter([exc_param] * len(calls)),
+                                    log_calls=calls)
+        calls = [mock_call, mock_call]
+        self._test_set_failed_state(event_value=iter([exc_state] * len(calls)),
+                                    power_value=iter([exc_param] * len(calls)),
+                                    log_calls=calls)
+
+    def test_get_boot_option(self):
+        self.node.instance_info = {'capabilities': '{"boot_option": "local"}'}
+        result = utils.get_boot_option(self.node)
+        self.assertEqual("local", result)
+
+    def test_get_boot_option_default_value(self):
+        self.node.instance_info = {}
+        result = utils.get_boot_option(self.node)
+        self.assertEqual("netboot", result)
+
 
 @mock.patch.object(disk_partitioner.DiskPartitioner, 'commit', lambda _: None)
 class WorkOnDiskTestCase(tests_base.TestCase):
@@ -1044,7 +1264,9 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.mock_ibd.assert_called_once_with(self.root_part)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
                                              self.swap_mb, self.ephemeral_mb,
-                                             self.configdrive_mb, commit=True,
+                                             self.configdrive_mb,
+                                             'fake-uuid',
+                                             commit=True,
                                              boot_option="netboot",
                                              boot_mode="bios")
 
@@ -1059,7 +1281,9 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.assertEqual(self.mock_ibd.call_args_list, calls)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
                                              self.swap_mb, self.ephemeral_mb,
-                                             self.configdrive_mb, commit=True,
+                                             self.configdrive_mb,
+                                             'fake-uuid',
+                                             commit=True,
                                              boot_option="netboot",
                                              boot_mode="bios")
 
@@ -1084,12 +1308,14 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.assertEqual(self.mock_ibd.call_args_list, calls)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
                                              self.swap_mb, ephemeral_mb,
-                                             self.configdrive_mb, commit=True,
+                                             self.configdrive_mb,
+                                             'fake-uuid',
+                                             commit=True,
                                              boot_option="netboot",
                                              boot_mode="bios")
 
-    @mock.patch.object(common_utils, 'unlink_without_raise')
-    @mock.patch.object(utils, '_get_configdrive')
+    @mock.patch.object(common_utils, 'unlink_without_raise', autospec=True)
+    @mock.patch.object(utils, '_get_configdrive', autospec=True)
     def test_no_configdrive_partition(self, mock_configdrive, mock_unlink):
         mock_configdrive.return_value = (10, 'fake-path')
         swap_part = '/dev/fake-part1'
@@ -1115,13 +1341,15 @@ class WorkOnDiskTestCase(tests_base.TestCase):
         self.assertEqual(self.mock_ibd.call_args_list, calls)
         self.mock_mp.assert_called_once_with(self.dev, self.root_mb,
                                              self.swap_mb, self.ephemeral_mb,
-                                             configdrive_mb, commit=True,
+                                             configdrive_mb,
+                                             'fake-uuid',
+                                             commit=True,
                                              boot_option="netboot",
                                              boot_mode="bios")
         mock_unlink.assert_called_once_with('fake-path')
 
 
-@mock.patch.object(common_utils, 'execute')
+@mock.patch.object(common_utils, 'execute', autospec=True)
 class MakePartitionsTestCase(tests_base.TestCase):
 
     def setUp(self):
@@ -1138,6 +1366,7 @@ class MakePartitionsTestCase(tests_base.TestCase):
         mock_exc.return_value = (None, None)
         utils.make_partitions(self.dev, self.root_mb, self.swap_mb,
                               self.ephemeral_mb, self.configdrive_mb,
+                              '12345678-1234-1234-1234-1234567890abcxyz',
                               boot_option=boot_option)
 
         expected_mkpart = ['mkpart', 'primary', 'linux-swap', '1', '513',
@@ -1166,14 +1395,15 @@ class MakePartitionsTestCase(tests_base.TestCase):
         cmd = self.parted_static_cmd + expected_mkpart
         mock_exc.return_value = (None, None)
         utils.make_partitions(self.dev, self.root_mb, self.swap_mb,
-                              self.ephemeral_mb, self.configdrive_mb)
+                              self.ephemeral_mb, self.configdrive_mb,
+                              '12345678-1234-1234-1234-1234567890abcxyz')
 
         parted_call = mock.call(*cmd, run_as_root=True, check_exit_code=[0])
-        mock_exc.assert_has_calls(parted_call)
+        mock_exc.assert_has_calls([parted_call])
 
 
-@mock.patch.object(utils, 'get_dev_block_size')
-@mock.patch.object(common_utils, 'execute')
+@mock.patch.object(utils, 'get_dev_block_size', autospec=True)
+@mock.patch.object(common_utils, 'execute', autospec=True)
 class DestroyMetaDataTestCase(tests_base.TestCase):
 
     def setUp(self):
@@ -1198,8 +1428,8 @@ class DestroyMetaDataTestCase(tests_base.TestCase):
         mock_gz.side_effect = processutils.ProcessExecutionError
 
         expected_call = [mock.call('dd', 'if=/dev/zero', 'of=fake-dev',
-                            'bs=512', 'count=36', run_as_root=True,
-                            check_exit_code=[0])]
+                                   'bs=512', 'count=36', run_as_root=True,
+                                   check_exit_code=[0])]
         self.assertRaises(processutils.ProcessExecutionError,
                           utils.destroy_disk_metadata,
                           self.dev,
@@ -1210,8 +1440,8 @@ class DestroyMetaDataTestCase(tests_base.TestCase):
         mock_exec.side_effect = processutils.ProcessExecutionError
 
         expected_call = [mock.call('dd', 'if=/dev/zero', 'of=fake-dev',
-                            'bs=512', 'count=36', run_as_root=True,
-                            check_exit_code=[0])]
+                                   'bs=512', 'count=36', run_as_root=True,
+                                   check_exit_code=[0])]
         self.assertRaises(processutils.ProcessExecutionError,
                           utils.destroy_disk_metadata,
                           self.dev,
@@ -1220,7 +1450,7 @@ class DestroyMetaDataTestCase(tests_base.TestCase):
         self.assertFalse(mock_gz.called)
 
 
-@mock.patch.object(common_utils, 'execute')
+@mock.patch.object(common_utils, 'execute', autospec=True)
 class GetDeviceBlockSizeTestCase(tests_base.TestCase):
 
     def setUp(self):
@@ -1231,14 +1461,14 @@ class GetDeviceBlockSizeTestCase(tests_base.TestCase):
     def test_get_dev_block_size(self, mock_exec):
         mock_exec.return_value = ("64", "")
         expected_call = [mock.call('blockdev', '--getsz', self.dev,
-                                     run_as_root=True, check_exit_code=[0])]
+                                   run_as_root=True, check_exit_code=[0])]
         utils.get_dev_block_size(self.dev)
         mock_exec.assert_has_calls(expected_call)
 
 
-@mock.patch.object(utils, 'dd')
-@mock.patch.object(images, 'qemu_img_info')
-@mock.patch.object(images, 'convert_image')
+@mock.patch.object(utils, 'dd', autospec=True)
+@mock.patch.object(images, 'qemu_img_info', autospec=True)
+@mock.patch.object(images, 'convert_image', autospec=True)
 class PopulateImageTestCase(tests_base.TestCase):
 
     def setUp(self):
@@ -1334,10 +1564,11 @@ class RealFilePartitioningTestCase(tests_base.TestCase):
                          "unexpected partitioning %s" % part_table)
         self.assertIn(sizes[2], (9, 10))
 
-    @mock.patch.object(image_cache, 'clean_up_caches')
+    @mock.patch.object(image_cache, 'clean_up_caches', autospec=True)
     def test_fetch_images(self, mock_clean_up_caches):
 
-        mock_cache = mock.MagicMock(master_dir='master_dir')
+        mock_cache = mock.MagicMock(
+            spec_set=['fetch_image', 'master_dir'], master_dir='master_dir')
         utils.fetch_images(None, mock_cache, [('uuid', 'path')])
         mock_clean_up_caches.assert_called_once_with(None, 'master_dir',
                                                      [('uuid', 'path')])
@@ -1345,15 +1576,16 @@ class RealFilePartitioningTestCase(tests_base.TestCase):
                                                        ctx=None,
                                                        force_raw=True)
 
-    @mock.patch.object(image_cache, 'clean_up_caches')
+    @mock.patch.object(image_cache, 'clean_up_caches', autospec=True)
     def test_fetch_images_fail(self, mock_clean_up_caches):
 
         exc = exception.InsufficientDiskSpace(path='a',
                                               required=2,
                                               actual=1)
 
-        mock_cache = mock.MagicMock(master_dir='master_dir')
-        mock_clean_up_caches.side_effect = [exc]
+        mock_cache = mock.MagicMock(
+            spec_set=['master_dir'], master_dir='master_dir')
+        mock_clean_up_caches.side_effect = iter([exc])
         self.assertRaises(exception.InstanceDeployFailure,
                           utils.fetch_images,
                           None,
@@ -1363,49 +1595,71 @@ class RealFilePartitioningTestCase(tests_base.TestCase):
                                                      [('uuid', 'path')])
 
 
-@mock.patch.object(shutil, 'copyfileobj')
-@mock.patch.object(requests, 'get')
+@mock.patch.object(tempfile, 'NamedTemporaryFile', autospec=True)
+@mock.patch.object(shutil, 'copyfileobj', autospec=True)
+@mock.patch.object(requests, 'get', autospec=True)
 class GetConfigdriveTestCase(tests_base.TestCase):
 
-    @mock.patch.object(gzip, 'GzipFile')
-    def test_get_configdrive(self, mock_gzip, mock_requests, mock_copy):
-        mock_requests.return_value = mock.MagicMock(content='Zm9vYmFy')
+    def setUp(self):
+        super(GetConfigdriveTestCase, self).setUp()
+        # NOTE(lucasagomes): "name" can't be passed to Mock() when
+        # instantiating the object because it's an expected parameter.
+        # https://docs.python.org/3/library/unittest.mock.html
+        self.fake_configdrive_file = mock.Mock(tell=lambda *_: 123)
+        self.fake_configdrive_file.name = '/tmp/foo'
+
+    @mock.patch.object(gzip, 'GzipFile', autospec=True)
+    def test_get_configdrive(self, mock_gzip, mock_requests, mock_copy,
+                             mock_file):
+        mock_file.return_value = self.fake_configdrive_file
+        mock_requests.return_value = mock.MagicMock(
+            spec_set=['content'], content='Zm9vYmFy')
         utils._get_configdrive('http://1.2.3.4/cd', 'fake-node-uuid')
         mock_requests.assert_called_once_with('http://1.2.3.4/cd')
         mock_gzip.assert_called_once_with('configdrive', 'rb',
                                           fileobj=mock.ANY)
         mock_copy.assert_called_once_with(mock.ANY, mock.ANY)
+        mock_file.assert_called_once_with(prefix='configdrive',
+                                          dir=cfg.CONF.tempdir, delete=False)
 
-    @mock.patch.object(gzip, 'GzipFile')
+    @mock.patch.object(gzip, 'GzipFile', autospec=True)
     def test_get_configdrive_base64_string(self, mock_gzip, mock_requests,
-                                           mock_copy):
+                                           mock_copy, mock_file):
+        mock_file.return_value = self.fake_configdrive_file
         utils._get_configdrive('Zm9vYmFy', 'fake-node-uuid')
         self.assertFalse(mock_requests.called)
         mock_gzip.assert_called_once_with('configdrive', 'rb',
                                           fileobj=mock.ANY)
         mock_copy.assert_called_once_with(mock.ANY, mock.ANY)
+        mock_file.assert_called_once_with(prefix='configdrive',
+                                          dir=cfg.CONF.tempdir, delete=False)
 
-    def test_get_configdrive_bad_url(self, mock_requests, mock_copy):
+    def test_get_configdrive_bad_url(self, mock_requests, mock_copy,
+                                     mock_file):
         mock_requests.side_effect = requests.exceptions.RequestException
         self.assertRaises(exception.InstanceDeployFailure,
                           utils._get_configdrive, 'http://1.2.3.4/cd',
                           'fake-node-uuid')
         self.assertFalse(mock_copy.called)
+        self.assertFalse(mock_file.called)
 
-    @mock.patch.object(base64, 'b64decode')
+    @mock.patch.object(base64, 'b64decode', autospec=True)
     def test_get_configdrive_base64_error(self, mock_b64, mock_requests,
-                                          mock_copy):
+                                          mock_copy, mock_file):
         mock_b64.side_effect = TypeError
         self.assertRaises(exception.InstanceDeployFailure,
                           utils._get_configdrive,
                           'malformed', 'fake-node-uuid')
         mock_b64.assert_called_once_with('malformed')
         self.assertFalse(mock_copy.called)
+        self.assertFalse(mock_file.called)
 
-    @mock.patch.object(gzip, 'GzipFile')
+    @mock.patch.object(gzip, 'GzipFile', autospec=True)
     def test_get_configdrive_gzip_error(self, mock_gzip, mock_requests,
-                                        mock_copy):
-        mock_requests.return_value = mock.MagicMock(content='Zm9vYmFy')
+                                        mock_copy, mock_file):
+        mock_file.return_value = self.fake_configdrive_file
+        mock_requests.return_value = mock.MagicMock(
+            spec_set=['content'], content='Zm9vYmFy')
         mock_copy.side_effect = IOError
         self.assertRaises(exception.InstanceDeployFailure,
                           utils._get_configdrive, 'http://1.2.3.4/cd',
@@ -1414,6 +1668,8 @@ class GetConfigdriveTestCase(tests_base.TestCase):
         mock_gzip.assert_called_once_with('configdrive', 'rb',
                                           fileobj=mock.ANY)
         mock_copy.assert_called_once_with(mock.ANY, mock.ANY)
+        mock_file.assert_called_once_with(prefix='configdrive',
+                                          dir=cfg.CONF.tempdir, delete=False)
 
 
 class VirtualMediaDeployUtilsTestCase(db_base.DbTestCase):
@@ -1422,17 +1678,18 @@ class VirtualMediaDeployUtilsTestCase(db_base.DbTestCase):
         super(VirtualMediaDeployUtilsTestCase, self).setUp()
         mgr_utils.mock_the_extension_manager(driver="iscsi_ilo")
         info_dict = db_utils.get_test_ilo_info()
-        self.node = obj_utils.create_test_node(self.context,
-        driver='iscsi_ilo', driver_info=info_dict)
+        self.node = obj_utils.create_test_node(
+            self.context, driver='iscsi_ilo', driver_info=info_dict)
 
     def test_get_single_nic_with_vif_port_id(self):
-        obj_utils.create_test_port(self.context, node_id=self.node.id,
-                address='aa:bb:cc', uuid=uuidutils.generate_uuid(),
-                extra={'vif_port_id': 'test-vif-A'}, driver='iscsi_ilo')
+        obj_utils.create_test_port(
+            self.context, node_id=self.node.id, address='aa:bb:cc:dd:ee:ff',
+            uuid=uuidutils.generate_uuid(),
+            extra={'vif_port_id': 'test-vif-A'}, driver='iscsi_ilo')
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             address = utils.get_single_nic_with_vif_port_id(task)
-            self.assertEqual('aa:bb:cc', address)
+            self.assertEqual('aa:bb:cc:dd:ee:ff', address)
 
 
 class ParseInstanceInfoCapabilitiesTestCase(tests_base.TestCase):
@@ -1470,6 +1727,18 @@ class ParseInstanceInfoCapabilitiesTestCase(tests_base.TestCase):
         self.node.instance_info = {'capabilities': {"secure_boot": "invalid"}}
         self.assertFalse(utils.is_secure_boot_requested(self.node))
 
+    def test_is_trusted_boot_requested_true(self):
+        self.node.instance_info = {'capabilities': {"trusted_boot": "true"}}
+        self.assertTrue(utils.is_trusted_boot_requested(self.node))
+
+    def test_is_trusted_boot_requested_false(self):
+        self.node.instance_info = {'capabilities': {"trusted_boot": "false"}}
+        self.assertFalse(utils.is_trusted_boot_requested(self.node))
+
+    def test_is_trusted_boot_requested_invalid(self):
+        self.node.instance_info = {'capabilities': {"trusted_boot": "invalid"}}
+        self.assertFalse(utils.is_trusted_boot_requested(self.node))
+
     def test_get_boot_mode_for_deploy_using_capabilities(self):
         properties = {'capabilities': 'boot_mode:uefi,cap2:value2'}
         self.node.properties = properties
@@ -1484,12 +1753,69 @@ class ParseInstanceInfoCapabilitiesTestCase(tests_base.TestCase):
         result = utils.get_boot_mode_for_deploy(self.node)
         self.assertEqual('uefi', result)
 
+        instance_info = {'capabilities': {'trusted_boot': 'True'}}
+        self.node.instance_info = instance_info
+
+        result = utils.get_boot_mode_for_deploy(self.node)
+        self.assertEqual('bios', result)
+
+        instance_info = {'capabilities': {'trusted_boot': 'True'},
+                         'capabilities': {'secure_boot': 'True'}}
+        self.node.instance_info = instance_info
+
+        result = utils.get_boot_mode_for_deploy(self.node)
+        self.assertEqual('uefi', result)
+
     def test_get_boot_mode_for_deploy_using_instance_info(self):
         instance_info = {'deploy_boot_mode': 'bios'}
         self.node.instance_info = instance_info
 
         result = utils.get_boot_mode_for_deploy(self.node)
         self.assertEqual('bios', result)
+
+    def test_validate_boot_mode_capability(self):
+        prop = {'capabilities': 'boot_mode:uefi,cap2:value2'}
+        self.node.properties = prop
+
+        result = utils.validate_capabilities(self.node)
+        self.assertIsNone(result)
+
+    def test_validate_boot_mode_capability_with_exc(self):
+        prop = {'capabilities': 'boot_mode:UEFI,cap2:value2'}
+        self.node.properties = prop
+
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.validate_capabilities, self.node)
+
+    def test_validate_boot_mode_capability_instance_info(self):
+        inst_info = {'capabilities': {"boot_mode": "uefi", "cap2": "value2"}}
+        self.node.instance_info = inst_info
+
+        result = utils.validate_capabilities(self.node)
+        self.assertIsNone(result)
+
+    def test_validate_boot_mode_capability_instance_info_with_exc(self):
+        inst_info = {'capabilities': {"boot_mode": "UEFI", "cap2": "value2"}}
+        self.node.instance_info = inst_info
+
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.validate_capabilities, self.node)
+
+    def test_validate_trusted_boot_capability(self):
+        properties = {'capabilities': 'trusted_boot:value'}
+        self.node.properties = properties
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.validate_capabilities, self.node)
+
+    def test_all_supported_capabilities(self):
+        self.assertEqual(('local', 'netboot'),
+                         utils.SUPPORTED_CAPABILITIES['boot_option'])
+        self.assertEqual(('bios', 'uefi'),
+                         utils.SUPPORTED_CAPABILITIES['boot_mode'])
+        self.assertEqual(('true', 'false'),
+                         utils.SUPPORTED_CAPABILITIES['secure_boot'])
+        self.assertEqual(('true', 'false'),
+                         utils.SUPPORTED_CAPABILITIES['trusted_boot'])
 
 
 class TrySetBootDeviceTestCase(db_base.DbTestCase):
@@ -1499,7 +1825,7 @@ class TrySetBootDeviceTestCase(db_base.DbTestCase):
         mgr_utils.mock_the_extension_manager(driver="fake")
         self.node = obj_utils.create_test_node(self.context, driver="fake")
 
-    @mock.patch.object(manager_utils, 'node_set_boot_device')
+    @mock.patch.object(manager_utils, 'node_set_boot_device', autospec=True)
     def test_try_set_boot_device_okay(self, node_set_boot_device_mock):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
@@ -1508,25 +1834,27 @@ class TrySetBootDeviceTestCase(db_base.DbTestCase):
             node_set_boot_device_mock.assert_called_once_with(
                 task, boot_devices.DISK, persistent=True)
 
-    @mock.patch.object(utils, 'LOG')
-    @mock.patch.object(manager_utils, 'node_set_boot_device')
-    def test_try_set_boot_device_ipmifailure_uefi(self,
-            node_set_boot_device_mock, log_mock):
+    @mock.patch.object(utils, 'LOG', autospec=True)
+    @mock.patch.object(manager_utils, 'node_set_boot_device', autospec=True)
+    def test_try_set_boot_device_ipmifailure_uefi(
+            self, node_set_boot_device_mock, log_mock):
         self.node.properties = {'capabilities': 'boot_mode:uefi'}
         self.node.save()
-        node_set_boot_device_mock.side_effect = exception.IPMIFailure(cmd='a')
+        node_set_boot_device_mock.side_effect = iter(
+            [exception.IPMIFailure(cmd='a')])
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             utils.try_set_boot_device(task, boot_devices.DISK,
-                                             persistent=True)
+                                      persistent=True)
             node_set_boot_device_mock.assert_called_once_with(
                 task, boot_devices.DISK, persistent=True)
             log_mock.warning.assert_called_once_with(mock.ANY)
 
-    @mock.patch.object(manager_utils, 'node_set_boot_device')
+    @mock.patch.object(manager_utils, 'node_set_boot_device', autospec=True)
     def test_try_set_boot_device_ipmifailure_bios(
             self, node_set_boot_device_mock):
-        node_set_boot_device_mock.side_effect = exception.IPMIFailure(cmd='a')
+        node_set_boot_device_mock.side_effect = iter(
+            [exception.IPMIFailure(cmd='a')])
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             self.assertRaises(exception.IPMIFailure,
@@ -1535,11 +1863,11 @@ class TrySetBootDeviceTestCase(db_base.DbTestCase):
             node_set_boot_device_mock.assert_called_once_with(
                 task, boot_devices.DISK, persistent=True)
 
-    @mock.patch.object(manager_utils, 'node_set_boot_device')
+    @mock.patch.object(manager_utils, 'node_set_boot_device', autospec=True)
     def test_try_set_boot_device_some_other_exception(
             self, node_set_boot_device_mock):
         exc = exception.IloOperationError(operation="qwe", error="error")
-        node_set_boot_device_mock.side_effect = exc
+        node_set_boot_device_mock.side_effect = iter([exc])
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             self.assertRaises(exception.IloOperationError,
@@ -1579,8 +1907,10 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             }
         }
 
-    @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch.object(agent_client.AgentClient, 'get_clean_steps')
+    @mock.patch('ironic.objects.Port.list_by_node_id',
+                spec_set=types.FunctionType)
+    @mock.patch.object(agent_client.AgentClient, 'get_clean_steps',
+                       autospec=True)
     def test_get_clean_steps(self, client_mock, list_ports_mock):
         client_mock.return_value = {
             'command_result': self.clean_steps}
@@ -1589,7 +1919,8 @@ class AgentCleaningTestCase(db_base.DbTestCase):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             response = utils.agent_get_clean_steps(task)
-            client_mock.assert_called_once_with(task.node, self.ports)
+            client_mock.assert_called_once_with(mock.ANY, task.node,
+                                                self.ports)
             self.assertEqual('1', task.node.driver_internal_info[
                 'hardware_manager_version'])
 
@@ -1601,8 +1932,10 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             self.assertIn(self.clean_steps['clean_steps'][
                 'SpecificHardwareManager'][0], response)
 
-    @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch.object(agent_client.AgentClient, 'get_clean_steps')
+    @mock.patch('ironic.objects.Port.list_by_node_id',
+                spec_set=types.FunctionType)
+    @mock.patch.object(agent_client.AgentClient, 'get_clean_steps',
+                       autospec=True)
     def test_get_clean_steps_missing_steps(self, client_mock,
                                            list_ports_mock):
         del self.clean_steps['clean_steps']
@@ -1615,10 +1948,13 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             self.assertRaises(exception.NodeCleaningFailure,
                               utils.agent_get_clean_steps,
                               task)
-            client_mock.assert_called_once_with(task.node, self.ports)
+            client_mock.assert_called_once_with(mock.ANY, task.node,
+                                                self.ports)
 
-    @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step')
+    @mock.patch('ironic.objects.Port.list_by_node_id',
+                spec_set=types.FunctionType)
+    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step',
+                       autospec=True)
     def test_execute_clean_step(self, client_mock, list_ports_mock):
         client_mock.return_value = {
             'command_status': 'SUCCEEDED'}
@@ -1629,10 +1965,12 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             response = utils.agent_execute_clean_step(
                 task,
                 self.clean_steps['clean_steps']['GenericHardwareManager'][0])
-            self.assertEqual(states.CLEANING, response)
+            self.assertEqual(states.CLEANWAIT, response)
 
-    @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step')
+    @mock.patch('ironic.objects.Port.list_by_node_id',
+                spec_set=types.FunctionType)
+    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step',
+                       autospec=True)
     def test_execute_clean_step_running(self, client_mock, list_ports_mock):
         client_mock.return_value = {
             'command_status': 'RUNNING'}
@@ -1643,12 +1981,14 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             response = utils.agent_execute_clean_step(
                 task,
                 self.clean_steps['clean_steps']['GenericHardwareManager'][0])
-            self.assertEqual(states.CLEANING, response)
+            self.assertEqual(states.CLEANWAIT, response)
 
-    @mock.patch('ironic.objects.Port.list_by_node_id')
-    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step')
-    def test_execute_clean_step_version_mismatch(self, client_mock,
-                                        list_ports_mock):
+    @mock.patch('ironic.objects.Port.list_by_node_id',
+                spec_set=types.FunctionType)
+    @mock.patch.object(agent_client.AgentClient, 'execute_clean_step',
+                       autospec=True)
+    def test_execute_clean_step_version_mismatch(
+            self, client_mock, list_ports_mock):
         client_mock.return_value = {
             'command_status': 'RUNNING'}
         list_ports_mock.return_value = self.ports
@@ -1658,10 +1998,18 @@ class AgentCleaningTestCase(db_base.DbTestCase):
             response = utils.agent_execute_clean_step(
                 task,
                 self.clean_steps['clean_steps']['GenericHardwareManager'][0])
-            self.assertEqual(states.CLEANING, response)
+            self.assertEqual(states.CLEANWAIT, response)
+
+    def test_agent_add_clean_params(self):
+        cfg.CONF.agent.agent_erase_devices_iterations = 2
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            utils.agent_add_clean_params(task)
+            self.assertEqual(task.node.driver_internal_info.get(
+                'agent_erase_devices_iterations'), 2)
 
 
-@mock.patch.object(utils, 'is_block_device')
+@mock.patch.object(utils, 'is_block_device', autospec=True)
 @mock.patch.object(utils, 'login_iscsi', lambda *_: None)
 @mock.patch.object(utils, 'discovery', lambda *_: None)
 @mock.patch.object(utils, 'logout_iscsi', lambda *_: None)
@@ -1674,12 +2022,11 @@ class ISCSISetupAndHandleErrorsTestCase(tests_base.TestCase):
         port = 3306
         iqn = 'iqn.xyz'
         lun = 1
-        image_path = '/tmp/xyz/image'
         mock_ibd.return_value = False
         expected_dev = '/dev/fake'
         with testtools.ExpectedException(exception.InstanceDeployFailure):
             with utils._iscsi_setup_and_handle_errors(
-                    address, port, iqn, lun, image_path) as dev:
+                    address, port, iqn, lun) as dev:
                 self.assertEqual(expected_dev, dev)
 
         mock_ibd.assert_called_once_with(expected_dev)
@@ -1689,11 +2036,124 @@ class ISCSISetupAndHandleErrorsTestCase(tests_base.TestCase):
         port = 3306
         iqn = 'iqn.xyz'
         lun = 1
-        image_path = '/tmp/xyz/image'
         expected_dev = '/dev/fake'
         mock_ibd.return_value = True
-        with utils._iscsi_setup_and_handle_errors(address, port,
-                                iqn, lun, image_path) as dev:
+        with utils._iscsi_setup_and_handle_errors(
+                address, port, iqn, lun) as dev:
             self.assertEqual(expected_dev, dev)
 
         mock_ibd.assert_called_once_with(expected_dev)
+
+
+class ValidateImagePropertiesTestCase(db_base.DbTestCase):
+
+    @mock.patch.object(image_service, 'get_image_service', autospec=True)
+    def test_validate_image_properties_glance_image(self, image_service_mock):
+        node = obj_utils.create_test_node(
+            self.context, driver='fake_pxe',
+            instance_info=INST_INFO_DICT,
+            driver_info=DRV_INFO_DICT,
+            driver_internal_info=DRV_INTERNAL_INFO_DICT,
+        )
+        d_info = pxe._parse_instance_info(node)
+        image_service_mock.return_value.show.return_value = {
+            'properties': {'kernel_id': '1111', 'ramdisk_id': '2222'},
+        }
+
+        utils.validate_image_properties(self.context, d_info,
+                                        ['kernel_id', 'ramdisk_id'])
+        image_service_mock.assert_called_once_with(
+            node.instance_info['image_source'], context=self.context
+        )
+
+    @mock.patch.object(image_service, 'get_image_service', autospec=True)
+    def test_validate_image_properties_glance_image_missing_prop(
+            self, image_service_mock):
+        node = obj_utils.create_test_node(
+            self.context, driver='fake_pxe',
+            instance_info=INST_INFO_DICT,
+            driver_info=DRV_INFO_DICT,
+            driver_internal_info=DRV_INTERNAL_INFO_DICT,
+        )
+        d_info = pxe._parse_instance_info(node)
+        image_service_mock.return_value.show.return_value = {
+            'properties': {'kernel_id': '1111'},
+        }
+
+        self.assertRaises(exception.MissingParameterValue,
+                          utils.validate_image_properties,
+                          self.context, d_info, ['kernel_id', 'ramdisk_id'])
+        image_service_mock.assert_called_once_with(
+            node.instance_info['image_source'], context=self.context
+        )
+
+    @mock.patch.object(image_service, 'get_image_service', autospec=True)
+    def test_validate_image_properties_glance_image_not_authorized(
+            self, image_service_mock):
+        d_info = {'image_source': 'uuid'}
+        show_mock = image_service_mock.return_value.show
+        show_mock.side_effect = exception.ImageNotAuthorized(image_id='uuid')
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.validate_image_properties, self.context,
+                          d_info, [])
+
+    @mock.patch.object(image_service, 'get_image_service', autospec=True)
+    def test_validate_image_properties_glance_image_not_found(
+            self, image_service_mock):
+        d_info = {'image_source': 'uuid'}
+        show_mock = image_service_mock.return_value.show
+        show_mock.side_effect = exception.ImageNotFound(image_id='uuid')
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.validate_image_properties, self.context,
+                          d_info, [])
+
+    def test_validate_image_properties_invalid_image_href(self):
+        d_info = {'image_source': 'emule://uuid'}
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.validate_image_properties, self.context,
+                          d_info, [])
+
+    @mock.patch.object(image_service.HttpImageService, 'show', autospec=True)
+    def test_validate_image_properties_nonglance_image(
+            self, image_service_show_mock):
+        instance_info = {
+            'image_source': 'http://ubuntu',
+            'kernel': 'kernel_uuid',
+            'ramdisk': 'file://initrd',
+            'root_gb': 100,
+        }
+        image_service_show_mock.return_value = {'size': 1, 'properties': {}}
+        node = obj_utils.create_test_node(
+            self.context, driver='fake_pxe',
+            instance_info=instance_info,
+            driver_info=DRV_INFO_DICT,
+            driver_internal_info=DRV_INTERNAL_INFO_DICT,
+        )
+        d_info = pxe._parse_instance_info(node)
+        utils.validate_image_properties(self.context, d_info,
+                                        ['kernel', 'ramdisk'])
+        image_service_show_mock.assert_called_once_with(
+            mock.ANY, instance_info['image_source'])
+
+    @mock.patch.object(image_service.HttpImageService, 'show', autospec=True)
+    def test_validate_image_properties_nonglance_image_validation_fail(
+            self, img_service_show_mock):
+        instance_info = {
+            'image_source': 'http://ubuntu',
+            'kernel': 'kernel_uuid',
+            'ramdisk': 'file://initrd',
+            'root_gb': 100,
+        }
+        img_service_show_mock.side_effect = iter(
+            [exception.ImageRefValidationFailed(
+                image_href='http://ubuntu', reason='HTTPError')])
+        node = obj_utils.create_test_node(
+            self.context, driver='fake_pxe',
+            instance_info=instance_info,
+            driver_info=DRV_INFO_DICT,
+            driver_internal_info=DRV_INTERNAL_INFO_DICT,
+        )
+        d_info = pxe._parse_instance_info(node)
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.validate_image_properties, self.context,
+                          d_info, ['kernel', 'ramdisk'])

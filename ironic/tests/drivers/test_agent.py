@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import types
+
 import mock
 from oslo_config import cfg
 
@@ -22,8 +24,14 @@ from ironic.common import keystone
 from ironic.common import pxe_utils
 from ironic.common import states
 from ironic.conductor import task_manager
+from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import agent
 from ironic.drivers.modules import agent_client
+from ironic.drivers.modules import fake
+from ironic.drivers.modules.ilo import power as ilo_power
+from ironic.drivers.modules import ipmitool
+from ironic.drivers.modules.irmc import deploy as irmc_deploy
+from ironic.drivers.modules.irmc import power as irmc_power
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
@@ -50,7 +58,7 @@ class TestAgentMethods(db_base.DbTestCase):
         self.assertEqual('fake_agent', options['ipa-driver-name'])
         self.assertEqual(0, options['coreos.configdrive'])
 
-    @mock.patch.object(keystone, 'get_service_url')
+    @mock.patch.object(keystone, 'get_service_url', autospec=True)
     def test_build_agent_options_keystone(self, get_url_mock):
 
         self.config(api_url=None, group='conductor')
@@ -68,16 +76,17 @@ class TestAgentMethods(db_base.DbTestCase):
         self.assertEqual('fake_agent', options['ipa-driver-name'])
         self.assertEqual('model=fake_model', options['root_device'])
 
-    @mock.patch.object(image_service, 'GlanceImageService')
+    @mock.patch.object(image_service, 'GlanceImageService', autospec=True)
     def test_build_instance_info_for_deploy_glance_image(self, glance_mock):
         i_info = self.node.instance_info
-        i_info['image_source'] = 'image-uuid'
+        i_info['image_source'] = '733d1c44-a2ea-414b-aca7-69decf20d810'
         self.node.instance_info = i_info
         self.node.save()
 
         image_info = {'checksum': 'aa', 'disk_format': 'qcow2',
                       'container_format': 'bare'}
-        glance_mock.return_value.show = mock.Mock(return_value=image_info)
+        glance_mock.return_value.show = mock.MagicMock(spec_set=[],
+                                                       return_value=image_info)
 
         mgr_utils.mock_the_extension_manager(driver='fake_agent')
         with task_manager.acquire(
@@ -92,9 +101,10 @@ class TestAgentMethods(db_base.DbTestCase):
             glance_mock.return_value.swift_temp_url.assert_called_once_with(
                 image_info)
 
-    @mock.patch.object(image_service.HttpImageService, 'validate_href')
-    def test_build_instance_info_for_deploy_nonglance_image(self,
-            validate_href_mock):
+    @mock.patch.object(image_service.HttpImageService, 'validate_href',
+                       autospec=True)
+    def test_build_instance_info_for_deploy_nonglance_image(
+            self, validate_href_mock):
         i_info = self.node.instance_info
         i_info['image_source'] = 'http://image-ref'
         i_info['image_checksum'] = 'aa'
@@ -109,13 +119,16 @@ class TestAgentMethods(db_base.DbTestCase):
 
             self.assertEqual(self.node.instance_info['image_source'],
                              info['image_url'])
-            validate_href_mock.assert_called_once_with('http://image-ref')
+            validate_href_mock.assert_called_once_with(
+                mock.ANY, 'http://image-ref')
 
-    @mock.patch.object(image_service.HttpImageService, 'validate_href')
-    def test_build_instance_info_for_deploy_nonsupported_image(self,
-            validate_href_mock):
-        validate_href_mock.side_effect = exception.ImageRefValidationFailed(
-            image_href='file://img.qcow2', reason='fail')
+    @mock.patch.object(image_service.HttpImageService, 'validate_href',
+                       autospec=True)
+    def test_build_instance_info_for_deploy_nonsupported_image(
+            self, validate_href_mock):
+        validate_href_mock.side_effect = iter(
+            [exception.ImageRefValidationFailed(
+                image_href='file://img.qcow2', reason='fail')])
         i_info = self.node.instance_info
         i_info['image_source'] = 'file://img.qcow2'
         i_info['image_checksum'] = 'aa'
@@ -207,10 +220,10 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.assertRaises(exception.InvalidParameterValue,
                               task.driver.deploy.validate, task)
 
-    @mock.patch.object(agent, '_cache_tftp_images')
-    @mock.patch.object(pxe_utils, 'create_pxe_config')
-    @mock.patch.object(agent, '_build_pxe_config_options')
-    @mock.patch.object(agent, '_get_tftp_image_info')
+    @mock.patch.object(agent, '_cache_tftp_images', autospec=True)
+    @mock.patch.object(pxe_utils, 'create_pxe_config', autospec=True)
+    @mock.patch.object(agent, '_build_pxe_config_options', autospec=True)
+    @mock.patch.object(agent, '_get_tftp_image_info', autospec=True)
     def test__prepare_pxe_boot(self, pxe_info_mock, options_mock,
                                create_mock, cache_mock):
         with task_manager.acquire(
@@ -223,10 +236,10 @@ class TestAgentDeploy(db_base.DbTestCase):
             cache_mock.assert_called_once_with(task.context, task.node,
                                                mock.ANY)
 
-    @mock.patch.object(agent, '_cache_tftp_images')
-    @mock.patch.object(pxe_utils, 'create_pxe_config')
-    @mock.patch.object(agent, '_build_pxe_config_options')
-    @mock.patch.object(agent, '_get_tftp_image_info')
+    @mock.patch.object(agent, '_cache_tftp_images', autospec=True)
+    @mock.patch.object(pxe_utils, 'create_pxe_config', autospec=True)
+    @mock.patch.object(agent, '_build_pxe_config_options', autospec=True)
+    @mock.patch.object(agent, '_get_tftp_image_info', autospec=True)
     def test__prepare_pxe_boot_manage_tftp_false(
             self, pxe_info_mock, options_mock, create_mock, cache_mock):
         self.config(manage_tftp=False, group='agent')
@@ -238,21 +251,21 @@ class TestAgentDeploy(db_base.DbTestCase):
         self.assertFalse(create_mock.called)
         self.assertFalse(cache_mock.called)
 
-    @mock.patch.object(dhcp_factory.DHCPFactory, 'update_dhcp')
-    @mock.patch('ironic.conductor.utils.node_set_boot_device')
-    @mock.patch('ironic.conductor.utils.node_power_action')
+    @mock.patch.object(dhcp_factory.DHCPFactory, 'update_dhcp', autospec=True)
+    @mock.patch('ironic.conductor.utils.node_set_boot_device', autospec=True)
+    @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
     def test_deploy(self, power_mock, bootdev_mock, dhcp_mock):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
             driver_return = self.driver.deploy(task)
             self.assertEqual(driver_return, states.DEPLOYWAIT)
-            dhcp_mock.assert_called_once_with(task, dhcp_opts, None)
+            dhcp_mock.assert_called_once_with(mock.ANY, task, dhcp_opts, None)
             bootdev_mock.assert_called_once_with(task, 'pxe', persistent=True)
             power_mock.assert_called_once_with(task,
                                                states.REBOOT)
 
-    @mock.patch('ironic.conductor.utils.node_power_action')
+    @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
     def test_tear_down(self, power_mock):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
@@ -260,10 +273,10 @@ class TestAgentDeploy(db_base.DbTestCase):
             power_mock.assert_called_once_with(task, states.POWER_OFF)
             self.assertEqual(driver_return, states.DELETED)
 
-    @mock.patch.object(pxe_utils, 'clean_up_pxe_config')
-    @mock.patch.object(agent, 'AgentTFTPImageCache')
-    @mock.patch('ironic.common.utils.unlink_without_raise')
-    @mock.patch.object(agent, '_get_tftp_image_info')
+    @mock.patch.object(pxe_utils, 'clean_up_pxe_config', autospec=True)
+    @mock.patch.object(agent, 'AgentTFTPImageCache', autospec=True)
+    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch.object(agent, '_get_tftp_image_info', autospec=True)
     def test__clean_up_pxe(self, info_mock, unlink_mock, cache_mock,
                            clean_mock):
         info_mock.return_value = {'label': ['fake1', 'fake2']}
@@ -274,10 +287,10 @@ class TestAgentDeploy(db_base.DbTestCase):
             unlink_mock.assert_called_once_with('fake2')
             clean_mock.assert_called_once_with(task)
 
-    @mock.patch.object(pxe_utils, 'clean_up_pxe_config')
-    @mock.patch.object(agent.AgentTFTPImageCache, 'clean_up')
-    @mock.patch('ironic.common.utils.unlink_without_raise')
-    @mock.patch.object(agent, '_get_tftp_image_info')
+    @mock.patch.object(pxe_utils, 'clean_up_pxe_config', autospec=True)
+    @mock.patch.object(agent.AgentTFTPImageCache, 'clean_up', autospec=True)
+    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch.object(agent, '_get_tftp_image_info', autospec=True)
     def test__clean_up_pxe_manage_tftp_false(
             self, info_mock, unlink_mock, cache_mock, clean_mock):
         self.config(manage_tftp=False, group='agent')
@@ -290,35 +303,42 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.assertFalse(cache_mock.called)
             self.assertFalse(clean_mock.called)
 
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports')
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.create_cleaning_ports')
-    @mock.patch('ironic.drivers.modules.agent._do_pxe_boot')
-    @mock.patch('ironic.drivers.modules.agent._prepare_pxe_boot')
+    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports',
+                autospec=True)
+    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.create_cleaning_ports',
+                autospec=True)
+    @mock.patch('ironic.drivers.modules.agent._do_pxe_boot', autospec=True)
+    @mock.patch('ironic.drivers.modules.agent._prepare_pxe_boot',
+                autospec=True)
     def test_prepare_cleaning(self, prepare_mock, boot_mock, create_mock,
                               delete_mock):
         ports = [{'ports': self.ports}]
         create_mock.return_value = ports
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
-            self.assertEqual(states.CLEANING,
+            self.assertEqual(states.CLEANWAIT,
                              self.driver.prepare_cleaning(task))
             prepare_mock.assert_called_once_with(task)
             boot_mock.assert_called_once_with(task, ports)
-            create_mock.assert_called_once_with(task)
-            delete_mock.assert_called_once_with(task)
+            create_mock.assert_called_once_with(mock.ANY, task)
+            delete_mock.assert_called_once_with(mock.ANY, task)
+            self.assertEqual(task.node.driver_internal_info.get(
+                             'agent_erase_devices_iterations'), 1)
 
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports')
-    @mock.patch('ironic.drivers.modules.agent._clean_up_pxe')
-    @mock.patch('ironic.conductor.utils.node_power_action')
+    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports',
+                autospec=True)
+    @mock.patch('ironic.drivers.modules.agent._clean_up_pxe', autospec=True)
+    @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
     def test_tear_down_cleaning(self, power_mock, cleanup_mock, neutron_mock):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             self.assertIsNone(self.driver.tear_down_cleaning(task))
             power_mock.assert_called_once_with(task, states.POWER_OFF)
             cleanup_mock.assert_called_once_with(task)
-            neutron_mock.assert_called_once_with(task)
+            neutron_mock.assert_called_once_with(mock.ANY, task)
 
-    @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps')
+    @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps',
+                autospec=True)
     def test_get_clean_steps(self, mock_get_clean_steps):
         # Test getting clean steps
         mock_steps = [{'priority': 10, 'interface': 'deploy',
@@ -329,7 +349,8 @@ class TestAgentDeploy(db_base.DbTestCase):
             mock_get_clean_steps.assert_called_once_with(task)
         self.assertEqual(mock_steps, steps)
 
-    @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps')
+    @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps',
+                autospec=True)
     def test_get_clean_steps_config_priority(self, mock_get_clean_steps):
         # Test that we can override the priority of get clean steps
         # Use 0 because it is an edge case (false-y) and used in devstack
@@ -352,10 +373,10 @@ class TestAgentVendor(db_base.DbTestCase):
         mgr_utils.mock_the_extension_manager(driver="fake_agent")
         self.passthru = agent.AgentVendorInterface()
         n = {
-              'driver': 'fake_agent',
-              'instance_info': INSTANCE_INFO,
-              'driver_info': DRIVER_INFO,
-              'driver_internal_info': DRIVER_INTERNAL_INFO,
+            'driver': 'fake_agent',
+            'instance_info': INSTANCE_INFO,
+            'driver_info': DRIVER_INFO,
+            'driver_internal_info': DRIVER_INTERNAL_INFO,
         }
         self.node = object_utils.create_test_node(self.context, **n)
 
@@ -372,16 +393,16 @@ class TestAgentVendor(db_base.DbTestCase):
             'container_format': 'bare',
         }
 
-        client_mock = mock.Mock()
+        client_mock = mock.MagicMock(spec_set=['prepare_image'])
         self.passthru._client = client_mock
 
         with task_manager.acquire(self.context, self.node.uuid,
-                                      shared=False) as task:
+                                  shared=False) as task:
             self.passthru.continue_deploy(task)
 
             client_mock.prepare_image.assert_called_with(task.node,
-                expected_image_info)
-            self.assertEqual(states.DEPLOYING, task.node.provision_state)
+                                                         expected_image_info)
+            self.assertEqual(states.DEPLOYWAIT, task.node.provision_state)
             self.assertEqual(states.ACTIVE,
                              task.node.target_provision_state)
 
@@ -398,62 +419,157 @@ class TestAgentVendor(db_base.DbTestCase):
             'container_format': 'bare',
         }
 
-        client_mock = mock.Mock()
+        client_mock = mock.MagicMock(spec_set=['prepare_image'])
         self.passthru._client = client_mock
 
         with task_manager.acquire(self.context, self.node.uuid,
-                                      shared=False) as task:
+                                  shared=False) as task:
             self.passthru.continue_deploy(task)
 
             client_mock.prepare_image.assert_called_with(task.node,
-                expected_image_info)
-            self.assertEqual(states.DEPLOYING, task.node.provision_state)
+                                                         expected_image_info)
+            self.assertEqual(states.DEPLOYWAIT, task.node.provision_state)
             self.assertEqual(states.ACTIVE,
                              task.node.target_provision_state)
 
-    @mock.patch('ironic.conductor.utils.node_power_action')
-    @mock.patch('ironic.conductor.utils.node_set_boot_device')
+    @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
+    @mock.patch.object(agent_client.AgentClient, 'power_off',
+                       spec=types.FunctionType)
+    @mock.patch('ironic.conductor.utils.node_set_boot_device', autospec=True)
     @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
-                '.check_deploy_success')
-    def test_reboot_to_instance(self, check_deploy_mock, bootdev_mock,
-                                power_mock):
+                '.check_deploy_success', autospec=True)
+    @mock.patch.object(agent, '_clean_up_pxe', autospec=True)
+    def _test_reboot_to_instance(self, clean_pxe_mock, check_deploy_mock,
+                                 bootdev_mock, power_off_mock,
+                                 node_power_action_mock,
+                                 get_power_state_mock,
+                                 uses_pxe=True):
         check_deploy_mock.return_value = None
 
-        self.node.provision_state = states.DEPLOYING
+        self.node.provision_state = states.DEPLOYWAIT
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
 
         with task_manager.acquire(self.context, self.node.uuid,
-                                      shared=False) as task:
+                                  shared=False) as task:
+            get_power_state_mock.return_value = states.POWER_OFF
+            task.node.driver_internal_info['is_whole_disk_image'] = True
             self.passthru.reboot_to_instance(task)
 
-            check_deploy_mock.assert_called_once_with(task.node)
+            if uses_pxe:
+                clean_pxe_mock.assert_called_once_with(task)
+            else:
+                self.assertFalse(clean_pxe_mock.called)
+            check_deploy_mock.assert_called_once_with(mock.ANY, task.node)
             bootdev_mock.assert_called_once_with(task, 'disk', persistent=True)
-            power_mock.assert_called_once_with(task, states.REBOOT)
+            power_off_mock.assert_called_once_with(task.node)
+            get_power_state_mock.assert_called_once_with(task)
+            node_power_action_mock.assert_called_once_with(
+                task, states.POWER_ON)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
 
-    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    @mock.patch.object(fake.FakePower, 'get_power_state',
+                       spec=types.FunctionType)
+    def test_reboot_to_instance_fake_driver(self, get_power_state_mock):
+        self._test_reboot_to_instance(
+            get_power_state_mock=get_power_state_mock)
+
+    @mock.patch.object(ipmitool.IPMIPower, 'get_power_state',
+                       spec=types.FunctionType)
+    def test_reboot_to_instance_agent_ipmitool_driver(
+            self, get_power_state_mock):
+        mgr_utils.mock_the_extension_manager(driver='agent_ipmitool')
+        self.node.driver = 'agent_ipmitool'
+        self.node.save()
+        self._test_reboot_to_instance(
+            get_power_state_mock=get_power_state_mock)
+
+    @mock.patch.object(ilo_power.IloPower, 'get_power_state',
+                       spec=types.FunctionType)
+    def test_reboot_to_instance_agent_ilo_driver(self, get_power_state_mock):
+        mgr_utils.mock_the_extension_manager(driver='agent_ilo')
+        self.node.driver = 'agent_ilo'
+        self.node.save()
+        self._test_reboot_to_instance(
+            get_power_state_mock=get_power_state_mock, uses_pxe=False)
+
+    @mock.patch.object(irmc_power.IRMCPower, 'get_power_state',
+                       spec=types.FunctionType)
+    def test_reboot_to_instance_agent_irmc_driver(self, get_power_state_mock):
+        irmc_deploy._check_share_fs_mounted_patcher.start()
+        mgr_utils.mock_the_extension_manager(driver='agent_irmc')
+        self.node.driver = 'agent_irmc'
+        self.node.save()
+        self._test_reboot_to_instance(
+            get_power_state_mock=get_power_state_mock, uses_pxe=False)
+
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
+    def test_deploy_has_started(self, mock_get_cmd):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            mock_get_cmd.return_value = []
+            self.assertFalse(self.passthru.deploy_has_started(task))
+
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
+    def test_deploy_has_started_is_done(self, mock_get_cmd):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            mock_get_cmd.return_value = [{'command_name': 'prepare_image',
+                                          'command_status': 'SUCCESS'}]
+            self.assertTrue(self.passthru.deploy_has_started(task))
+
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
+    def test_deploy_has_started_did_start(self, mock_get_cmd):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            mock_get_cmd.return_value = [{'command_name': 'prepare_image',
+                                          'command_status': 'RUNNING'}]
+            self.assertTrue(self.passthru.deploy_has_started(task))
+
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
+    def test_deploy_has_started_multiple_commands(self, mock_get_cmd):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            mock_get_cmd.return_value = [{'command_name': 'cache_image',
+                                          'command_status': 'SUCCESS'},
+                                         {'command_name': 'prepare_image',
+                                          'command_status': 'RUNNING'}]
+            self.assertTrue(self.passthru.deploy_has_started(task))
+
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
+    def test_deploy_has_started_other_commands(self, mock_get_cmd):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            mock_get_cmd.return_value = [{'command_name': 'cache_image',
+                                          'command_status': 'SUCCESS'}]
+            self.assertFalse(self.passthru.deploy_has_started(task))
+
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
     def test_deploy_is_done(self, mock_get_cmd):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             mock_get_cmd.return_value = [{'command_name': 'prepare_image',
                                           'command_status': 'SUCCESS'}]
             self.assertTrue(self.passthru.deploy_is_done(task))
 
-    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
     def test_deploy_is_done_empty_response(self, mock_get_cmd):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             mock_get_cmd.return_value = []
             self.assertFalse(self.passthru.deploy_is_done(task))
 
-    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
     def test_deploy_is_done_race(self, mock_get_cmd):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             mock_get_cmd.return_value = [{'command_name': 'some_other_command',
                                           'command_status': 'SUCCESS'}]
             self.assertFalse(self.passthru.deploy_is_done(task))
 
-    @mock.patch.object(agent_client.AgentClient, 'get_commands_status')
+    @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
+                       autospec=True)
     def test_deploy_is_done_still_running(self, mock_get_cmd):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             mock_get_cmd.return_value = [{'command_name': 'prepare_image',

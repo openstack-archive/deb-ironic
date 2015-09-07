@@ -2,8 +2,6 @@
 #
 # Copyright © 2012 New Dream Network, LLC (DreamHost)
 #
-# Author: Doug Hellmann <doug.hellmann@dreamhost.com>
-#
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
 # a copy of the License at
@@ -18,6 +16,7 @@
 
 from oslo_config import cfg
 from pecan import hooks
+from six.moves import http_client
 from webob import exc
 
 from ironic.common import context
@@ -67,18 +66,22 @@ class ContextHook(hooks.PecanHook):
     def before(self, state):
         headers = state.request.headers
 
+        # Do not pass any token with context for noauth mode
+        auth_token = (None if cfg.CONF.auth_strategy == 'noauth' else
+                      headers.get('X-Auth-Token'))
+
         creds = {
             'user': headers.get('X-User') or headers.get('X-User-Id'),
             'tenant': headers.get('X-Tenant') or headers.get('X-Tenant-Id'),
             'domain_id': headers.get('X-User-Domain-Id'),
             'domain_name': headers.get('X-User-Domain-Name'),
-            'auth_token': headers.get('X-Auth-Token'),
+            'auth_token': auth_token,
             'roles': headers.get('X-Roles', '').split(','),
         }
 
         # NOTE(adam_g): We also check the previous 'admin' rule to ensure
         # compat with default juno policy.json.  This double check may be
-        # removed in L.
+        # removed in Liberty.
         is_admin = (policy.enforce('admin_api', creds, creds) or
                     policy.enforce('admin', creds, creds))
         is_public_api = state.request.environ.get('is_public_api', False)
@@ -132,7 +135,10 @@ class NoExceptionTracebackHook(hooks.PecanHook):
             return
 
         # Do nothing if there is no error.
-        if 200 <= state.response.status_int < 400:
+        # Status codes in the range 200 (OK) to 399 (400 = BAD_REQUEST) are not
+        # an error.
+        if (http_client.OK <= state.response.status_int <
+                http_client.BAD_REQUEST):
             return
 
         json_body = state.response.json
@@ -141,13 +147,13 @@ class NoExceptionTracebackHook(hooks.PecanHook):
         if cfg.CONF.debug and json_body.get('faultcode') != 'Server':
             return
 
-        faultsting = json_body.get('faultstring')
+        faultstring = json_body.get('faultstring')
         traceback_marker = 'Traceback (most recent call last):'
-        if faultsting and (traceback_marker in faultsting):
+        if faultstring and traceback_marker in faultstring:
             # Cut-off traceback.
-            faultsting = faultsting.split(traceback_marker, 1)[0]
+            faultstring = faultstring.split(traceback_marker, 1)[0]
             # Remove trailing newlines and spaces if any.
-            json_body['faultstring'] = faultsting.rstrip()
+            json_body['faultstring'] = faultstring.rstrip()
             # Replace the whole json. Cannot change original one beacause it's
             # generated on the fly.
             state.response.json = json_body

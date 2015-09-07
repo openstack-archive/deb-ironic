@@ -4,12 +4,13 @@
 # python projects they should package as optional dependencies for Ironic.
 
 # These are available on pypi
-ironic-discoverd>=1.0.0
-proliantutils>=2.1.0
+proliantutils>=2.1.1
 pyghmi
 pysnmp
-python-scciclient
+python-ironic-inspector-client
+python-scciclient>=0.2.0
 python-seamicroclient>=0.4.0
+UcsSdk==0.8.2.2
 
 # The drac and amt driver import a python module called "pywsman", however,
 # this does not exist on pypi.
@@ -22,7 +23,6 @@ python-seamicroclient>=0.4.0
 # https://github.com/darkip/python-iboot
 
 # 'pxe_vbox' and 'agent_vbox' drivers require pyremotevbox library.
-# The python module ZSI which is required for pyremotevbox is not available
-# in pypi right now. Refer documentation on how to install and configure this:
+# Refer documentation on how to install and configure this:
 # http://docs.openstack.org/developer/ironic/drivers/vbox.html
-pyremotevbox
+pyremotevbox>=0.5.0

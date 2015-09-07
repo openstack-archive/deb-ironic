@@ -38,30 +38,33 @@ from ironic.common.i18n import _
 
 BASE_VERSION = 1
 
-# NOTE(deva): v1.0 is reserved to indicate Juno's API, but is not presently
-#             supported by the API service. All changes between Juno and the
-#             point where we added microversioning are considered backwards-
-#             compatible, but are not specifically discoverable at this time.
+# Here goes a short log of changes in every version.
+# Refer to doc/source/webapi/v1.rst for a detailed explanation of what
+# each version contains, and don't forget to update it when introducing
+# a new version.
 #
-#             The v1.1 version indicates this "initial" version as being
-#             different from Juno (v1.0), and includes the following changes:
-#
-# 827db7fe: Add Node.maintenance_reason
-# 68eed82b: Add API endpoint to set/unset the node maintenance mode
-# bc973889: Add sync and async support for passthru methods
-# e03f443b: Vendor endpoints to support different HTTP methods
-# e69e5309: Make vendor methods discoverable via the Ironic API
-# edf532db: Add logic to store the config drive passed by Nova
-
-# v1.1: API at the point in time when microversioning support was added
-MIN_VER_STR = '1.1'
-
+# v1.0: corresponds to Juno API, not supported since Kilo
+# v1.1: API at the point in time when versioning support was added,
+# covers the following commits from Kilo cycle:
+#   827db7fe: Add Node.maintenance_reason
+#   68eed82b: Add API endpoint to set/unset the node maintenance mode
+#   bc973889: Add sync and async support for passthru methods
+#   e03f443b: Vendor endpoints to support different HTTP methods
+#   e69e5309: Make vendor methods discoverable via the Ironic API
+#   edf532db: Add logic to store the config drive passed by Nova
 # v1.2: Renamed NOSTATE ("None") to AVAILABLE ("available")
 # v1.3: Add node.driver_internal_info
 # v1.4: Add MANAGEABLE state
 # v1.5: Add logical node names
 # v1.6: Add INSPECT* states
-MAX_VER_STR = '1.6'
+# v1.7: Add node.clean_step
+# v1.8: Add ability to return a subset of resource fields
+# v1.9: Add ability to filter nodes by provision state
+# v1.10: Logical node names support RFC 3986 unreserved characters
+# v1.11: Nodes appear in ENROLL state by default
+
+MIN_VER_STR = '1.1'
+MAX_VER_STR = '1.11'
 
 
 MIN_VER = base.Version({base.Version.string: MIN_VER_STR},
@@ -122,9 +125,9 @@ class V1(base.APIBase):
         v1.chassis = [link.Link.make_link('self', pecan.request.host_url,
                                           'chassis', ''),
                       link.Link.make_link('bookmark',
-                                           pecan.request.host_url,
-                                           'chassis', '',
-                                           bookmark=True)
+                                          pecan.request.host_url,
+                                          'chassis', '',
+                                          bookmark=True)
                       ]
         v1.nodes = [link.Link.make_link('self', pecan.request.host_url,
                                         'nodes', ''),
@@ -173,15 +176,17 @@ class Controller(rest.RestController):
             raise exc.HTTPNotAcceptable(_(
                 "Mutually exclusive versions requested. Version %(ver)s "
                 "requested but not supported by this service. The supported "
-                "version range is: [%(min)s, %(max)s].") % {'ver': version,
-                'min': MIN_VER_STR, 'max': MAX_VER_STR}, headers=headers)
+                "version range is: [%(min)s, %(max)s].") %
+                {'ver': version, 'min': MIN_VER_STR, 'max': MAX_VER_STR},
+                headers=headers)
         # ensure the minor version is within the supported range
         if version < MIN_VER or version > MAX_VER:
             raise exc.HTTPNotAcceptable(_(
                 "Version %(ver)s was requested but the minor version is not "
                 "supported by this service. The supported version range is: "
-                "[%(min)s, %(max)s].") % {'ver': version, 'min': MIN_VER_STR,
-                                          'max': MAX_VER_STR}, headers=headers)
+                "[%(min)s, %(max)s].") %
+                {'ver': version, 'min': MIN_VER_STR, 'max': MAX_VER_STR},
+                headers=headers)
 
     @pecan.expose()
     def _route(self, args):

@@ -93,9 +93,9 @@ def get_test_seamicro_info():
 
 def get_test_ilo_info():
     return {
-            "ilo_address": "1.2.3.4",
-            "ilo_username": "admin",
-            "ilo_password": "fake",
+        "ilo_address": "1.2.3.4",
+        "ilo_username": "admin",
+        "ilo_password": "fake",
     }
 
 
@@ -126,6 +126,15 @@ def get_test_amt_info():
         "amt_protocol": "http",
         "amt_username": "admin",
         "amt_password": "fake",
+    }
+
+
+def get_test_msftocs_info():
+    return {
+        "msftocs_base_url": "http://fakehost:8000",
+        "msftocs_username": "admin",
+        "msftocs_password": "fake",
+        "msftocs_blade_id": 1,
     }
 
 
@@ -213,6 +222,8 @@ def get_test_node(**kw):
         'created_at': kw.get('created_at'),
         'inspection_finished_at': kw.get('inspection_finished_at'),
         'inspection_started_at': kw.get('inspection_started_at'),
+        'raid_config': kw.get('raid_config'),
+        'target_raid_config': kw.get('target_raid_config'),
     }
 
 
@@ -297,4 +308,13 @@ def get_test_conductor(**kw):
         'drivers': kw.get('drivers', ['fake-driver', 'null-driver']),
         'created_at': kw.get('created_at', timeutils.utcnow()),
         'updated_at': kw.get('updated_at', timeutils.utcnow()),
+    }
+
+
+def get_test_ucs_info():
+    return {
+        "ucs_username": "admin",
+        "ucs_password": "password",
+        "ucs_service_profile": "org-root/ls-devstack",
+        "ucs_address": "ucs-b",
     }

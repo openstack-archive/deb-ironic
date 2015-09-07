@@ -20,7 +20,9 @@
 import time
 
 from oslo_config import cfg
+from oslo_log import log
 from oslo_utils import excutils
+import retrying
 
 from ironic.common import boot_devices
 from ironic.common import exception
@@ -37,13 +39,21 @@ from ironic.drivers import base
 from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils
 from ironic import objects
-from ironic.openstack.common import log
 
 agent_opts = [
     cfg.IntOpt('heartbeat_timeout',
                default=300,
-               help='Maximum interval (in seconds) for agent heartbeats.'),
-    ]
+               help=_('Maximum interval (in seconds) for agent heartbeats.')),
+    cfg.IntOpt('post_deploy_get_power_state_retries',
+               default=6,
+               help=_('Number of times to retry getting power state to check '
+                      'if bare metal node has been powered off after a soft '
+                      'power off.')),
+    cfg.IntOpt('post_deploy_get_power_state_retry_interval',
+               default=5,
+               help=_('Amount of time (in seconds) to wait between polling '
+                      'power state after trigger soft poweroff.')),
+]
 
 CONF = cfg.CONF
 CONF.register_opts(agent_opts, group='agent')
@@ -75,6 +85,13 @@ class BaseAgentVendor(base.VendorInterface):
 
         :param task: a TaskManager instance
 
+        """
+        pass
+
+    def deploy_has_started(self, task):
+        """Check if the deployment has started already.
+
+        :returns: True if the deploy has started, False otherwise.
         """
         pass
 
@@ -126,9 +143,11 @@ class BaseAgentVendor(base.VendorInterface):
         if version not in self.supported_payload_versions:
             raise exception.InvalidParameterValue(_('Unknown lookup '
                                                     'payload version: %s')
-                                                    % version)
+                                                  % version)
 
     def _notify_conductor_resume_clean(self, task):
+        LOG.debug('Sending RPC to conductor to resume cleaning for node %s',
+                  task.node.uuid)
         uuid = task.node.uuid
         rpc = rpcapi.ConductorAPI()
         topic = rpc.get_topic_for(task.node)
@@ -166,6 +185,9 @@ class BaseAgentVendor(base.VendorInterface):
             return manager.cleaning_error_handler(task, msg)
         elif command.get('command_status') == 'CLEAN_VERSION_MISMATCH':
             # Restart cleaning, agent must have rebooted to new version
+            LOG.info(_LI('Node %s detected a clean version mismatch, '
+                         'resetting clean steps and rebooting the node.'),
+                     task.node.uuid)
             try:
                 manager.set_node_cleaning_steps(task)
             except exception.NodeCleaningFailure:
@@ -179,6 +201,8 @@ class BaseAgentVendor(base.VendorInterface):
             self._notify_conductor_resume_clean(task)
 
         elif command.get('command_status') == 'SUCCEEDED':
+            LOG.info(_LI('Agent on node %s returned cleaning command success, '
+                         'moving to next clean step'), task.node.uuid)
             self._notify_conductor_resume_clean(task)
         else:
             msg = (_('Agent returned unknown status for clean step %(step)s '
@@ -228,20 +252,33 @@ class BaseAgentVendor(base.VendorInterface):
                 LOG.debug('Heartbeat from node %(node)s in maintenance mode; '
                           'not taking any action.', {'node': node.uuid})
                 return
-            elif node.provision_state == states.DEPLOYWAIT:
+            elif (node.provision_state == states.DEPLOYWAIT and
+                  not self.deploy_has_started(task)):
                 msg = _('Node failed to get image for deploy.')
                 self.continue_deploy(task, **kwargs)
-            elif (node.provision_state == states.DEPLOYING and
+            elif (node.provision_state == states.DEPLOYWAIT and
                   self.deploy_is_done(task)):
                 msg = _('Node failed to move to active state.')
                 self.reboot_to_instance(task, **kwargs)
-            elif (node.provision_state == states.CLEANING and
-                  not node.clean_step):
+            elif (node.provision_state == states.DEPLOYWAIT and
+                  self.deploy_has_started(task)):
+                node.touch_provisioning()
+            # TODO(lucasagomes): CLEANING here for backwards compat
+            # with previous code, otherwise nodes in CLEANING when this
+            # is deployed would fail. Should be removed once the Mitaka
+            # release starts.
+            elif (node.provision_state in (states.CLEANWAIT, states.CLEANING)
+                  and not node.clean_step):
                 # Agent booted from prepare_cleaning
+                LOG.debug('Node %s just booted to start cleaning.', node.uuid)
                 manager.set_node_cleaning_steps(task)
                 self._notify_conductor_resume_clean(task)
-            elif (node.provision_state == states.CLEANING and
-                  node.clean_step):
+            # TODO(lucasagomes): CLEANING here for backwards compat
+            # with previous code, otherwise nodes in CLEANING when this
+            # is deployed would fail. Should be removed once the Mitaka
+            # release starts.
+            elif (node.provision_state in (states.CLEANWAIT, states.CLEANING)
+                  and node.clean_step):
                 self.continue_cleaning(task, **kwargs)
 
         except Exception as e:
@@ -274,15 +311,20 @@ class BaseAgentVendor(base.VendorInterface):
                      {
                          "name": "eth0",
                          "mac_address": "00:11:22:33:44:55",
-                         "switch_port_descr": "port24"
+                         "switch_port_descr": "port24",
                          "switch_chassis_descr": "tor1"
                      }, ...
                  ], ...
-             }
+             },
+             "node_uuid": "ab229209-0139-4588-bbe5-64ccec81dd6e"
          }
 
         The interfaces list should include a list of the non-IPMI MAC addresses
         in the form aa:bb:cc:dd:ee:ff.
+
+        node_uuid argument is optional. If it's provided (e.g. as a result of
+        inspection run before lookup), this method will just return a node and
+        options.
 
         This method will also return the timeout for heartbeats. The driver
         will expect the agent to heartbeat before that timeout, or it will be
@@ -292,17 +334,23 @@ class BaseAgentVendor(base.VendorInterface):
         :raises: NotFound if no matching node is found.
         :raises: InvalidParameterValue with unknown payload version
         """
-        inventory = kwargs.get('inventory')
-        interfaces = self._get_interfaces(inventory)
-        mac_addresses = self._get_mac_addresses(interfaces)
+        LOG.debug('Agent lookup using data %s', kwargs)
+        uuid = kwargs.get('node_uuid')
+        if uuid:
+            node = objects.Node.get_by_uuid(context, uuid)
+        else:
+            inventory = kwargs.get('inventory')
+            interfaces = self._get_interfaces(inventory)
+            mac_addresses = self._get_mac_addresses(interfaces)
 
-        node = self._find_node_by_macs(context, mac_addresses)
+            node = self._find_node_by_macs(context, mac_addresses)
 
-        LOG.debug('Initial lookup for node %s succeeded.', node.uuid)
+        LOG.info(_LI('Initial lookup for node %s succeeded, agent is running '
+                     'and waiting for commands'), node.uuid)
 
         return {
             'heartbeat_timeout': CONF.agent.heartbeat_timeout,
-            'node': node
+            'node': node.as_dict()
         }
 
     def _get_completed_cleaning_command(self, task):
@@ -316,16 +364,25 @@ class BaseAgentVendor(base.VendorInterface):
         if last_command['command_name'] != 'execute_clean_step':
             # catches race condition where execute_clean_step is still
             # processing so the command hasn't started yet
+            LOG.debug('Expected agent last command to be "execute_clean_step" '
+                      'for node %(node)s, instead got "%(command)s". Waiting '
+                      'for next heartbeat.',
+                      {'node': task.node.uuid,
+                       'command': last_command['command_name']})
             return
 
         last_result = last_command.get('command_result') or {}
         last_step = last_result.get('clean_step')
         if last_command['command_status'] == 'RUNNING':
+            LOG.debug('Clean step still running for node %(node)s: %(step)s',
+                      {'step': last_step, 'node': task.node.uuid})
             return
         elif (last_command['command_status'] == 'SUCCEEDED' and
               last_step != task.node.clean_step):
             # A previous clean_step was running, the new command has not yet
             # started.
+            LOG.debug('Clean step not yet started for node %(node)s: %(step)s',
+                      {'step': last_step, 'node': task.node.uuid})
             return
         else:
             return last_command
@@ -438,11 +495,37 @@ class BaseAgentVendor(base.VendorInterface):
         :param task: a TaskManager object containing the node
         :raises: InstanceDeployFailure, if node reboot failed.
         """
+        wait = CONF.agent.post_deploy_get_power_state_retry_interval * 1000
+        attempts = CONF.agent.post_deploy_get_power_state_retries + 1
+
+        @retrying.retry(
+            stop_max_attempt_number=attempts,
+            retry_on_result=lambda state: state != states.POWER_OFF,
+            wait_fixed=wait
+        )
+        def _wait_until_powered_off(task):
+            return task.driver.power.get_power_state(task)
+
+        node = task.node
+
         try:
-            manager_utils.node_power_action(task, states.REBOOT)
+            try:
+                self._client.power_off(node)
+                _wait_until_powered_off(task)
+            except Exception as e:
+                LOG.warning(
+                    _LW('Failed to soft power off node %(node_uuid)s '
+                        'in at least %(timeout)d seconds. Error: %(error)s'),
+                    {'node_uuid': node.uuid,
+                     'timeout': (wait * (attempts - 1)) / 1000,
+                     'error': e})
+                manager_utils.node_power_action(task, states.REBOOT)
+            else:
+                manager_utils.node_power_action(task, states.POWER_ON)
         except Exception as e:
-            msg = (_('Error rebooting node %(node)s. Error: %(error)s') %
-                   {'node': task.node.uuid, 'error': e})
+            msg = (_('Error rebooting node %(node)s after deploy. '
+                     'Error: %(error)s') %
+                   {'node': node.uuid, 'error': e})
             self._log_and_raise_deployment_error(task, msg)
 
         task.process_event('done')
@@ -467,8 +550,13 @@ class BaseAgentVendor(base.VendorInterface):
             on encountering error while setting the boot device on the node.
         """
         node = task.node
+        LOG.debug('Configuring local boot for node %s', node.uuid)
         if not node.driver_internal_info.get(
                 'is_whole_disk_image') and root_uuid:
+            LOG.debug('Installing the bootloader for node %(node)s on ',
+                      'partition %(part)s, EFI system partition %(efi)s',
+                      {'node': node.uuid, 'part': root_uuid,
+                       'efi': efi_system_part_uuid})
             result = self._client.install_bootloader(
                 node, root_uuid=root_uuid,
                 efi_system_part_uuid=efi_system_part_uuid)
@@ -476,7 +564,7 @@ class BaseAgentVendor(base.VendorInterface):
                 msg = (_("Failed to install a bootloader when "
                          "deploying node %(node)s. Error: %(error)s") %
                        {'node': node.uuid,
-                            'error': result['command_error']})
+                        'error': result['command_error']})
                 self._log_and_raise_deployment_error(task, msg)
 
         try:
@@ -487,3 +575,6 @@ class BaseAgentVendor(base.VendorInterface):
                    {'boot_dev': boot_devices.DISK, 'node': node.uuid,
                     'error': e})
             self._log_and_raise_deployment_error(task, msg)
+
+        LOG.info(_LI('Local boot successfully configured for node %s'),
+                 node.uuid)

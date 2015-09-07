@@ -2,8 +2,6 @@
 #
 # Copyright © 2012 New Dream Network, LLC (DreamHost)
 #
-# Author: Doug Hellmann <doug.hellmann@dreamhost.com>
-#
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
 # a copy of the License at
@@ -24,7 +22,7 @@ from ironic.api.middleware import auth_token
 def install(app, conf, public_routes):
     """Install ACL check on application.
 
-    :param app: A WSGI applicatin.
+    :param app: A WSGI application.
     :param conf: Settings. Dict'ified and passed to keystonemiddleware
     :param public_routes: The list of the routes which will be allowed to
                           access without authentication.

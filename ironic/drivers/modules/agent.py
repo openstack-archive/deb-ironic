@@ -16,7 +16,9 @@ import os
 import time
 
 from oslo_config import cfg
+from oslo_log import log
 from oslo_utils import excutils
+from oslo_utils import fileutils
 
 from ironic.common import boot_devices
 from ironic.common import dhcp_factory
@@ -24,6 +26,7 @@ from ironic.common import exception
 from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
+from ironic.common.i18n import _LI
 from ironic.common import image_service
 from ironic.common import keystone
 from ironic.common import paths
@@ -37,35 +40,32 @@ from ironic.drivers.modules import agent_base_vendor
 from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
-from ironic.openstack.common import fileutils
-from ironic.openstack.common import log
 
 
 agent_opts = [
     cfg.StrOpt('agent_pxe_append_params',
                default='nofb nomodeset vga=normal',
-               help='Additional append parameters for baremetal PXE boot.'),
+               help=_('Additional append parameters for baremetal PXE boot.')),
     cfg.StrOpt('agent_pxe_config_template',
                default=paths.basedir_def(
                    'drivers/modules/agent_config.template'),
-               help='Template file for PXE configuration.'),
-    cfg.StrOpt('agent_pxe_bootfile_name',
-               default='pxelinux.0',
-               help='Neutron bootfile DHCP parameter.'),
+               help=_('Template file for PXE configuration.')),
     cfg.IntOpt('agent_erase_devices_priority',
-               help='Priority to run in-band erase devices via the Ironic '
-                    'Python Agent ramdisk. If unset, will use the priority '
-                    'set in the ramdisk (defaults to 10 for the '
-                    'GenericHardwareManager). If set to 0, will not run '
-                    'during cleaning.'),
+               help=_('Priority to run in-band erase devices via the Ironic '
+                      'Python Agent ramdisk. If unset, will use the priority '
+                      'set in the ramdisk (defaults to 10 for the '
+                      'GenericHardwareManager). If set to 0, will not run '
+                      'during cleaning.')),
+    cfg.IntOpt('agent_erase_devices_iterations',
+               default=1,
+               help=_('Number of iterations to be run for erasing devices.')),
     cfg.BoolOpt('manage_tftp',
                 default=True,
-                help='Whether Ironic will manage TFTP files for the deploy '
-                     'ramdisks. If set to False, you will need to configure '
-                     'your own TFTP server that allows booting the deploy '
-                     'ramdisks.'
-                ),
-    ]
+                help=_('Whether Ironic will manage TFTP files for the deploy '
+                       'ramdisks. If set to False, you will need to configure '
+                       'your own TFTP server that allows booting the deploy '
+                       'ramdisks.')),
+]
 
 CONF = cfg.CONF
 CONF.import_opt('my_ip', 'ironic.netconf')
@@ -141,16 +141,24 @@ def _get_tftp_image_info(node):
     return pxe_utils.get_deploy_kr_info(node.uuid, node.driver_info)
 
 
+def _driver_uses_pxe(driver):
+    """A quick hack to check if driver uses pxe."""
+    # If driver.deploy says I need deploy_kernel and deploy_ramdisk,
+    # then it's using PXE boot.
+    properties = driver.deploy.get_properties()
+    return (('deploy_kernel' in properties) and
+            ('deploy_ramdisk' in properties))
+
+
 @image_cache.cleanup(priority=25)
 class AgentTFTPImageCache(image_cache.ImageCache):
-    def __init__(self, image_service=None):
+    def __init__(self):
         super(AgentTFTPImageCache, self).__init__(
             CONF.pxe.tftp_master_path,
             # MiB -> B
             CONF.pxe.image_cache_size * 1024 * 1024,
             # min -> sec
-            CONF.pxe.image_cache_ttl * 60,
-            image_service=image_service)
+            CONF.pxe.image_cache_ttl * 60)
 
 
 def _cache_tftp_images(ctx, node, pxe_info):
@@ -345,17 +353,9 @@ class AgentDeploy(base.DeployInterface):
     def take_over(self, task):
         """Take over management of this node from a dead conductor.
 
-        If conductors' hosts maintain a static relationship to nodes, this
-        method should be implemented by the driver to allow conductors to
-        perform the necessary work during the remapping of nodes to conductors
-        when a conductor joins or leaves the cluster.
-
-        For example, the PXE driver has an external dependency:
-            Neutron must forward DHCP BOOT requests to a conductor which has
-            prepared the tftpboot environment for the given node. When a
-            conductor goes offline, another conductor must change this setting
-            in Neutron as part of remapping that node's control to itself.
-            This is performed within the `takeover` method.
+        Since this deploy interface only does local boot, there's no need
+        for this conductor to do anything when it takes over management
+        of this node.
 
         :param task: a TaskManager instance.
         """
@@ -384,7 +384,7 @@ class AgentDeploy(base.DeployInterface):
         :param step: a clean step dictionary to execute
         :raises: NodeCleaningFailure if the agent does not return a command
             status
-        :returns: states.CLEANING to signify the step will be completed async
+        :returns: states.CLEANWAIT to signify the step will be completed async
         """
         return deploy_utils.agent_execute_clean_step(task, step)
 
@@ -394,7 +394,7 @@ class AgentDeploy(base.DeployInterface):
         :param task: a TaskManager object containing the node
         :raises NodeCleaningFailure: if the previous cleaning ports cannot
             be removed or if new cleaning ports cannot be created
-        :returns: states.CLEANING to signify an asynchronous prepare
+        :returns: states.CLEANWAIT to signify an asynchronous prepare
         """
         provider = dhcp_factory.DHCPFactory()
         # If we have left over ports from a previous cleaning, remove them
@@ -408,10 +408,14 @@ class AgentDeploy(base.DeployInterface):
             # Allow to raise if it fails, is caught and handled in conductor
             ports = provider.provider.create_cleaning_ports(task)
 
+        # Append required config parameters to node's driver_internal_info
+        # to pass to IPA.
+        deploy_utils.agent_add_clean_params(task)
+
         _prepare_pxe_boot(task)
         _do_pxe_boot(task, ports)
         # Tell the conductor we are waiting for the agent to boot.
-        return states.CLEANING
+        return states.CLEANWAIT
 
     def tear_down_cleaning(self, task):
         """Clean up the PXE and DHCP files after cleaning.
@@ -431,6 +435,15 @@ class AgentDeploy(base.DeployInterface):
 
 
 class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
+
+    def deploy_has_started(self, task):
+        commands = self._client.get_commands_status(task.node)
+
+        for command in commands:
+            if command['command_name'] == 'prepare_image':
+                # deploy did start at some point
+                return True
+        return False
 
     def deploy_is_done(self, task):
         commands = self._client.get_commands_status(task.node)
@@ -454,7 +467,8 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
         task.process_event('resume')
         node = task.node
         image_source = node.instance_info.get('image_source')
-        LOG.debug('Continuing deploy for %s', node.uuid)
+        LOG.debug('Continuing deploy for node %(node)s with image %(img)s',
+                  {'node': node.uuid, 'img': image_source})
 
         image_info = {
             'id': image_source.split('/')[-1],
@@ -470,9 +484,9 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
         }
 
         # Tell the client to download and write the image with the given args
-        res = self._client.prepare_image(node, image_info)
-        LOG.debug('prepare_image got response %(res)s for node %(node)s',
-                  {'res': res, 'node': node.uuid})
+        self._client.prepare_image(node, image_info)
+
+        task.process_event('wait')
 
     def check_deploy_success(self, node):
         # should only ever be called after we've validated that
@@ -482,20 +496,29 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
             return command['command_error']
 
     def reboot_to_instance(self, task, **kwargs):
+        task.process_event('resume')
         node = task.node
-        LOG.debug('Preparing to reboot to instance for node %s',
-                  node.uuid)
         error = self.check_deploy_success(node)
         if error is not None:
             # TODO(jimrollenhagen) power off if using neutron dhcp to
             #                      align with pxe driver?
-            msg = _('node %(node)s command status errored: %(error)s') % (
+            msg = (_('node %(node)s command status errored: %(error)s') %
                    {'node': node.uuid, 'error': error})
             LOG.error(msg)
             deploy_utils.set_failed_state(task, msg)
             return
 
-        LOG.debug('Rebooting node %s to disk', node.uuid)
+        LOG.info(_LI('Image successfully written to node %s'), node.uuid)
+        LOG.debug('Rebooting node %s to instance', node.uuid)
 
         manager_utils.node_set_boot_device(task, 'disk', persistent=True)
         self.reboot_and_finish_deploy(task)
+        # NOTE(TheJulia): If we we deployed a whole disk image, we
+        # should expect a whole disk image and clean-up the tftp files
+        # on-disk incase the node is disregarding the boot preference.
+        # TODO(rameshg87): This shouldn't get called for virtual media deploy
+        # drivers (iLO and iRMC).  This is just a hack, but it will be taken
+        # care in boot/deploy interface separation.
+        if (_driver_uses_pxe(task.driver) and
+                node.driver_internal_info.get('is_whole_disk_image')):
+            _clean_up_pxe(task)

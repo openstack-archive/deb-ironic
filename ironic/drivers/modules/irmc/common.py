@@ -1,3 +1,4 @@
+# Copyright 2015 FUJITSU LIMITED
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -16,29 +17,30 @@ Common functionalities shared between different iRMC modules.
 """
 
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import importutils
 
 from ironic.common import exception
 from ironic.common.i18n import _
-from ironic.openstack.common import log as logging
 
 scci = importutils.try_import('scciclient.irmc.scci')
 
 opts = [
     cfg.IntOpt('port',
                default=443,
-               help='Port to be used for iRMC operations, either 80 or 443'),
+               help=_('Port to be used for iRMC operations, either 80 or '
+                      '443')),
     cfg.StrOpt('auth_method',
                default='basic',
-               help='Authentication method to be used for iRMC operations, ' +
-               'either "basic" or "digest"'),
+               help=_('Authentication method to be used for iRMC operations, '
+                      'either "basic" or "digest"')),
     cfg.IntOpt('client_timeout',
                default=60,
-               help='Timeout (in seconds) for iRMC operations'),
+               help=_('Timeout (in seconds) for iRMC operations')),
     cfg.StrOpt('sensor_method',
                default='ipmitool',
-               help='Sensor data retrieval method, either ' +
-               '"ipmitool" or "scci"'),
+               help=_('Sensor data retrieval method, either '
+                      '"ipmitool" or "scci"')),
 ]
 
 CONF = cfg.CONF
@@ -90,7 +92,7 @@ def parse_driver_info(node):
             "Missing the following iRMC parameters in node's"
             " driver_info: %s.") % missing_info)
 
-    req = {key: value for key, value in info.iteritems()
+    req = {key: value for key, value in info.items()
            if key in REQUIRED_PROPERTIES}
     # corresponding config names don't have 'irmc_' prefix
     opt = {param: info.get(param, CONF.irmc.get(param[len('irmc_'):]))

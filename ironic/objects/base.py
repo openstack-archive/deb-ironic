@@ -17,23 +17,20 @@
 import collections
 import copy
 
-from oslo import messaging
 from oslo_context import context
+from oslo_log import log as logging
+from oslo_utils import versionutils
+from oslo_versionedobjects import base as object_base
 import six
 
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
+from ironic.objects import fields as object_fields
 from ironic.objects import utils as obj_utils
-from ironic.openstack.common import log as logging
-from ironic.openstack.common import versionutils
 
 
 LOG = logging.getLogger('object')
-
-
-class NotSpecifiedSentinel:
-    pass
 
 
 def get_attrname(name):
@@ -54,7 +51,7 @@ def make_class_properties(cls):
         for name, field in supercls.fields.items():
             if name not in cls.fields:
                 cls.fields[name] = field
-    for name, typefn in cls.fields.iteritems():
+    for name, typefn in cls.fields.items():
 
         def getter(self, name=name):
             attrname = get_attrname(name)
@@ -134,7 +131,7 @@ def remotable(fn):
         if IronicObject.indirection_api:
             updates, result = IronicObject.indirection_api.object_action(
                 ctxt, self, fn.__name__, args, kwargs)
-            for key, value in updates.iteritems():
+            for key, value in updates.items():
                 if key in self.fields:
                     self[key] = self._attr_from_primitive(key, value)
             self._changed_fields = set(updates.get('obj_what_changed', []))
@@ -169,7 +166,7 @@ def check_object_version(server, client):
 
 
 @six.add_metaclass(IronicObjectMetaclass)
-class IronicObject(object):
+class IronicObject(object_base.VersionedObjectDictCompat):
     """Base class and object factory.
 
     This forms the base of all objects that can be remoted or instantiated
@@ -179,6 +176,7 @@ class IronicObject(object):
     as appropriate.
     """
 
+    OBJ_SERIAL_NAMESPACE = 'ironic_object'
     # Version of this object (see rules above check_object_version())
     VERSION = '1.0'
 
@@ -193,9 +191,9 @@ class IronicObject(object):
     # by subclasses, but that is a special case. Objects inheriting from
     # other objects will not receive this merging of fields contents.
     fields = {
-        'created_at': obj_utils.datetime_or_str_or_none,
-        'updated_at': obj_utils.datetime_or_str_or_none,
-        }
+        'created_at': object_fields.DateTimeField(nullable=True),
+        'updated_at': object_fields.DateTimeField(nullable=True),
+    }
     obj_extra_fields = []
 
     _attr_created_at_from_primitive = obj_utils.dt_deserializer
@@ -394,189 +392,37 @@ class IronicObject(object):
 
     @property
     def obj_fields(self):
-        return self.fields.keys() + self.obj_extra_fields
-
-    # dictish syntactic sugar
-    def iteritems(self):
-        """For backwards-compatibility with dict-based objects.
-
-        NOTE(danms): May be removed in the future.
-        """
-        for name in self.fields.keys() + self.obj_extra_fields:
-            if (hasattr(self, get_attrname(name)) or
-                    name in self.obj_extra_fields):
-                yield name, getattr(self, name)
-
-    items = lambda self: list(self.iteritems())
-
-    def __getitem__(self, name):
-        """For backwards-compatibility with dict-based objects.
-
-        NOTE(danms): May be removed in the future.
-        """
-        return getattr(self, name)
-
-    def __setitem__(self, name, value):
-        """For backwards-compatibility with dict-based objects.
-
-        NOTE(danms): May be removed in the future.
-        """
-        setattr(self, name, value)
-
-    def __contains__(self, name):
-        """For backwards-compatibility with dict-based objects.
-
-        NOTE(danms): May be removed in the future.
-        """
-        return hasattr(self, get_attrname(name))
-
-    def get(self, key, value=NotSpecifiedSentinel):
-        """For backwards-compatibility with dict-based objects.
-
-        NOTE(danms): May be removed in the future.
-        """
-        if key not in self.obj_fields:
-            raise AttributeError(
-                _("'%(objclass)s' object has no attribute '%(attrname)s'") %
-                {'objclass': self.__class__, 'attrname': key})
-        if value != NotSpecifiedSentinel and not self.obj_attr_is_set(key):
-            return value
-        else:
-            return self[key]
-
-    def update(self, updates):
-        """For backwards-compatibility with dict-base objects.
-
-        NOTE(danms): May be removed in the future.
-        """
-        for key, value in updates.items():
-            self[key] = value
+        return list(self.fields) + self.obj_extra_fields
 
     def as_dict(self):
         return dict((k, getattr(self, k))
-                for k in self.fields
-                if hasattr(self, k))
+                    for k in self.fields
+                    if hasattr(self, k))
+
+    def obj_refresh(self, loaded_object):
+        """Applies updates for objects that inherit from base.IronicObject.
+
+        Checks for updated attributes in an object. Updates are applied from
+        the loaded object column by column in comparison with the current
+        object.
+        """
+        for field in self.fields:
+            if (hasattr(self, get_attrname(field)) and
+                    self[field] != loaded_object[field]):
+                self[field] = loaded_object[field]
 
 
-class ObjectListBase(object):
-    """Mixin class for lists of objects.
-
-    This mixin class can be added as a base class for an object that
-    is implementing a list of objects. It adds a single field of 'objects',
-    which is the list store, and behaves like a list itself. It supports
-    serialization of the list of objects automatically.
-    """
+class ObjectListBase(object_base.ObjectListBase):
+    # NOTE(lintan): These are for transition to using the oslo base object
+    # and can be removed when we move to it.
     fields = {
         'objects': list,
-        }
-
-    # This is a dictionary of my_version:child_version mappings so that
-    # we can support backleveling our contents based on the version
-    # requested of the list object.
-    child_versions = {}
-
-    def __iter__(self):
-        """List iterator interface."""
-        return iter(self.objects)
-
-    def __len__(self):
-        """List length."""
-        return len(self.objects)
-
-    def __getitem__(self, index):
-        """List index access."""
-        if isinstance(index, slice):
-            new_obj = self.__class__(self._context)
-            new_obj.objects = self.objects[index]
-            # NOTE(danms): We must be mixed in with an IronicObject!
-            new_obj.obj_reset_changes()
-            return new_obj
-        return self.objects[index]
-
-    def __contains__(self, value):
-        """List membership test."""
-        return value in self.objects
-
-    def count(self, value):
-        """List count of value occurrences."""
-        return self.objects.count(value)
-
-    def index(self, value):
-        """List index of value."""
-        return self.objects.index(value)
-
-    def _attr_objects_to_primitive(self):
-        """Serialization of object list."""
-        return [x.obj_to_primitive() for x in self.objects]
-
-    def _attr_objects_from_primitive(self, value):
-        """Deserialization of object list."""
-        objects = []
-        for entity in value:
-            obj = IronicObject.obj_from_primitive(entity,
-                                                  context=self._context)
-            objects.append(obj)
-        return objects
-
-    def obj_make_compatible(self, primitive, target_version):
-        primitives = primitive['objects']
-        child_target_version = self.child_versions.get(target_version, '1.0')
-        for index, item in enumerate(self.objects):
-            self.objects[index].obj_make_compatible(
-                primitives[index]['ironic_object.data'],
-                child_target_version)
-            primitives[index]['ironic_object.version'] = child_target_version
-
-    def obj_what_changed(self):
-        changes = set(self._changed_fields)
-        for child in self.objects:
-            if child.obj_what_changed():
-                changes.add('objects')
-        return changes
+    }
 
 
-class IronicObjectSerializer(messaging.NoOpSerializer):
-    """A IronicObject-aware Serializer.
-
-    This implements the Oslo Serializer interface and provides the
-    ability to serialize and deserialize IronicObject entities. Any service
-    that needs to accept or return IronicObjects as arguments or result values
-    should pass this to its RpcProxy and RpcDispatcher objects.
-    """
-
-    def _process_iterable(self, context, action_fn, values):
-        """Process an iterable, taking an action on each value.
-
-        :param:context: Request context
-        :param:action_fn: Action to take on each item in values
-        :param:values: Iterable container of things to take action on
-        :returns: A new container of the same type (except set) with
-                  items from values having had action applied.
-        """
-        iterable = values.__class__
-        if iterable == set:
-            # NOTE(danms): A set can't have an unhashable value inside, such as
-            # a dict. Convert sets to tuples, which is fine, since we can't
-            # send them over RPC anyway.
-            iterable = tuple
-        return iterable([action_fn(context, value) for value in values])
-
-    def serialize_entity(self, context, entity):
-        if isinstance(entity, (tuple, list, set)):
-            entity = self._process_iterable(context, self.serialize_entity,
-                                            entity)
-        elif (hasattr(entity, 'obj_to_primitive') and
-                callable(entity.obj_to_primitive)):
-            entity = entity.obj_to_primitive()
-        return entity
-
-    def deserialize_entity(self, context, entity):
-        if isinstance(entity, dict) and 'ironic_object.name' in entity:
-            entity = IronicObject.obj_from_primitive(entity, context=context)
-        elif isinstance(entity, (tuple, list, set)):
-            entity = self._process_iterable(context, self.deserialize_entity,
-                                            entity)
-        return entity
+class IronicObjectSerializer(object_base.VersionedObjectSerializer):
+    # Base class to use for object hydration
+    OBJ_BASE_CLASS = IronicObject
 
 
 def obj_to_primitive(obj):
@@ -589,7 +435,7 @@ def obj_to_primitive(obj):
         return [obj_to_primitive(x) for x in obj]
     elif isinstance(obj, IronicObject):
         result = {}
-        for key, value in obj.iteritems():
+        for key, value in obj.items():
             result[key] = obj_to_primitive(value)
         return result
     else:

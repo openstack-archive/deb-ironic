@@ -13,10 +13,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import json
+
 import eventlet
 import mock
 
 from ironic.common import exception
+from ironic.common import raid
 from ironic.drivers import base as driver_base
 from ironic.tests import base
 
@@ -53,22 +56,23 @@ class PassthruDecoratorTestCase(base.TestCase):
     def setUp(self):
         super(PassthruDecoratorTestCase, self).setUp()
         self.fvi = FakeVendorInterface()
-        driver_base.LOG = mock.Mock()
 
     def test_passthru_noexception(self):
         result = self.fvi.noexception()
         self.assertEqual("Fake", result)
 
-    def test_passthru_ironicexception(self):
+    @mock.patch.object(driver_base, 'LOG', autospec=True)
+    def test_passthru_ironicexception(self, mock_log):
         self.assertRaises(exception.IronicException,
-            self.fvi.ironicexception, mock.ANY)
-        driver_base.LOG.exception.assert_called_with(
+                          self.fvi.ironicexception, mock.ANY)
+        mock_log.exception.assert_called_with(
             mock.ANY, 'ironicexception')
 
-    def test_passthru_nonironicexception(self):
+    @mock.patch.object(driver_base, 'LOG', autospec=True)
+    def test_passthru_nonironicexception(self, mock_log):
         self.assertRaises(exception.VendorPassthruException,
-            self.fvi.normalexception, mock.ANY)
-        driver_base.LOG.exception.assert_called_with(
+                          self.fvi.normalexception, mock.ANY)
+        mock_log.exception.assert_called_with(
             mock.ANY, 'normalexception')
 
     def test_passthru_check_func_references(self):
@@ -81,12 +85,12 @@ class PassthruDecoratorTestCase(base.TestCase):
                             inst2.driver_routes['driver_noexception']['func'])
 
 
-@mock.patch.object(eventlet.greenthread, 'spawn_n',
+@mock.patch.object(eventlet.greenthread, 'spawn_n', autospec=True,
                    side_effect=lambda func, *args, **kw: func(*args, **kw))
 class DriverPeriodicTaskTestCase(base.TestCase):
     def test(self, spawn_mock):
-        method_mock = mock.Mock()
-        function_mock = mock.Mock()
+        method_mock = mock.MagicMock(spec_set=[])
+        function_mock = mock.MagicMock(spec_set=[])
 
         class TestClass(object):
             @driver_base.driver_periodic_task(spacing=42)
@@ -118,8 +122,8 @@ class CleanStepTestCase(base.TestCase):
         # Create a fake Driver class, create some clean steps, make sure
         # they are listed correctly, and attempt to execute one of them
 
-        method_mock = mock.Mock()
-        task_mock = mock.Mock()
+        method_mock = mock.MagicMock(spec_set=[])
+        task_mock = mock.MagicMock(spec_set=[])
 
         class TestClass(driver_base.BaseInterface):
             interface_type = 'test'
@@ -182,3 +186,45 @@ class CleanStepTestCase(base.TestCase):
         # Ensure we can execute the function.
         obj.execute_clean_step(task_mock, obj.get_clean_steps(task_mock)[0])
         method_mock.assert_called_once_with(task_mock)
+
+
+class MyRAIDInterface(driver_base.RAIDInterface):
+
+    def create_configuration(self, task):
+        pass
+
+    def delete_configuration(self, task):
+        pass
+
+
+class RAIDInterfaceTestCase(base.TestCase):
+
+    @mock.patch.object(raid, 'validate_configuration')
+    def test_validate(self, validate_mock):
+        with open(driver_base.RAID_CONFIG_SCHEMA, 'r') as raid_schema_fobj:
+            raid_schema = json.load(raid_schema_fobj)
+        raid_interface = MyRAIDInterface()
+        node_mock = mock.MagicMock(target_raid_config='some_raid_config')
+        task_mock = mock.MagicMock(node=node_mock)
+
+        raid_interface.validate(task_mock)
+
+        validate_mock.assert_called_once_with('some_raid_config', raid_schema)
+
+    @mock.patch.object(raid, 'validate_configuration')
+    def test_validate_no_target_raid_config(self, validate_mock):
+        raid_interface = MyRAIDInterface()
+        node_mock = mock.MagicMock(target_raid_config={})
+        task_mock = mock.MagicMock(node=node_mock)
+
+        raid_interface.validate(task_mock)
+
+        self.assertFalse(validate_mock.called)
+
+    @mock.patch.object(raid, 'get_logical_disk_properties')
+    def test_get_logical_disk_properties(self, get_properties_mock):
+        with open(driver_base.RAID_CONFIG_SCHEMA, 'r') as raid_schema_fobj:
+            raid_schema = json.load(raid_schema_fobj)
+        raid_interface = MyRAIDInterface()
+        raid_interface.get_logical_disk_properties()
+        get_properties_mock.assert_called_once_with(raid_schema)

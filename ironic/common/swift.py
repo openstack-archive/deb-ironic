@@ -15,6 +15,7 @@
 #    under the License.
 
 from oslo_config import cfg
+from oslo_log import log as logging
 from six.moves.urllib import parse
 from swiftclient import client as swift_client
 from swiftclient import exceptions as swift_exceptions
@@ -23,14 +24,13 @@ from swiftclient import utils as swift_utils
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common import keystone
-from ironic.openstack.common import log as logging
 
 swift_opts = [
     cfg.IntOpt('swift_max_retries',
                default=2,
-               help='Maximum number of times to retry a Swift request, '
-                    'before failing.')
-    ]
+               help=_('Maximum number of times to retry a Swift request, '
+                      'before failing.'))
+]
 
 
 CONF = cfg.CONF
@@ -47,6 +47,8 @@ CONF.import_opt('auth_uri', 'keystonemiddleware.auth_token',
 CONF.import_opt('auth_version', 'keystonemiddleware.auth_token',
                 group='keystone_authtoken')
 CONF.import_opt('insecure', 'keystonemiddleware.auth_token',
+                group='keystone_authtoken')
+CONF.import_opt('cafile', 'keystonemiddleware.auth_token',
                 group='keystone_authtoken')
 
 LOG = logging.getLogger(__name__)
@@ -72,6 +74,7 @@ class SwiftAPI(object):
         auth_url = keystone.get_keystone_url(auth_url, auth_version)
         params = {'retries': CONF.swift.swift_max_retries,
                   'insecure': CONF.keystone_authtoken.insecure,
+                  'cacert': CONF.keystone_authtoken.cafile,
                   'user': user,
                   'tenant_name': tenant_name,
                   'key': key,

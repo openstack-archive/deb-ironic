@@ -30,13 +30,14 @@ from sqlalchemy import schema, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import TypeDecorator, TEXT
 
+from ironic.common.i18n import _
 from ironic.common import paths
 
 
 sql_opts = [
     cfg.StrOpt('mysql_engine',
                default='InnoDB',
-               help='MySQL engine to use.')
+               help=_('MySQL engine to use.'))
 ]
 
 _DEFAULT_SQL_CONNECTION = 'sqlite:///' + paths.state_path_def('ironic.sqlite')
@@ -99,13 +100,6 @@ class IronicBase(models.TimestampMixin,
             d[c.name] = self[c.name]
         return d
 
-    def save(self, session=None):
-        import ironic.db.sqlalchemy.api as db_api
-
-        if session is None:
-            session = db_api.get_session()
-
-        super(IronicBase, self).save(session)
 
 Base = declarative_base(cls=IronicBase)
 
@@ -117,7 +111,7 @@ class Chassis(Base):
     __table_args__ = (
         schema.UniqueConstraint('uuid', name='uniq_chassis0uuid'),
         table_args()
-        )
+    )
     id = Column(Integer, primary_key=True)
     uuid = Column(String(36))
     extra = Column(JSONEncodedDict)
@@ -131,7 +125,7 @@ class Conductor(Base):
     __table_args__ = (
         schema.UniqueConstraint('hostname', name='uniq_conductors0hostname'),
         table_args()
-        )
+    )
     id = Column(Integer, primary_key=True)
     hostname = Column(String(255), nullable=False)
     drivers = Column(JSONEncodedList)
@@ -164,10 +158,13 @@ class Node(Base):
     last_error = Column(Text, nullable=True)
     instance_info = Column(JSONEncodedDict)
     properties = Column(JSONEncodedDict)
-    driver = Column(String(15))
+    driver = Column(String(255))
     driver_info = Column(JSONEncodedDict)
     driver_internal_info = Column(JSONEncodedDict)
     clean_step = Column(JSONEncodedDict)
+
+    raid_config = Column(JSONEncodedDict)
+    target_raid_config = Column(JSONEncodedDict)
 
     # NOTE(deva): this is the host name of the conductor which has
     #             acquired a TaskManager lock on the node.
@@ -179,9 +176,9 @@ class Node(Base):
     #             When affinity and the hash ring's mapping do not match,
     #             this indicates that a conductor should rebuild local state.
     conductor_affinity = Column(Integer,
-                         ForeignKey('conductors.id',
-                             name='nodes_conductor_affinity_fk'),
-                         nullable=True)
+                                ForeignKey('conductors.id',
+                                           name='nodes_conductor_affinity_fk'),
+                                nullable=True)
 
     maintenance = Column(Boolean, default=False)
     maintenance_reason = Column(Text, nullable=True)

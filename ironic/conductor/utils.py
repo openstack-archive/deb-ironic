@@ -12,6 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_log import log
 from oslo_utils import excutils
 
 from ironic.common import exception
@@ -20,7 +21,6 @@ from ironic.common.i18n import _LI
 from ironic.common.i18n import _LW
 from ironic.common import states
 from ironic.conductor import task_manager
-from ironic.openstack.common import log
 
 LOG = log.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def node_power_action(task, new_state):
             node['power_state'] = new_state
             node['target_power_state'] = states.NOSTATE
             node.save()
-            LOG.warn(_LW("Not going to change_node_power_state because "
+            LOG.warn(_LW("Not going to change node power state because "
                          "current state = requested state = '%(state)s'."),
                      {'state': curr_state})
             return
@@ -97,7 +97,7 @@ def node_power_action(task, new_state):
         if curr_state == states.ERROR:
             # be optimistic and continue action
             LOG.warn(_LW("Driver returns ERROR power state for node %s."),
-                          node.uuid)
+                     node.uuid)
 
     # Set the target_power_state and clear any last_error, if we're
     # starting a new operation. This will expose to other processes
@@ -137,7 +137,7 @@ def cleanup_after_timeout(task):
     """
     node = task.node
     msg = (_('Timeout reached while waiting for callback for node %s')
-             % node.uuid)
+           % node.uuid)
     node.last_error = msg
     LOG.error(msg)
     node.save()
@@ -146,15 +146,13 @@ def cleanup_after_timeout(task):
                   ' %(error)s')
     try:
         task.driver.deploy.clean_up(task)
-    except exception.IronicException as e:
-        msg = error_msg % {'node': node.uuid, 'error': e}
-        LOG.error(msg)
-        node.last_error = msg
-        node.save()
     except Exception as e:
         msg = error_msg % {'node': node.uuid, 'error': e}
         LOG.error(msg)
-        node.last_error = _('Deploy timed out, but an unhandled exception was '
-                            'encountered while aborting. More info may be '
-                            'found in the log file.')
+        if isinstance(e, exception.IronicException):
+            node.last_error = msg
+        else:
+            node.last_error = _('Deploy timed out, but an unhandled '
+                                'exception was encountered while aborting. '
+                                'More info may be found in the log file.')
         node.save()

@@ -17,6 +17,8 @@ AMT Power Driver
 import copy
 
 from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_service import loopingcall
 from oslo_utils import excutils
 from oslo_utils import importutils
 
@@ -30,20 +32,18 @@ from ironic.conductor import task_manager
 from ironic.drivers import base
 from ironic.drivers.modules.amt import common as amt_common
 from ironic.drivers.modules.amt import resource_uris
-from ironic.openstack.common import log as logging
-from ironic.openstack.common import loopingcall
 
 pywsman = importutils.try_import('pywsman')
 
 opts = [
     cfg.IntOpt('max_attempts',
                default=3,
-               help='Maximum number of times to attempt an AMT operation, '
-                    'before failing'),
+               help=_('Maximum number of times to attempt an AMT operation, '
+                      'before failing')),
     cfg.IntOpt('action_wait',
                default=10,
-               help='Amount of time (in seconds) to wait, before retrying '
-                    'an AMT operation')
+               help=_('Amount of time (in seconds) to wait, before retrying '
+                      'an AMT operation'))
 ]
 
 CONF = cfg.CONF
@@ -163,7 +163,7 @@ def _set_and_wait(task, target_state):
     driver = task.driver
     if target_state not in (states.POWER_ON, states.POWER_OFF):
         raise exception.InvalidParameterValue(_('Unsupported target_state: %s')
-                                                % target_state)
+                                              % target_state)
     elif target_state == states.POWER_ON:
         boot_device = node.driver_internal_info.get('amt_boot_device')
         if boot_device and boot_device != amt_common.DEFAULT_BOOT_DEVICE:
@@ -244,7 +244,7 @@ class AMTPower(base.PowerInterface):
         Turn the node power on or off.
 
         :param task: a TaskManager instance contains the target node.
-        :param pstate : The desired power state of the node.
+        :param pstate: The desired power state of the node.
         :raises: PowerStateFailure if the power cannot set to pstate.
         :raises: AMTFailure.
         :raises: AMTConnectFailure.

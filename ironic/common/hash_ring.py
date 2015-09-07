@@ -18,6 +18,7 @@ import hashlib
 import threading
 
 from oslo_config import cfg
+import six
 
 from ironic.common import exception
 from ironic.common.i18n import _
@@ -26,26 +27,26 @@ from ironic.db import api as dbapi
 hash_opts = [
     cfg.IntOpt('hash_partition_exponent',
                default=5,
-               help='Exponent to determine number of hash partitions to use '
-                    'when distributing load across conductors. Larger values '
-                    'will result in more even distribution of load and less '
-                    'load when rebalancing the ring, but more memory usage. '
-                    'Number of partitions per conductor is '
-                    '(2^hash_partition_exponent). This determines the '
-                    'granularity of rebalancing: given 10 hosts, and an '
-                    'exponent of the 2, there are 40 partitions in the ring.'
-                    'A few thousand partitions should make rebalancing '
-                    'smooth in most cases. The default is suitable for up to '
-                    'a few hundred conductors. Too many partitions has a CPU '
-                    'impact.'),
+               help=_('Exponent to determine number of hash partitions to use '
+                      'when distributing load across conductors. Larger '
+                      'values will result in more even distribution of load '
+                      'and less load when rebalancing the ring, but more '
+                      'memory usage. Number of partitions per conductor is '
+                      '(2^hash_partition_exponent). This determines the '
+                      'granularity of rebalancing: given 10 hosts, and an '
+                      'exponent of the 2, there are 40 partitions in the ring.'
+                      'A few thousand partitions should make rebalancing '
+                      'smooth in most cases. The default is suitable for up '
+                      'to a few hundred conductors. Too many partitions has a '
+                      'CPU impact.')),
     cfg.IntOpt('hash_distribution_replicas',
                default=1,
-               help='[Experimental Feature] '
-                    'Number of hosts to map onto each hash partition. '
-                    'Setting this to more than one will cause additional '
-                    'conductor services to prepare deployment environments '
-                    'and potentially allow the Ironic cluster to recover '
-                    'more quickly if a conductor instance is terminated.'),
+               help=_('[Experimental Feature] '
+                      'Number of hosts to map onto each hash partition. '
+                      'Setting this to more than one will cause additional '
+                      'conductor services to prepare deployment environments '
+                      'and potentially allow the Ironic cluster to recover '
+                      'more quickly if a conductor instance is terminated.')),
 ]
 
 CONF = cfg.CONF
@@ -82,7 +83,7 @@ class HashRing(object):
             self.replicas = replicas if replicas <= len(hosts) else len(hosts)
         except TypeError:
             raise exception.Invalid(
-                    _("Invalid hosts supplied when building HashRing."))
+                _("Invalid hosts supplied when building HashRing."))
 
         self._host_hashes = {}
         for host in hosts:
@@ -105,13 +106,15 @@ class HashRing(object):
 
     def _get_partition(self, data):
         try:
+            if six.PY3 and data is not None:
+                data = data.encode('utf-8')
             key_hash = hashlib.md5(data)
             hashed_key = self._hash2int(key_hash)
             position = bisect.bisect(self._partitions, hashed_key)
             return position if position < len(self._partitions) else 0
         except TypeError:
             raise exception.Invalid(
-                    _("Invalid data supplied to HashRing.get_hosts."))
+                _("Invalid data supplied to HashRing.get_hosts."))
 
     def get_hosts(self, data, ignore_hosts=None):
         """Get the list of hosts which the supplied data maps onto.
@@ -180,7 +183,7 @@ class HashRingManager(object):
         rings = {}
         d2c = self.dbapi.get_active_driver_dict()
 
-        for driver_name, hosts in d2c.iteritems():
+        for driver_name, hosts in d2c.items():
             rings[driver_name] = HashRing(hosts)
         return rings
 
@@ -194,4 +197,4 @@ class HashRingManager(object):
             return self.ring[driver_name]
         except KeyError:
             raise exception.DriverNotFound(
-                    _("The driver '%s' is unknown.") % driver_name)
+                _("The driver '%s' is unknown.") % driver_name)

@@ -19,7 +19,7 @@ from ironic.common import boot_devices
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.drivers.modules.amt import management as amt_mgmt
-from ironic.drivers.modules import pxe
+from ironic.drivers.modules import iscsi_deploy
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as db_base
 from ironic.tests.db import utils as db_utils
@@ -33,8 +33,8 @@ class AMTPXEVendorPassthruTestCase(db_base.DbTestCase):
     def setUp(self):
         super(AMTPXEVendorPassthruTestCase, self).setUp()
         mgr_utils.mock_the_extension_manager(driver="pxe_amt")
-        self.node = obj_utils.create_test_node(self.context,
-            driver='pxe_amt', driver_info=INFO_DICT)
+        self.node = obj_utils.create_test_node(
+            self.context, driver='pxe_amt', driver_info=INFO_DICT)
 
     def test_vendor_routes(self):
         expected = ['heartbeat', 'pass_deploy_info',
@@ -53,8 +53,10 @@ class AMTPXEVendorPassthruTestCase(db_base.DbTestCase):
             self.assertIsInstance(driver_routes, dict)
             self.assertEqual(sorted(expected), sorted(list(driver_routes)))
 
-    @mock.patch.object(amt_mgmt.AMTManagement, 'ensure_next_boot_device')
-    @mock.patch.object(pxe.VendorPassthru, 'pass_deploy_info')
+    @mock.patch.object(amt_mgmt.AMTManagement, 'ensure_next_boot_device',
+                       spec_set=True, autospec=True)
+    @mock.patch.object(iscsi_deploy.VendorPassthru, 'pass_deploy_info',
+                       spec_set=True, autospec=True)
     def test_vendorpassthru_pass_deploy_info_netboot(self,
                                                      mock_pxe_vendorpassthru,
                                                      mock_ensure):
@@ -64,14 +66,18 @@ class AMTPXEVendorPassthruTestCase(db_base.DbTestCase):
             task.node.provision_state = states.DEPLOYWAIT
             task.node.target_provision_state = states.ACTIVE
             task.node.instance_info['capabilities'] = {
-                                            "boot_option": "netboot"
-                                            }
+                "boot_option": "netboot"
+            }
             task.driver.vendor.pass_deploy_info(task, **kwargs)
-            mock_ensure.assert_called_with(task.node, boot_devices.PXE)
-            mock_pxe_vendorpassthru.assert_called_once_with(task, **kwargs)
+            mock_ensure.assert_called_with(
+                task.driver.management, task.node, boot_devices.PXE)
+            mock_pxe_vendorpassthru.assert_called_once_with(
+                task.driver.vendor, task, **kwargs)
 
-    @mock.patch.object(amt_mgmt.AMTManagement, 'ensure_next_boot_device')
-    @mock.patch.object(pxe.VendorPassthru, 'pass_deploy_info')
+    @mock.patch.object(amt_mgmt.AMTManagement, 'ensure_next_boot_device',
+                       spec_set=True, autospec=True)
+    @mock.patch.object(iscsi_deploy.VendorPassthru, 'pass_deploy_info',
+                       spec_set=True, autospec=True)
     def test_vendorpassthru_pass_deploy_info_localboot(self,
                                                        mock_pxe_vendorpassthru,
                                                        mock_ensure):
@@ -83,10 +89,13 @@ class AMTPXEVendorPassthruTestCase(db_base.DbTestCase):
             task.node.instance_info['capabilities'] = {"boot_option": "local"}
             task.driver.vendor.pass_deploy_info(task, **kwargs)
             self.assertFalse(mock_ensure.called)
-            mock_pxe_vendorpassthru.assert_called_once_with(task, **kwargs)
+            mock_pxe_vendorpassthru.assert_called_once_with(
+                task.driver.vendor, task, **kwargs)
 
-    @mock.patch.object(amt_mgmt.AMTManagement, 'ensure_next_boot_device')
-    @mock.patch.object(pxe.VendorPassthru, 'continue_deploy')
+    @mock.patch.object(amt_mgmt.AMTManagement, 'ensure_next_boot_device',
+                       spec_set=True, autospec=True)
+    @mock.patch.object(iscsi_deploy.VendorPassthru, 'continue_deploy',
+                       spec_set=True, autospec=True)
     def test_vendorpassthru_continue_deploy_netboot(self,
                                                     mock_pxe_vendorpassthru,
                                                     mock_ensure):
@@ -96,14 +105,18 @@ class AMTPXEVendorPassthruTestCase(db_base.DbTestCase):
             task.node.provision_state = states.DEPLOYWAIT
             task.node.target_provision_state = states.ACTIVE
             task.node.instance_info['capabilities'] = {
-                                            "boot_option": "netboot"
-                                            }
+                "boot_option": "netboot"
+            }
             task.driver.vendor.continue_deploy(task, **kwargs)
-            mock_ensure.assert_called_with(task.node, boot_devices.PXE)
-            mock_pxe_vendorpassthru.assert_called_once_with(task, **kwargs)
+            mock_ensure.assert_called_with(
+                task.driver.management, task.node, boot_devices.PXE)
+            mock_pxe_vendorpassthru.assert_called_once_with(
+                task.driver.vendor, task, **kwargs)
 
-    @mock.patch.object(amt_mgmt.AMTManagement, 'ensure_next_boot_device')
-    @mock.patch.object(pxe.VendorPassthru, 'continue_deploy')
+    @mock.patch.object(amt_mgmt.AMTManagement, 'ensure_next_boot_device',
+                       spec_set=True, autospec=True)
+    @mock.patch.object(iscsi_deploy.VendorPassthru, 'continue_deploy',
+                       spec_set=True, autospec=True)
     def test_vendorpassthru_continue_deploy_localboot(self,
                                                       mock_pxe_vendorpassthru,
                                                       mock_ensure):
@@ -115,4 +128,5 @@ class AMTPXEVendorPassthruTestCase(db_base.DbTestCase):
             task.node.instance_info['capabilities'] = {"boot_option": "local"}
             task.driver.vendor.continue_deploy(task, **kwargs)
             self.assertFalse(mock_ensure.called)
-            mock_pxe_vendorpassthru.assert_called_once_with(task, **kwargs)
+            mock_pxe_vendorpassthru.assert_called_once_with(
+                task.driver.vendor, task, **kwargs)

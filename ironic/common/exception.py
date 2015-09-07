@@ -23,11 +23,12 @@ SHOULD include dedicated exception logging.
 """
 
 from oslo_config import cfg
+from oslo_log import log as logging
 import six
+from six.moves import http_client
 
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
-from ironic.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -35,7 +36,10 @@ LOG = logging.getLogger(__name__)
 exc_log_opts = [
     cfg.BoolOpt('fatal_exception_format_errors',
                 default=False,
-                help='Make exception message format errors fatal.'),
+                help=_('Used if there is a formatting error when generating '
+                       'an exception message (a programming error). If True, '
+                       'raise an exception; if False, use the unformatted '
+                       'message.')),
 ]
 
 CONF = cfg.CONF
@@ -44,7 +48,7 @@ CONF.register_opts(exc_log_opts)
 
 def _cleanse_dict(original):
     """Strip all admin_password, new_pass, rescue_pass keys from a dict."""
-    return dict((k, v) for k, v in original.iteritems() if "_pass" not in k)
+    return dict((k, v) for k, v in original.items() if "_pass" not in k)
 
 
 class IronicException(Exception):
@@ -56,7 +60,7 @@ class IronicException(Exception):
 
     """
     message = _("An unknown exception occurred.")
-    code = 500
+    code = http_client.INTERNAL_SERVER_ERROR
     headers = {}
     safe = False
 
@@ -77,7 +81,7 @@ class IronicException(Exception):
                 # kwargs doesn't match a variable in the message
                 # log the issue and the kwargs
                 LOG.exception(_LE('Exception in string format operation'))
-                for name, value in kwargs.iteritems():
+                for name, value in kwargs.items():
                     LOG.error("%s: %s" % (name, value))
 
                 if CONF.fatal_exception_format_errors:
@@ -104,7 +108,7 @@ class IronicException(Exception):
 
 class NotAuthorized(IronicException):
     message = _("Not authorized.")
-    code = 403
+    code = http_client.FORBIDDEN
 
 
 class OperationNotPermitted(NotAuthorized):
@@ -113,23 +117,23 @@ class OperationNotPermitted(NotAuthorized):
 
 class Invalid(IronicException):
     message = _("Unacceptable parameters.")
-    code = 400
+    code = http_client.BAD_REQUEST
 
 
 class Conflict(IronicException):
     message = _('Conflict.')
-    code = 409
+    code = http_client.CONFLICT
 
 
 class TemporaryFailure(IronicException):
     message = _("Resource temporarily unavailable, please retry.")
-    code = 503
+    code = http_client.SERVICE_UNAVAILABLE
 
 
 class NotAcceptable(IronicException):
     # TODO(deva): We need to set response headers in the API for this exception
     message = _("Request not acceptable.")
-    code = 406
+    code = http_client.NOT_ACCEPTABLE
 
 
 class InvalidState(Conflict):
@@ -218,11 +222,12 @@ class Duplicate(IronicException):
 
 class NotFound(IronicException):
     message = _("Resource could not be found.")
-    code = 404
+    code = http_client.NOT_FOUND
 
 
-class DHCPNotFound(NotFound):
-    message = _("Failed to load DHCP provider %(dhcp_provider_name)s.")
+class DHCPLoadError(IronicException):
+    message = _("Failed to load DHCP provider %(dhcp_provider_name)s, "
+                "reason: %(reason)s")
 
 
 class DriverNotFound(NotFound):
@@ -309,11 +314,6 @@ class NodeInMaintenance(Invalid):
                 "%(node)s because it's in maintenance mode.")
 
 
-class NodeInWrongPowerState(InvalidState):
-    message = _("Can not change instance association while node "
-                "%(node)s is in power state %(pstate)s.")
-
-
 class ChassisNotEmpty(Invalid):
     message = _("Cannot complete the requested action because chassis "
                 "%(chassis)s contains nodes.")
@@ -329,6 +329,10 @@ class AMTConnectFailure(IronicException):
 
 class AMTFailure(IronicException):
     message = _("AMT call failed: %(cmd)s.")
+
+
+class MSFTOCSClientApiException(IronicException):
+    message = _("MSFT OCS call failed.")
 
 
 class SSHConnectFailed(IronicException):
@@ -386,11 +390,6 @@ class KeystoneFailure(IronicException):
     pass
 
 
-# aliases for backward compatibility, should be removed after Kilo cycle
-CatalogUnauthorized = KeystoneUnauthorized
-CatalogFailure = KeystoneFailure
-
-
 class CatalogNotFound(IronicException):
     message = _("Service type %(service_type)s with endpoint type "
                 "%(endpoint_type)s not found in keystone service catalog.")
@@ -444,7 +443,7 @@ class NodeNotLocked(Invalid):
 class NoFreeConductorWorker(TemporaryFailure):
     message = _('Requested action cannot be performed due to lack of free '
                 'conductor workers.')
-    code = 503  # Service Unavailable (temporary).
+    code = http_client.SERVICE_UNAVAILABLE
 
 
 class VendorPassthruException(IronicException):
@@ -555,6 +554,10 @@ class IRMCOperationError(IronicException):
     message = _('iRMC %(operation)s failed. Reason: %(error)s')
 
 
+class IRMCSharedFileSystemNotMounted(IronicException):
+    message = _("iRMC shared file system '%(share)s' is not mounted.")
+
+
 class VirtualBoxOperationFailed(IronicException):
     message = _("VirtualBox operation '%(operation)s' failed. "
                 "Error: %(error)s")
@@ -566,3 +569,25 @@ class HardwareInspectionFailure(IronicException):
 
 class NodeCleaningFailure(IronicException):
     message = _("Failed to clean node %(node)s: %(reason)s")
+
+
+class PathNotFound(IronicException):
+    message = _("Path %(dir)s does not exist.")
+
+
+class DirectoryNotWritable(IronicException):
+    message = _("Directory %(dir)s is not writable.")
+
+
+class UcsOperationError(IronicException):
+    message = _("Cisco UCS client: operation %(operation)s failed for node"
+                " %(node)s. Reason: %(error)s")
+
+
+class UcsConnectionError(IronicException):
+    message = _("Cisco UCS client: connection failed for node "
+                "%(node)s. Reason: %(error)s")
+
+
+class WolOperationError(IronicException):
+    pass

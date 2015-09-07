@@ -12,11 +12,12 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from oslo_log import log as logging
+
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LW
 from ironic.drivers import base
-from ironic.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ class MixinVendorInterface(base.VendorInterface):
         :raises: UnsupportedDriverExtension if 'method' can not be mapped to
                  the supported interfaces.
         :raises: InvalidParameterValue if 'method' is invalid.
-        :raisee: MissingParameterValue if missing 'method' or parameters
+        :raises: MissingParameterValue if missing 'method' or parameters
                  in kwargs.
 
         """
@@ -141,7 +142,7 @@ def get_node_capability(node, capability):
                 return parts[1]
         else:
             LOG.warn(_LW("Ignoring malformed capability '%s'. "
-                "Format should be 'key:val'."), node_capability)
+                         "Format should be 'key:val'."), node_capability)
 
 
 def add_node_capability(task, capability, value):
@@ -169,57 +170,3 @@ def add_node_capability(task, capability, value):
     properties['capabilities'] = capabilities
     node.properties = properties
     node.save()
-
-
-def validate_capability(node, capability_name, valid_values):
-    """Validate a capabability set in node property
-
-    :param node: an ironic node object.
-    :param capability_name: the name of the capability.
-    :parameter valid_values: an iterable with valid values expected for
-        that capability.
-    :raises: InvalidParameterValue, if the capability is not set to the
-        expected values.
-    """
-    value = get_node_capability(node, capability_name)
-
-    if value and value not in valid_values:
-        valid_value_str = ', '.join(valid_values)
-        raise exception.InvalidParameterValue(
-            _("Invalid %(capability)s parameter '%(value)s'. "
-              "Acceptable values are: %(valid_values)s.") %
-            {'capability': capability_name, 'value': value,
-             'valid_values': valid_value_str})
-
-
-def validate_boot_mode_capability(node):
-    """Validate the boot_mode capability set in node properties.
-
-    :param node: an ironic node object.
-    :raises: InvalidParameterValue, if 'boot_mode' capability is set
-             other than 'bios' or 'uefi' or None.
-
-    """
-    validate_capability(node, 'boot_mode', ('bios', 'uefi'))
-
-
-def validate_boot_option_capability(node):
-    """Validate the boot_option capability set in node properties.
-
-    :param node: an ironic node object.
-    :raises: InvalidParameterValue, if 'boot_option' capability is set
-             other than 'local' or 'netboot' or None.
-
-    """
-    validate_capability(node, 'boot_option', ('local', 'netboot'))
-
-
-def validate_secure_boot_capability(node):
-    """Validate the secure_boot capability set in node property.
-
-    :param node: an ironic node object.
-    :raises: InvalidParameterValue, if 'secure_boot' capability is set
-             other than 'true' or 'false' or None.
-
-    """
-    validate_capability(node, 'secure_boot', ('true', 'false'))

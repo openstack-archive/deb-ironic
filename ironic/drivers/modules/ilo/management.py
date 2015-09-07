@@ -16,6 +16,7 @@ iLO Management Interface
 """
 
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import importutils
 
 from ironic.common import boot_devices
@@ -27,18 +28,18 @@ from ironic.conductor import task_manager
 from ironic.drivers import base
 from ironic.drivers.modules.ilo import common as ilo_common
 from ironic.drivers.modules import ipmitool
-from ironic.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
 ilo_error = importutils.try_import('proliantutils.exception')
 
-BOOT_DEVICE_MAPPING_TO_ILO = {boot_devices.PXE: 'NETWORK',
-                               boot_devices.DISK: 'HDD',
-                               boot_devices.CDROM: 'CDROM'
-                              }
-BOOT_DEVICE_ILO_TO_GENERIC = {v: k
-                              for k, v in BOOT_DEVICE_MAPPING_TO_ILO.items()}
+BOOT_DEVICE_MAPPING_TO_ILO = {
+    boot_devices.PXE: 'NETWORK',
+    boot_devices.DISK: 'HDD',
+    boot_devices.CDROM: 'CDROM'
+}
+BOOT_DEVICE_ILO_TO_GENERIC = {
+    v: k for k, v in BOOT_DEVICE_MAPPING_TO_ILO.items()}
 
 MANAGEMENT_PROPERTIES = ilo_common.REQUIRED_PROPERTIES.copy()
 MANAGEMENT_PROPERTIES.update(ilo_common.CLEAN_PROPERTIES)
@@ -46,25 +47,26 @@ MANAGEMENT_PROPERTIES.update(ilo_common.CLEAN_PROPERTIES)
 clean_step_opts = [
     cfg.IntOpt('clean_priority_reset_ilo',
                default=1,
-               help='Priority for reset_ilo clean step.'),
+               help=_('Priority for reset_ilo clean step.')),
     cfg.IntOpt('clean_priority_reset_bios_to_default',
                default=10,
-               help='Priority for reset_bios_to_default clean step.'),
+               help=_('Priority for reset_bios_to_default clean step.')),
     cfg.IntOpt('clean_priority_reset_secure_boot_keys_to_default',
                default=20,
-               help='Priority for reset_secure_boot_keys clean step. This '
-                    'step will reset the secure boot keys to manufacturing '
-                    ' defaults.'),
+               help=_('Priority for reset_secure_boot_keys clean step. This '
+                      'step will reset the secure boot keys to manufacturing '
+                      'defaults.')),
     cfg.IntOpt('clean_priority_clear_secure_boot_keys',
                default=0,
-               help='Priority for clear_secure_boot_keys clean step. This '
-                    'step is not enabled by default. It can be enabled to '
-                    'to clear all secure boot keys enrolled with iLO.'),
+               help=_('Priority for clear_secure_boot_keys clean step. This '
+                      'step is not enabled by default. It can be enabled to '
+                      'to clear all secure boot keys enrolled with iLO.')),
     cfg.IntOpt('clean_priority_reset_ilo_credential',
                default=30,
-               help='Priority for reset_ilo_credential clean step. This step '
-                    'requires "ilo_change_password" parameter to be updated '
-                    'in nodes\'s driver_info with the new password.'),
+               help=_('Priority for reset_ilo_credential clean step. This '
+                      'step requires "ilo_change_password" parameter to be '
+                      'updated in nodes\'s driver_info with the new '
+                      'password.')),
 ]
 
 CONF = cfg.CONF
@@ -88,8 +90,9 @@ def _execute_ilo_clean_step(node, step, *args, **kwargs):
         # The specified clean step is not present in the proliantutils
         # package. Raise exception to update the proliantutils package
         # to newer version.
-        raise exception.NodeCleaningFailure(_("Clean step '%s' not "
-                "found. 'proliantutils' package needs to be updated.") % step)
+        raise exception.NodeCleaningFailure(
+            _("Clean step '%s' not found. 'proliantutils' package needs to be "
+              "updated.") % step)
     try:
         clean_step(*args, **kwargs)
     except ilo_error.IloCommandNotSupportedError:
@@ -97,11 +100,12 @@ def _execute_ilo_clean_step(node, step, *args, **kwargs):
         # Log the failure and continue with cleaning.
         LOG.warn(_LW("'%(step)s' clean step is not supported on node "
                      "%(uuid)s. Skipping the clean step."),
-                     {'step': step, 'uuid': node.uuid})
+                 {'step': step, 'uuid': node.uuid})
     except ilo_error.IloError as ilo_exception:
-        raise exception.NodeCleaningFailure(_("Clean step %(step)s failed "
-                    "on node %(node)s with error: %(err)s") %
-                    {'node': node.uuid, 'step': step, 'err': ilo_exception})
+        raise exception.NodeCleaningFailure(_(
+            "Clean step %(step)s failed "
+            "on node %(node)s with error: %(err)s") %
+            {'node': node.uuid, 'step': step, 'err': ilo_exception})
 
 
 class IloManagement(base.ManagementInterface):
@@ -123,9 +127,10 @@ class IloManagement(base.ManagementInterface):
         """
         ilo_common.parse_driver_info(task.node)
 
-    def get_supported_boot_devices(self):
+    def get_supported_boot_devices(self, task):
         """Get a list of the supported boot devices.
 
+        :param task: a task from TaskManager.
         :returns: A list with the supported boot devices defined
                   in :mod:`ironic.common.boot_devices`.
 
@@ -211,7 +216,7 @@ class IloManagement(base.ManagementInterface):
                                               error=ilo_exception)
 
         LOG.debug("Node %(uuid)s set to boot from %(device)s.",
-                 {'uuid': task.node.uuid, 'device': device})
+                  {'uuid': task.node.uuid, 'device': device})
 
     def get_sensors_data(self, task):
         """Get sensors data.

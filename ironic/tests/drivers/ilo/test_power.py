@@ -37,7 +37,7 @@ INFO_DICT = db_utils.get_test_ilo_info()
 CONF = cfg.CONF
 
 
-@mock.patch.object(ilo_common, 'get_ilo_object')
+@mock.patch.object(ilo_common, 'get_ilo_object', spec_set=True, autospec=True)
 class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
 
     def setUp(self):
@@ -131,29 +131,34 @@ class IloPowerInternalMethodsTestCase(db_base.DbTestCase):
         ilo_mock_object.get_host_power_status.assert_called_with()
         ilo_mock_object.set_host_power.assert_called_once_with('ON')
 
-    @mock.patch.object(manager_utils, 'node_set_boot_device')
-    @mock.patch.object(ilo_common, 'setup_vmedia_for_boot')
-    def test__attach_boot_iso(self, setup_vmedia_mock, set_boot_device_mock,
-                              get_ilo_object_mock):
+    @mock.patch.object(manager_utils, 'node_set_boot_device', spec_set=True,
+                       autospec=True)
+    @mock.patch.object(ilo_common, 'setup_vmedia_for_boot', spec_set=True,
+                       autospec=True)
+    def test__attach_boot_iso_if_needed(
+            self, setup_vmedia_mock, set_boot_device_mock,
+            get_ilo_object_mock):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             task.node.provision_state = states.ACTIVE
             task.node.instance_info['ilo_boot_iso'] = 'boot-iso'
-            ilo_power._attach_boot_iso(task)
+            ilo_power._attach_boot_iso_if_needed(task)
             setup_vmedia_mock.assert_called_once_with(task, 'boot-iso')
             set_boot_device_mock.assert_called_once_with(task,
-                                 boot_devices.CDROM)
+                                                         boot_devices.CDROM)
 
-    @mock.patch.object(manager_utils, 'node_set_boot_device')
-    @mock.patch.object(ilo_common, 'setup_vmedia_for_boot')
-    def test__attach_boot_iso_on_rebuild(self, setup_vmedia_mock,
-                                         set_boot_device_mock,
-                                         get_ilo_object_mock):
+    @mock.patch.object(manager_utils, 'node_set_boot_device', spec_set=True,
+                       autospec=True)
+    @mock.patch.object(ilo_common, 'setup_vmedia_for_boot', spec_set=True,
+                       autospec=True)
+    def test__attach_boot_iso_if_needed_on_rebuild(
+            self, setup_vmedia_mock, set_boot_device_mock,
+            get_ilo_object_mock):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             task.node.provision_state = states.DEPLOYING
             task.node.instance_info['ilo_boot_iso'] = 'boot-iso'
-            ilo_power._attach_boot_iso(task)
+            ilo_power._attach_boot_iso_if_needed(task)
             self.assertFalse(setup_vmedia_mock.called)
             self.assertFalse(set_boot_device_mock.called)
 
@@ -174,16 +179,18 @@ class IloPowerTestCase(db_base.DbTestCase):
                                   shared=True) as task:
             self.assertEqual(expected, task.driver.power.get_properties())
 
-    @mock.patch.object(ilo_common, 'parse_driver_info')
+    @mock.patch.object(ilo_common, 'parse_driver_info', spec_set=True,
+                       autospec=True)
     def test_validate(self, mock_drvinfo):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             task.driver.power.validate(task)
             mock_drvinfo.assert_called_once_with(task.node)
 
-    @mock.patch.object(ilo_common, 'parse_driver_info')
+    @mock.patch.object(ilo_common, 'parse_driver_info', spec_set=True,
+                       autospec=True)
     def test_validate_fail(self, mock_drvinfo):
-        side_effect = exception.InvalidParameterValue("Invalid Input")
+        side_effect = iter([exception.InvalidParameterValue("Invalid Input")])
         mock_drvinfo.side_effect = side_effect
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
@@ -191,7 +198,8 @@ class IloPowerTestCase(db_base.DbTestCase):
                               task.driver.power.validate,
                               task)
 
-    @mock.patch.object(ilo_power, '_get_power_state')
+    @mock.patch.object(ilo_power, '_get_power_state', spec_set=True,
+                       autospec=True)
     def test_get_power_state(self, mock_get_power):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
@@ -200,7 +208,8 @@ class IloPowerTestCase(db_base.DbTestCase):
                              task.driver.power.get_power_state(task))
             mock_get_power.assert_called_once_with(task.node)
 
-    @mock.patch.object(ilo_power, '_set_power_state')
+    @mock.patch.object(ilo_power, '_set_power_state', spec_set=True,
+                       autospec=True)
     def test_set_power_state(self, mock_set_power):
         mock_set_power.return_value = states.POWER_ON
         with task_manager.acquire(self.context, self.node.uuid,
@@ -208,8 +217,10 @@ class IloPowerTestCase(db_base.DbTestCase):
             task.driver.power.set_power_state(task, states.POWER_ON)
         mock_set_power.assert_called_once_with(task, states.POWER_ON)
 
-    @mock.patch.object(ilo_power, '_set_power_state')
-    @mock.patch.object(ilo_power, '_get_power_state')
+    @mock.patch.object(ilo_power, '_set_power_state', spec_set=True,
+                       autospec=True)
+    @mock.patch.object(ilo_power, '_get_power_state', spec_set=True,
+                       autospec=True)
     def test_reboot(self, mock_get_power, mock_set_power):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:

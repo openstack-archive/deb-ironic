@@ -52,12 +52,8 @@ None.
 
 Configuring and Enabling the driver
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-1. Prepare an ISO deploy ramdisk image from ``diskimage-builder`` [2]_.
 
-   The below command creates files named ``deploy-ramdisk.kernel`` and
-   ``deploy-ramdisk.initramfs`` in the current working directory::
-
-    <path_to_diskimage_builder>/bin/ramdisk-image-create -o deploy-ramdisk ubuntu deploy-ironic
+1. Build or download a deploy image, see :ref:`BuildingDeployRamdisk`
 
 2. Upload these images to Glance::
 
@@ -84,8 +80,8 @@ Nodes configured for SeaMicro driver should have the ``driver`` property set to
 - ``seamicro_server_id``: SeaMicro Server ID. Expected format is <int>/<int>
 - ``seamicro_username``: SeaMicro Username with administrator privileges.
 - ``seamicro_password``: Password for the above SeaMicro user.
-- ``pxe_deploy_kernel``: The Glance UUID of the deployment kernel.
-- ``pxe_deploy_ramdisk``: The Glance UUID of the deployment ramdisk.
+- ``deploy_kernel``: The Glance UUID of the deployment kernel.
+- ``deploy_ramdisk``: The Glance UUID of the deployment ramdisk.
 - ``seamicro_api_version``: (optional) SeaMicro API Version defaults to "2".
 - ``seamicro_terminal_port``: (optional) Node's UDP port for console access.
   Any unused port on the Ironic conductor node may be used.
@@ -99,7 +95,7 @@ boot an instance on it:
 
   Create Node::
 
-    ironic node-create -d pxe_seamicro -i seamicro_api_endpoint=https://<seamicro_ip_address>/ -i seamicro_server_id=<seamicro_server_id> -i seamicro_username=<seamicro_username> -i seamicro_password=<seamicro_password> -i seamicro_api_version=<seamicro_api_version> -i seamicro_terminal_port=<seamicro_terminal_port> -i pxe_deploy_kernel=<glance_uuid_of_pxe_deploy_kernel> -i pxe_deploy_ramdisk=<glance_uuid_of_deploy_ramdisk> -p cpus=<number_of_cpus> -p memory_mb=<memory_size_in_MB> -p local_gb=<local_disk_size_in_GB> -p cpu_arch=<cpu_arch>
+    ironic node-create -d pxe_seamicro -i seamicro_api_endpoint=https://<seamicro_ip_address>/ -i seamicro_server_id=<seamicro_server_id> -i seamicro_username=<seamicro_username> -i seamicro_password=<seamicro_password> -i seamicro_api_version=<seamicro_api_version> -i seamicro_terminal_port=<seamicro_terminal_port> -i deploy_kernel=<glance_uuid_of_deploy_kernel> -i deploy_ramdisk=<glance_uuid_of_deploy_ramdisk> -p cpus=<number_of_cpus> -p memory_mb=<memory_size_in_MB> -p local_gb=<local_disk_size_in_GB> -p cpu_arch=<cpu_arch>
 
   Associate port with the node created::
 

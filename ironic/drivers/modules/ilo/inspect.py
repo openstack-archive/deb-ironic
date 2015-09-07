@@ -12,25 +12,24 @@
 """
 iLO Inspect Interface
 """
+from oslo_log import log as logging
 from oslo_utils import importutils
-import six
 
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LI
 from ironic.common.i18n import _LW
 from ironic.common import states
+from ironic.common import utils
 from ironic.conductor import utils as conductor_utils
 from ironic.db import api as dbapi
 from ironic.drivers import base
 from ironic.drivers.modules.ilo import common as ilo_common
-from ironic.openstack.common import log as logging
 
 ilo_error = importutils.try_import('proliantutils.exception')
 
 LOG = logging.getLogger(__name__)
 
-ESSENTIAL_PROPERTIES_KEYS = {'memory_mb', 'local_gb', 'cpus', 'cpu_arch'}
 CAPABILITIES_KEYS = {'BootMode', 'secure_boot', 'rom_firmware_version',
                      'ilo_firmware_version', 'server_model', 'max_raid_level',
                      'pci_gpu_devices', 'sr_iov_devices', 'nic_capacity'}
@@ -58,8 +57,8 @@ def _create_ports_if_not_exist(node, macs):
                          "%(node)s"), {'address': mac, 'node': node.uuid})
         except exception.MACAlreadyExists:
             LOG.warn(_LW("Port already exists for MAC address %(address)s "
-                         "for node %(node)s"), {'address': mac,
-                         'node': node.uuid})
+                         "for node %(node)s"),
+                     {'address': mac, 'node': node.uuid})
 
 
 def _get_essential_properties(node, ilo_object):
@@ -72,7 +71,7 @@ def _get_essential_properties(node, ilo_object):
     :returns: The dictionary containing properties and MAC data.
               The dictionary possible keys are 'properties' and 'macs'.
               The 'properties' should contain keys as in
-              ESSENTIAL_PROPERTIES_KEYS. The 'macs' is a dictionary
+              IloInspect.ESSENTIAL_PROPERTIES. The 'macs' is a dictionary
               containing key:value pairs of <port_numbers:mac_addresses>
 
     """
@@ -95,7 +94,7 @@ def _validate(node, data):
     """
     if data.get('properties'):
         if isinstance(data['properties'], dict):
-            valid_keys = ESSENTIAL_PROPERTIES_KEYS
+            valid_keys = IloInspect.ESSENTIAL_PROPERTIES
             missing_keys = valid_keys - set(data['properties'])
             if missing_keys:
                 error = (_(
@@ -104,9 +103,9 @@ def _validate(node, data):
                 raise exception.HardwareInspectionFailure(error=error)
         else:
             error = (_("Essential properties are expected to be in dictionary "
-                      "format, received %(properties)s from node "
-                      "%(node)s.") % {"properties": data['properties'],
-                                      'node': node.uuid})
+                       "format, received %(properties)s from node "
+                       "%(node)s.") % {"properties": data['properties'],
+                                       'node': node.uuid})
             raise exception.HardwareInspectionFailure(error=error)
     else:
         error = (_("The node %s didn't return 'properties' as the key with "
@@ -117,7 +116,7 @@ def _validate(node, data):
         if not isinstance(data['macs'], dict):
             error = (_("Node %(node)s didn't return MACs %(macs)s "
                        "in dictionary format.")
-                      % {"macs": data['macs'], 'node': node.uuid})
+                     % {"macs": data['macs'], 'node': node.uuid})
             raise exception.HardwareInspectionFailure(error=error)
     else:
         error = (_("The node %s didn't return 'macs' as the key with "
@@ -140,52 +139,6 @@ def _create_supported_capabilities_dict(capabilities):
     return valid_cap
 
 
-def _update_capabilities(node, new_capabilities):
-    """Add or update a capability to the capabilities string.
-
-    This method adds/updates a given property to the node capabilities
-    string.
-    Currently the capabilities are recorded as a string in
-    properties/capabilities of a Node. It's of the below format:
-    properties/capabilities='boot_mode:bios,boot_option:local'
-
-    :param node: Node object.
-    :param new_capabilities: the dictionary of capabilities returned
-                             by baremetal with inspection.
-    :returns: The capability string after adding/updating the
-              node_capabilities with new_capabilities
-    :raises: InvalidParameterValue, if node_capabilities is malformed.
-    :raises: HardwareInspectionFailure, if inspected capabilities
-             are not in dictionary format.
-
-    """
-    cap_dict = {}
-    node_capabilities = node.properties.get('capabilities')
-    if node_capabilities:
-        try:
-            cap_dict = dict(x.split(':', 1)
-                            for x in node_capabilities.split(','))
-        except ValueError:
-            # Capabilities can be filled by operator.  ValueError can
-            # occur in malformed capabilities like:
-            # properties/capabilities='boot_mode:bios,boot_option'.
-            msg = (_("Node %(node)s has invalid capabilities string "
-                    "%(capabilities)s, unable to modify the node "
-                    "properties['capabilities'] string")
-                    % {'node': node.uuid, 'capabilities': node_capabilities})
-            raise exception.InvalidParameterValue(msg)
-    if isinstance(new_capabilities, dict):
-        cap_dict.update(new_capabilities)
-    else:
-        msg = (_("The expected format of capabilities from inspection "
-                 "is dictionary while node %(node)s returned "
-                 "%(capabilities)s.") % {'node': node.uuid,
-                 'capabilities': new_capabilities})
-        raise exception.HardwareInspectionFailure(error=msg)
-    return ','.join(['%(key)s:%(value)s' % {'key': key, 'value': value}
-                     for key, value in six.iteritems(cap_dict)])
-
-
 def _get_capabilities(node, ilo_object):
     """inspects hardware and gets additional capabilities.
 
@@ -201,7 +154,7 @@ def _get_capabilities(node, ilo_object):
         capabilities = ilo_object.get_server_capabilities()
     except ilo_error.IloError:
         LOG.debug(("Node %s did not return any additional capabilities."),
-                   node.uuid)
+                  node.uuid)
 
     return capabilities
 
@@ -247,7 +200,7 @@ class IloInspect(base.InspectInterface):
             state = task.driver.power.get_power_state(task)
         except exception.IloOperationError as ilo_exception:
             operation = (_("Inspecting hardware (get_power_state) on %s")
-                           % task.node.uuid)
+                         % task.node.uuid)
             raise exception.IloOperationError(operation=operation,
                                               error=ilo_exception)
         if state != states.POWER_ON:
@@ -262,7 +215,7 @@ class IloInspect(base.InspectInterface):
         inspected_properties = {}
         result = _get_essential_properties(task.node, ilo_object)
         properties = result['properties']
-        for known_property in ESSENTIAL_PROPERTIES_KEYS:
+        for known_property in self.ESSENTIAL_PROPERTIES:
             inspected_properties[known_property] = properties[known_property]
         node_properties = task.node.properties
         node_properties.update(inspected_properties)
@@ -275,7 +228,8 @@ class IloInspect(base.InspectInterface):
         capabilities = _get_capabilities(task.node, ilo_object)
         if capabilities:
             valid_cap = _create_supported_capabilities_dict(capabilities)
-            capabilities = _update_capabilities(task.node, valid_cap)
+            capabilities = utils.get_updated_capabilities(
+                task.node.properties.get('capabilities'), valid_cap)
             if capabilities:
                 node_properties['capabilities'] = capabilities
                 task.node.properties = node_properties
@@ -287,13 +241,13 @@ class IloInspect(base.InspectInterface):
 
         LOG.debug(("Node properties for %(node)s are updated as "
                    "%(properties)s"),
-                   {'properties': inspected_properties,
-                    'node': task.node.uuid})
+                  {'properties': inspected_properties,
+                   'node': task.node.uuid})
 
         LOG.info(_LI("Node %s inspected."), task.node.uuid)
         if power_turned_on:
             conductor_utils.node_power_action(task, states.POWER_OFF)
             LOG.info(_LI("The node %s was powered on for inspection. "
                          "Powered off the node as inspection completed."),
-                         task.node.uuid)
+                     task.node.uuid)
         return states.MANAGEABLE

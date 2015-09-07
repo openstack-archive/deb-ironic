@@ -58,7 +58,7 @@ Example usage:
 
 ::
 
-    with task_manager.acquire(context, node_id) as task:
+    with task_manager.acquire(context, node_id, purpose='power on') as task:
         task.driver.power.power_on(task.node)
 
 If you need to execute task-requiring code in a background thread, the
@@ -68,7 +68,7 @@ an exception occurs). Common use of this is within the Manager like so:
 
 ::
 
-    with task_manager.acquire(context, node_id) as task:
+    with task_manager.acquire(context, node_id, purpose='some work') as task:
         <do some work>
         task.spawn_after(self._spawn_worker,
                          utils.node_power_action, task, new_state)
@@ -86,7 +86,7 @@ raised in the background thread.):
         if isinstance(e, Exception):
             ...
 
-    with task_manager.acquire(context, node_id) as task:
+    with task_manager.acquire(context, node_id, purpose='some work') as task:
         <do some work>
         task.set_spawn_error_hook(on_error)
         task.spawn_after(self._spawn_worker,
@@ -97,7 +97,9 @@ raised in the background thread.):
 import functools
 
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import excutils
+from oslo_utils import timeutils
 import retrying
 
 from ironic.common import driver_factory
@@ -105,7 +107,6 @@ from ironic.common import exception
 from ironic.common.i18n import _LW
 from ironic.common import states
 from ironic import objects
-from ironic.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -122,14 +123,21 @@ def require_exclusive_lock(f):
     """
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
-        task = args[0] if isinstance(args[0], TaskManager) else args[1]
+        # NOTE(dtantsur): this code could be written simpler, but then unit
+        # testing decorated functions is pretty hard, as we usually pass a Mock
+        # object instead of TaskManager there.
+        if len(args) > 1:
+            task = args[1] if isinstance(args[1], TaskManager) else args[0]
+        else:
+            task = args[0]
         if task.shared:
             raise exception.ExclusiveLockRequired()
         return f(*args, **kwargs)
     return wrapper
 
 
-def acquire(context, node_id, shared=False, driver_name=None):
+def acquire(context, node_id, shared=False, driver_name=None,
+            purpose='unspecified action'):
     """Shortcut for acquiring a lock on a Node.
 
     :param context: Request context.
@@ -137,11 +145,12 @@ def acquire(context, node_id, shared=False, driver_name=None):
     :param shared: Boolean indicating whether to take a shared or exclusive
                    lock. Default: False.
     :param driver_name: Name of Driver. Default: None.
+    :param purpose: human-readable purpose to put to debug logs.
     :returns: An instance of :class:`TaskManager`.
 
     """
     return TaskManager(context, node_id, shared=shared,
-                       driver_name=driver_name)
+                       driver_name=driver_name, purpose=purpose)
 
 
 class TaskManager(object):
@@ -152,7 +161,8 @@ class TaskManager(object):
 
     """
 
-    def __init__(self, context, node_id, shared=False, driver_name=None):
+    def __init__(self, context, node_id, shared=False, driver_name=None,
+                 purpose='unspecified action'):
         """Create a new TaskManager.
 
         Acquire a lock on a node. The lock can be either shared or
@@ -166,6 +176,7 @@ class TaskManager(object):
                        lock. Default: False.
         :param driver_name: The name of the driver to load, if different
                             from the Node's current driver.
+        :param purpose: human-readable purpose to put to debug logs.
         :raises: DriverNotFound
         :raises: NodeNotFound
         :raises: NodeLocked
@@ -177,26 +188,22 @@ class TaskManager(object):
 
         self.context = context
         self.node = None
+        self.node_id = node_id
         self.shared = shared
 
         self.fsm = states.machine.copy()
-
-        # NodeLocked exceptions can be annoying. Let's try to alleviate
-        # some of that pain by retrying our lock attempts. The retrying
-        # module expects a wait_fixed value in milliseconds.
-        @retrying.retry(
-            retry_on_exception=lambda e: isinstance(e, exception.NodeLocked),
-            stop_max_attempt_number=CONF.conductor.node_locked_retry_attempts,
-            wait_fixed=CONF.conductor.node_locked_retry_interval * 1000)
-        def reserve_node():
-            LOG.debug("Attempting to reserve node %(node)s",
-                      {'node': node_id})
-            self.node = objects.Node.reserve(context, CONF.host, node_id)
+        self._purpose = purpose
+        self._debug_timer = timeutils.StopWatch()
 
         try:
+            LOG.debug("Attempting to get %(type)s lock on node %(node)s (for "
+                      "%(purpose)s)",
+                      {'type': 'shared' if shared else 'exclusive',
+                       'node': node_id, 'purpose': purpose})
             if not self.shared:
-                reserve_node()
+                self._lock()
             else:
+                self._debug_timer.restart()
                 self.node = objects.Node.get(context, node_id)
             self.ports = objects.Port.list_by_node_id(context, self.node.id)
             self.driver = driver_factory.get_driver(driver_name or
@@ -213,6 +220,42 @@ class TaskManager(object):
         except Exception:
             with excutils.save_and_reraise_exception():
                 self.release_resources()
+
+    def _lock(self):
+        self._debug_timer.restart()
+
+        # NodeLocked exceptions can be annoying. Let's try to alleviate
+        # some of that pain by retrying our lock attempts. The retrying
+        # module expects a wait_fixed value in milliseconds.
+        @retrying.retry(
+            retry_on_exception=lambda e: isinstance(e, exception.NodeLocked),
+            stop_max_attempt_number=CONF.conductor.node_locked_retry_attempts,
+            wait_fixed=CONF.conductor.node_locked_retry_interval * 1000)
+        def reserve_node():
+            self.node = objects.Node.reserve(self.context, CONF.host,
+                                             self.node_id)
+            LOG.debug("Node %(node)s successfully reserved for %(purpose)s "
+                      "(took %(time).2f seconds)",
+                      {'node': self.node_id, 'purpose': self._purpose,
+                       'time': self._debug_timer.elapsed()})
+            self._debug_timer.restart()
+
+        reserve_node()
+
+    def upgrade_lock(self):
+        """Upgrade a shared lock to an exclusive lock.
+
+        Also reloads node object from the database.
+        Does nothing if lock is already exclusive.
+        """
+        if self.shared:
+            LOG.debug('Upgrading shared lock on node %(uuid)s for %(purpose)s '
+                      'to an exclusive one (shared lock was held %(time).2f '
+                      'seconds)',
+                      {'uuid': self.node.uuid, 'purpose': self._purpose,
+                       'time': self._debug_timer.elapsed()})
+            self._lock()
+            self.shared = False
 
     def spawn_after(self, _spawn_method, *args, **kwargs):
         """Call this to spawn a thread to complete the task.
@@ -261,6 +304,12 @@ class TaskManager(object):
                 # squelch the exception if the node was deleted
                 # within the task's context.
                 pass
+        if self.node:
+            LOG.debug("Successfully released %(type)s lock for %(purpose)s "
+                      "on node %(node)s (lock was held %(time).2f sec)",
+                      {'type': 'shared' if self.shared else 'exclusive',
+                       'purpose': self._purpose, 'node': self.node.uuid,
+                       'time': self._debug_timer.elapsed()})
         self.node = None
         self.driver = None
         self.ports = None
@@ -276,8 +325,8 @@ class TaskManager(object):
 
         :param event: the name of the event to process
         :param callback: optional callback to invoke upon event transition
-        :param call_args: optional *args to pass to the callback method
-        :param call_kwargs: optional **kwargs to pass to the callback method
+        :param call_args: optional \*args to pass to the callback method
+        :param call_kwargs: optional \**kwargs to pass to the callback method
         :param err_handler: optional error handler to invoke if the
                 callback fails, eg. because there are no workers available
                 (err_handler should accept arguments node, prev_prov_state, and

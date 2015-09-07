@@ -56,6 +56,7 @@ class Connection(object):
 
                         :associated: True | False
                         :reserved: True | False
+                        :reserved_by_any_of: [conductor1, conductor2]
                         :maintenance: True | False
                         :chassis_uuid: uuid of chassis
                         :driver: driver's name
@@ -392,4 +393,22 @@ class Connection(object):
 
                     {driverA: set([host1, host2]),
                      driverB: set([host2, host3])}
+        """
+
+    @abc.abstractmethod
+    def get_offline_conductors(self):
+        """Get a list conductor hostnames that are offline (dead).
+
+        :returns: A list of conductor hostnames.
+        """
+
+    @abc.abstractmethod
+    def touch_node_provisioning(self, node_id):
+        """Mark the node's provisioning as running.
+
+        Mark the node's provisioning as running by updating its
+        'provision_updated_at' property.
+
+        :param node_id: The id of a node.
+        :raises: NodeNotFound
         """

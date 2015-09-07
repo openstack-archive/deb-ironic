@@ -16,19 +16,23 @@
 
 
 import abc
+import datetime
 import os
 import shutil
 
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import importutils
 import requests
 import sendfile
 import six
+from six.moves import http_client
 import six.moves.urllib.parse as urlparse
 
 from ironic.common import exception
 from ironic.common.i18n import _
-from ironic.openstack.common import log as logging
+from ironic.common import keystone
+from ironic.common import utils
 
 LOG = logging.getLogger(__name__)
 
@@ -43,31 +47,31 @@ CONF.import_opt('my_ip', 'ironic.netconf')
 glance_opts = [
     cfg.StrOpt('glance_host',
                default='$my_ip',
-               help='Default glance hostname or IP address.'),
+               help=_('Default glance hostname or IP address.')),
     cfg.IntOpt('glance_port',
                default=9292,
-               help='Default glance port.'),
+               help=_('Default glance port.')),
     cfg.StrOpt('glance_protocol',
                default='http',
-               help='Default protocol to use when connecting to glance. '
-               'Set to https for SSL.'),
+               help=_('Default protocol to use when connecting to glance. '
+                      'Set to https for SSL.')),
     cfg.ListOpt('glance_api_servers',
-                help='A list of the glance api servers available to ironic. '
-                'Prefix with https:// for SSL-based glance API servers. '
-                'Format is [hostname|IP]:port.'),
+                help=_('A list of the glance api servers available to ironic. '
+                       'Prefix with https:// for SSL-based glance API '
+                       'servers. Format is [hostname|IP]:port.')),
     cfg.BoolOpt('glance_api_insecure',
                 default=False,
-                help='Allow to perform insecure SSL (https) requests to '
-                     'glance.'),
+                help=_('Allow to perform insecure SSL (https) requests to '
+                       'glance.')),
     cfg.IntOpt('glance_num_retries',
                default=0,
-               help='Number of retries when downloading an image from '
-                    'glance.'),
+               help=_('Number of retries when downloading an image from '
+                      'glance.')),
     cfg.StrOpt('auth_strategy',
                default='keystone',
-               help='Authentication strategy to use when connecting to '
-                    'glance. Only "keystone" and "noauth" are currently '
-                    'supported by ironic.'),
+               help=_('Authentication strategy to use when connecting to '
+                      'glance. Only "keystone" and "noauth" are currently '
+                      'supported by ironic.')),
 ]
 
 CONF.register_opts(glance_opts, group='glance')
@@ -83,6 +87,9 @@ def import_versioned_module(version, submodule=None):
 def GlanceImageService(client=None, version=1, context=None):
     module = import_versioned_module(version, 'image_service')
     service_class = getattr(module, 'GlanceImageService')
+    if (context is not None and CONF.glance.auth_strategy == 'keystone'
+        and not context.auth_token):
+        context.auth_token = keystone.get_admin_auth_token()
     return service_class(client, version, context)
 
 
@@ -115,7 +122,9 @@ class BaseImageService(object):
 
         :param image_href: Image reference.
         :raises: exception.ImageRefValidationFailed.
-        :returns: dictionary of image properties.
+        :returns: dictionary of image properties. It has three of them: 'size',
+            'updated_at' and 'properties'. 'updated_at' attribute is a naive
+            UTC datetime object.
         """
 
 
@@ -132,8 +141,9 @@ class HttpImageService(BaseImageService):
         """
         try:
             response = requests.head(image_href)
-            if response.status_code != 200:
-                raise exception.ImageRefValidationFailed(image_href=image_href,
+            if response.status_code != http_client.OK:
+                raise exception.ImageRefValidationFailed(
+                    image_href=image_href,
                     reason=_("Got HTTP code %s instead of 200 in response to "
                              "HEAD request.") % response.status_code)
         except requests.RequestException as e:
@@ -154,8 +164,9 @@ class HttpImageService(BaseImageService):
         """
         try:
             response = requests.get(image_href, stream=True)
-            if response.status_code != 200:
-                raise exception.ImageRefValidationFailed(image_href=image_href,
+            if response.status_code != http_client.OK:
+                raise exception.ImageRefValidationFailed(
+                    image_href=image_href,
                     reason=_("Got HTTP code %s instead of 200 in response to "
                              "GET request.") % response.status_code)
             with response.raw as input_img:
@@ -172,17 +183,38 @@ class HttpImageService(BaseImageService):
             * HEAD request failed;
             * HEAD request returned response code not equal to 200;
             * Content-Length header not found in response to HEAD request.
-        :returns: dictionary of image properties.
+        :returns: dictionary of image properties. It has three of them: 'size',
+            'updated_at' and 'properties'. 'updated_at' attribute is a naive
+            UTC datetime object.
         """
         response = self.validate_href(image_href)
         image_size = response.headers.get('Content-Length')
         if image_size is None:
-            raise exception.ImageRefValidationFailed(image_href=image_href,
+            raise exception.ImageRefValidationFailed(
+                image_href=image_href,
                 reason=_("Cannot determine image size as there is no "
                          "Content-Length header specified in response "
                          "to HEAD request."))
+
+        # Parse last-modified header to return naive datetime object
+        str_date = response.headers.get('Last-Modified')
+        date = None
+        if str_date:
+            http_date_format_strings = [
+                '%a, %d %b %Y %H:%M:%S GMT',  # RFC 822
+                '%A, %d-%b-%y %H:%M:%S GMT',  # RFC 850
+                '%a %b %d %H:%M:%S %Y'        # ANSI C
+            ]
+            for fmt in http_date_format_strings:
+                try:
+                    date = datetime.datetime.strptime(str_date, fmt)
+                    break
+                except ValueError:
+                    continue
+
         return {
             'size': int(image_size),
+            'updated_at': date,
             'properties': {}
         }
 
@@ -200,7 +232,8 @@ class FileImageService(BaseImageService):
         """
         image_path = urlparse.urlparse(image_href).path
         if not os.path.isfile(image_path):
-            raise exception.ImageRefValidationFailed(image_href=image_href,
+            raise exception.ImageRefValidationFailed(
+                image_href=image_href,
                 reason=_("Specified image file not found."))
         return image_path
 
@@ -240,11 +273,15 @@ class FileImageService(BaseImageService):
         :param image_href: Image reference.
         :raises: exception.ImageRefValidationFailed if image file specified
             doesn't exist.
-        :returns: dictionary of image properties.
+        :returns: dictionary of image properties. It has three of them: 'size',
+            'updated_at' and 'properties'. 'updated_at' attribute is a naive
+            UTC datetime object.
         """
         source_image_path = self.validate_href(image_href)
         return {
             'size': os.path.getsize(source_image_path),
+            'updated_at': utils.unix_file_modification_datetime(
+                source_image_path),
             'properties': {}
         }
 

@@ -21,40 +21,40 @@ Ironic console utilities.
 
 import os
 import subprocess
-import tempfile
 import time
 
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_service import loopingcall
 from oslo_utils import netutils
 
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LW
 from ironic.common import utils
-from ironic.openstack.common import log as logging
-from ironic.openstack.common import loopingcall
 
 
 opts = [
     cfg.StrOpt('terminal',
                default='shellinaboxd',
-               help='Path to serial console terminal program'),
+               help=_('Path to serial console terminal program')),
     cfg.StrOpt('terminal_cert_dir',
-               help='Directory containing the terminal SSL cert(PEM) for '
-               'serial console access'),
+               help=_('Directory containing the terminal SSL cert(PEM) for '
+                      'serial console access')),
     cfg.StrOpt('terminal_pid_dir',
-               help='Directory for holding terminal pid files. '
-               'If not specified, the temporary directory will be used.'),
+               help=_('Directory for holding terminal pid files. '
+                      'If not specified, the temporary directory '
+                      'will be used.')),
     cfg.IntOpt('subprocess_checking_interval',
                default=1,
-               help='Time interval (in seconds) for checking the status of '
-               'console subprocess.'),
+               help=_('Time interval (in seconds) for checking the status of '
+                      'console subprocess.')),
     cfg.IntOpt('subprocess_timeout',
                default=10,
-               help='Time (in seconds) to wait for the console subprocess '
-               'to start.'),
-    ]
+               help=_('Time (in seconds) to wait for the console subprocess '
+                      'to start.')),
+]
 
 CONF = cfg.CONF
 CONF.register_opts(opts, group='console')
@@ -65,11 +65,7 @@ LOG = logging.getLogger(__name__)
 def _get_console_pid_dir():
     """Return the directory for the pid file."""
 
-    if CONF.console.terminal_pid_dir:
-        pid_dir = CONF.console.terminal_pid_dir
-    else:
-        pid_dir = tempfile.gettempdir()
-    return pid_dir
+    return CONF.console.terminal_pid_dir or CONF.tempdir
 
 
 def _ensure_console_pid_dir_exists():
@@ -139,11 +135,11 @@ def make_persistent_password_file(path, password):
         utils.delete_if_exists(path)
         with open(path, 'wb') as file:
             os.chmod(path, 0o600)
-            file.write(password)
+            file.write(password.encode())
         return path
     except Exception as e:
         utils.delete_if_exists(path)
-        raise exception.PasswordFileFailedToCreate(error=str(e))
+        raise exception.PasswordFileFailedToCreate(error=e)
 
 
 def get_shellinabox_console_url(port):
@@ -155,8 +151,10 @@ def get_shellinabox_console_url(port):
     console_host = CONF.my_ip
     if netutils.is_valid_ipv6(console_host):
         console_host = '[%s]' % console_host
-    console_url = "http://%s:%s" % (console_host, port)
-    return console_url
+    scheme = 'https' if CONF.console.terminal_cert_dir else 'http'
+    return '%(scheme)s://%(host)s:%(port)s' % {'scheme': scheme,
+                                               'host': console_host,
+                                               'port': port}
 
 
 def start_shellinabox_console(node_uuid, port, console_cmd):
@@ -177,9 +175,9 @@ def start_shellinabox_console(node_uuid, port, console_cmd):
         pass
     except processutils.ProcessExecutionError as exc:
         LOG.warning(_LW("Failed to kill the old console process "
-                "before starting a new shellinabox console "
-                "for node %(node)s. Reason: %(err)s"),
-                {'node': node_uuid, 'err': exc})
+                        "before starting a new shellinabox console "
+                        "for node %(node)s. Reason: %(err)s"),
+                    {'node': node_uuid, 'err': exc})
 
     _ensure_console_pid_dir_exists()
     pid_file = _get_console_pid_file(node_uuid)
@@ -224,19 +222,21 @@ def start_shellinabox_console(node_uuid, port, console_cmd):
                 raise loopingcall.LoopingCallDone()
             else:
                 (stdout, stderr) = popen_obj.communicate()
-                locals['errstr'] = _("Command: %(command)s.\n"
-                        "Exit code: %(return_code)s.\n"
-                        "Stdout: %(stdout)r\n"
-                        "Stderr: %(stderr)r") % {'command': ' '.join(args),
-                                'return_code': locals['returncode'],
-                                'stdout': stdout,
-                                'stderr': stderr}
+                locals['errstr'] = _(
+                    "Command: %(command)s.\n"
+                    "Exit code: %(return_code)s.\n"
+                    "Stdout: %(stdout)r\n"
+                    "Stderr: %(stderr)r") % {
+                        'command': ' '.join(args),
+                        'return_code': locals['returncode'],
+                        'stdout': stdout,
+                        'stderr': stderr}
                 LOG.warning(locals['errstr'])
                 raise loopingcall.LoopingCallDone()
 
         if (time.time() > expiration):
-            locals['errstr'] = _("Timeout while waiting for console"
-                    " subprocess to start for node %s.") % node_uuid
+            locals['errstr'] = _("Timeout while waiting for console subprocess"
+                                 "to start for node %s.") % node_uuid
             LOG.warning(locals['errstr'])
             raise loopingcall.LoopingCallDone()
 

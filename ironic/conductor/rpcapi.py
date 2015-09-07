@@ -20,7 +20,7 @@ Client side of the conductor RPC API.
 
 import random
 
-from oslo import messaging
+import oslo_messaging as messaging
 
 from ironic.common import exception
 from ironic.common import hash_ring
@@ -70,11 +70,14 @@ class ConductorAPI(object):
     |    1.25 - Added destroy_port
     |    1.26 - Added continue_node_clean
     |    1.27 - Convert continue_node_clean to cast
+    |    1.28 - Change exceptions raised by destroy_node
+    |    1.29 - Change return value of vendor_passthru and
+    |           driver_vendor_passthru to a dictionary
 
     """
 
     # NOTE(rloo): This must be in sync with manager.ConductorManager's.
-    RPC_API_VERSION = '1.27'
+    RPC_API_VERSION = '1.29'
 
     def __init__(self, topic=None):
         super(ConductorAPI, self).__init__()
@@ -189,11 +192,15 @@ class ConductorAPI(object):
         :raises: NoFreeConductorWorker when there is no free worker to start
                  async task.
         :raises: NodeLocked if node is locked by another conductor.
-        :returns: A tuple containing the response of the invoked method
-                  and a boolean value indicating whether the method was
-                  invoked asynchronously (True) or synchronously (False).
-                  If invoked asynchronously the response field will be
-                  always None.
+        :returns: A dictionary containing:
+
+            :return: The response of the invoked vendor method
+            :async: Boolean value. Whether the method was invoked
+                asynchronously (True) or synchronously (False). When invoked
+                asynchronously the response will be always None.
+            :attach: Boolean value. Whether to attach the response of
+                the invoked vendor method to the HTTP response object (True)
+                or return it in the response body (False).
 
         """
         cctxt = self.client.prepare(topic=topic or self.topic, version='1.20')
@@ -225,11 +232,15 @@ class ConductorAPI(object):
         :raises: DriverNotFound if the supplied driver is not loaded.
         :raises: NoFreeConductorWorker when there is no free worker to start
                  async task.
-        :returns: A tuple containing the response of the invoked method
-                  and a boolean value indicating whether the method was
-                  invoked asynchronously (True) or synchronously (False).
-                  If invoked asynchronously the response field will be
-                  always None.
+        :returns: A dictionary containing:
+
+            :return: The response of the invoked vendor method
+            :async: Boolean value. Whether the method was invoked
+                asynchronously (True) or synchronously (False). When invoked
+                asynchronously the response will be always None.
+            :attach: Boolean value. Whether to attach the response of
+                the invoked vendor method to the HTTP response object (True)
+                or return it in the response body (False).
 
         """
         cctxt = self.client.prepare(topic=topic or self.topic, version='1.20')
@@ -253,7 +264,7 @@ class ConductorAPI(object):
                           node_id=node_id)
 
     def get_driver_vendor_passthru_methods(self, context, driver_name,
-                                            topic=None):
+                                           topic=None):
         """Retrieve information about vendor methods of the given driver.
 
         :param context: an admin context.
@@ -363,8 +374,8 @@ class ConductorAPI(object):
         :raises: NodeLocked if node is locked by another conductor.
         :raises: NodeAssociated if the node contains an instance
             associated with it.
-        :raises: NodeInWrongPowerState if the node is not powered off.
-
+        :raises: InvalidState if the node is in the wrong provision
+            state to perform deletion.
         """
         cctxt = self.client.prepare(topic=topic or self.topic, version='1.9')
         return cctxt.call(context, 'destroy_node', node_id=node_id)

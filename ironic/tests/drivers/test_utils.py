@@ -41,13 +41,14 @@ class UtilsTestCase(db_base.DbTestCase):
         props = self.driver.vendor.get_properties()
         self.assertEqual(expected, props)
 
-    @mock.patch.object(fake.FakeVendorA, 'validate')
+    @mock.patch.object(fake.FakeVendorA, 'validate', autospec=True)
     def test_vendor_interface_validate_valid_methods(self,
                                                      mock_fakea_validate):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.driver.vendor.validate(task, method='first_method')
-            mock_fakea_validate.assert_called_once_with(task,
-                                                        method='first_method')
+            mock_fakea_validate.assert_called_once_with(
+                self.driver.vendor.mapping['first_method'],
+                task, method='first_method')
 
     def test_vendor_interface_validate_bad_method(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
@@ -58,16 +59,18 @@ class UtilsTestCase(db_base.DbTestCase):
     def test_get_node_mac_addresses(self):
         ports = []
         ports.append(
-            obj_utils.create_test_port(self.context,
-                    address='aa:bb:cc',
-                    uuid='bb43dc0b-03f2-4d2e-ae87-c02d7f33cc53',
-                    node_id=self.node.id)
+            obj_utils.create_test_port(
+                self.context,
+                address='aa:bb:cc:dd:ee:ff',
+                uuid='bb43dc0b-03f2-4d2e-ae87-c02d7f33cc53',
+                node_id=self.node.id)
         )
         ports.append(
-            obj_utils.create_test_port(self.context,
-                    address='dd:ee:ff',
-                    uuid='4fc26c0b-03f2-4d2e-ae87-c02d7f33c234',
-                    node_id=self.node.id)
+            obj_utils.create_test_port(
+                self.context,
+                address='dd:ee:ff:aa:bb:cc',
+                uuid='4fc26c0b-03f2-4d2e-ae87-c02d7f33c234',
+                node_id=self.node.id)
         )
         with task_manager.acquire(self.context, self.node.uuid) as task:
             node_macs = driver_utils.get_node_mac_addresses(task)
@@ -111,62 +114,3 @@ class UtilsTestCase(db_base.DbTestCase):
             driver_utils.add_node_capability(task, 'a', 'b')
             self.assertEqual('a:b,c:d,a:b',
                              task.node.properties['capabilities'])
-
-    def test_validate_capability(self):
-        properties = {'capabilities': 'cat:meow,cap2:value2'}
-        self.node.properties = properties
-
-        result = driver_utils.validate_capability(
-            self.node, 'cat', ['meow', 'purr'])
-        self.assertIsNone(result)
-
-    def test_validate_capability_with_exception(self):
-        properties = {'capabilities': 'cat:bark,cap2:value2'}
-        self.node.properties = properties
-
-        self.assertRaises(exception.InvalidParameterValue,
-                          driver_utils.validate_capability,
-                          self.node, 'cat', ['meow', 'purr'])
-
-    def test_validate_boot_mode_capability(self):
-        properties = {'capabilities': 'boot_mode:uefi,cap2:value2'}
-        self.node.properties = properties
-
-        result = driver_utils.validate_boot_mode_capability(self.node)
-        self.assertIsNone(result)
-
-    def test_validate_boot_mode_capability_with_exception(self):
-        properties = {'capabilities': 'boot_mode:foo,cap2:value2'}
-        self.node.properties = properties
-
-        self.assertRaises(exception.InvalidParameterValue,
-                   driver_utils.validate_boot_mode_capability, self.node)
-
-    def test_validate_boot_option_capability(self):
-        properties = {'capabilities': 'boot_option:netboot,cap2:value2'}
-        self.node.properties = properties
-
-        result = driver_utils.validate_boot_option_capability(self.node)
-        self.assertIsNone(result)
-
-    def test_validate_boot_option_capability_with_exception(self):
-        properties = {'capabilities': 'boot_option:foo,cap2:value2'}
-        self.node.properties = properties
-
-        self.assertRaises(exception.InvalidParameterValue,
-                   driver_utils.validate_boot_option_capability, self.node)
-
-    def test_validate_secure_boot_capability(self):
-        properties = {'capabilities': 'secure_boot:true,cap2:value2'}
-        self.node.properties = properties
-
-        result = driver_utils.validate_secure_boot_capability(self.node)
-        self.assertIsNone(result)
-
-    def test_validate_secure_boot_capability_with_exception(self):
-        properties = {'capabilities': 'secure_boot:foo,cap2:value2'}
-        self.node.properties = properties
-
-        self.assertRaises(exception.InvalidParameterValue,
-                          driver_utils.validate_secure_boot_capability,
-                          self.node)

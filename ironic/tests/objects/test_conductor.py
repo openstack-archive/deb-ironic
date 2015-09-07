@@ -20,7 +20,7 @@ import mock
 from oslo_utils import timeutils
 
 from ironic import objects
-from ironic.objects import utils as obj_utils
+from ironic.objects import fields
 from ironic.tests.db import base
 from ironic.tests.db import utils
 
@@ -29,8 +29,8 @@ class TestConductorObject(base.DbTestCase):
 
     def setUp(self):
         super(TestConductorObject, self).setUp()
-        self.fake_conductor = utils.get_test_conductor(
-                                        updated_at=timeutils.utcnow())
+        self.fake_conductor = (
+            utils.get_test_conductor(updated_at=timeutils.utcnow()))
 
     def test_load(self):
         host = self.fake_conductor['hostname']
@@ -56,7 +56,7 @@ class TestConductorObject(base.DbTestCase):
         with mock.patch.object(self.dbapi, 'get_conductor',
                                autospec=True) as mock_get_cdr:
             with mock.patch.object(self.dbapi, 'touch_conductor',
-                               autospec=True) as mock_touch_cdr:
+                                   autospec=True) as mock_touch_cdr:
                 mock_get_cdr.return_value = self.fake_conductor
                 c = objects.Conductor.get_by_hostname(self.context, host)
                 c.touch(self.context)
@@ -75,8 +75,9 @@ class TestConductorObject(base.DbTestCase):
                                autospec=True) as mock_get_cdr:
             c = objects.Conductor.get_by_hostname(self.context, host)
             # ensure timestamps have tzinfo
-            self.assertEqual(obj_utils.datetime_or_none(t0), c.updated_at)
+            datetime_field = fields.DateTimeField()
+            self.assertEqual(datetime_field(t0), c.updated_at)
             c.refresh()
-            self.assertEqual(obj_utils.datetime_or_none(t1), c.updated_at)
+            self.assertEqual(datetime_field(t1), c.updated_at)
             self.assertEqual(expected, mock_get_cdr.call_args_list)
             self.assertEqual(self.context, c._context)

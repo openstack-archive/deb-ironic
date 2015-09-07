@@ -104,16 +104,23 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertEqual(uuids, dict((r[0], r[2]) for r in res))
 
     def test_get_nodeinfo_list_with_filters(self):
-        node1 = utils.create_test_node(driver='driver-one',
+        node1 = utils.create_test_node(
+            driver='driver-one',
             instance_uuid=uuidutils.generate_uuid(),
             reservation='fake-host',
             uuid=uuidutils.generate_uuid())
-        node2 = utils.create_test_node(driver='driver-two',
+        node2 = utils.create_test_node(
+            driver='driver-two',
             uuid=uuidutils.generate_uuid(),
             maintenance=True)
+        node3 = utils.create_test_node(
+            driver='driver-one',
+            uuid=uuidutils.generate_uuid(),
+            reservation='another-fake-host')
 
         res = self.dbapi.get_nodeinfo_list(filters={'driver': 'driver-one'})
-        self.assertEqual([node1.id], [r[0] for r in res])
+        self.assertEqual(sorted([node1.id, node3.id]),
+                         sorted([r[0] for r in res]))
 
         res = self.dbapi.get_nodeinfo_list(filters={'driver': 'bad-driver'})
         self.assertEqual([], [r[0] for r in res])
@@ -122,10 +129,12 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertEqual([node1.id], [r[0] for r in res])
 
         res = self.dbapi.get_nodeinfo_list(filters={'associated': False})
-        self.assertEqual([node2.id], [r[0] for r in res])
+        self.assertEqual(sorted([node2.id, node3.id]),
+                         sorted([r[0] for r in res]))
 
         res = self.dbapi.get_nodeinfo_list(filters={'reserved': True})
-        self.assertEqual([node1.id], [r[0] for r in res])
+        self.assertEqual(sorted([node1.id, node3.id]),
+                         sorted([r[0] for r in res]))
 
         res = self.dbapi.get_nodeinfo_list(filters={'reserved': False})
         self.assertEqual([node2.id], [r[0] for r in res])
@@ -134,7 +143,14 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertEqual([node2.id], [r.id for r in res])
 
         res = self.dbapi.get_node_list(filters={'maintenance': False})
-        self.assertEqual([node1.id], [r.id for r in res])
+        self.assertEqual(sorted([node1.id, node3.id]),
+                         sorted([r.id for r in res]))
+
+        res = self.dbapi.get_node_list(
+            filters={'reserved_by_any_of': ['fake-host',
+                                            'another-fake-host']})
+        self.assertEqual(sorted([node1.id, node3.id]),
+                         sorted([r.id for r in res]))
 
     @mock.patch.object(timeutils, 'utcnow', autospec=True)
     def test_get_nodeinfo_list_provision(self, mock_utcnow):
@@ -151,7 +167,7 @@ class DbNodeTestCase(base.DbTestCase):
                                        provision_state=states.DEPLOYWAIT)
         # node without timeout
         utils.create_test_node(uuid=uuidutils.generate_uuid(),
-                            provision_updated_at=next)
+                               provision_updated_at=next)
 
         mock_utcnow.return_value = present
         res = self.dbapi.get_nodeinfo_list(filters={'provisioned_before': 300})
@@ -180,7 +196,7 @@ class DbNodeTestCase(base.DbTestCase):
 
         mock_utcnow.return_value = present
         res = self.dbapi.get_nodeinfo_list(
-                  filters={'inspection_started_before': 300})
+            filters={'inspection_started_before': 300})
         self.assertEqual([node1.id], [r[0] for r in res])
 
         res = self.dbapi.get_nodeinfo_list(filters={'provision_state':
@@ -200,12 +216,14 @@ class DbNodeTestCase(base.DbTestCase):
         ch1 = utils.create_test_chassis(uuid=uuidutils.generate_uuid())
         ch2 = utils.create_test_chassis(uuid=uuidutils.generate_uuid())
 
-        node1 = utils.create_test_node(driver='driver-one',
+        node1 = utils.create_test_node(
+            driver='driver-one',
             instance_uuid=uuidutils.generate_uuid(),
             reservation='fake-host',
             uuid=uuidutils.generate_uuid(),
             chassis_id=ch1['id'])
-        node2 = utils.create_test_node(driver='driver-two',
+        node2 = utils.create_test_node(
+            driver='driver-two',
             uuid=uuidutils.generate_uuid(),
             chassis_id=ch2['id'],
             maintenance=True)
@@ -247,14 +265,14 @@ class DbNodeTestCase(base.DbTestCase):
 
     def test_get_node_by_instance(self):
         node = utils.create_test_node(
-                instance_uuid='12345678-9999-0000-aaaa-123456789012')
+            instance_uuid='12345678-9999-0000-aaaa-123456789012')
 
         res = self.dbapi.get_node_by_instance(node.instance_uuid)
         self.assertEqual(node.uuid, res.uuid)
 
     def test_get_node_by_instance_wrong_uuid(self):
         utils.create_test_node(
-                instance_uuid='12345678-9999-0000-aaaa-123456789012')
+            instance_uuid='12345678-9999-0000-aaaa-123456789012')
 
         self.assertRaises(exception.InstanceNotFound,
                           self.dbapi.get_node_by_instance,
@@ -492,8 +510,27 @@ class DbNodeTestCase(base.DbTestCase):
     def test_release_non_locked_node(self):
         node = utils.create_test_node()
 
-        self.assertEqual(None, node.reservation)
+        self.assertIsNone(node.reservation)
         self.assertRaises(exception.NodeNotLocked,
                           self.dbapi.release_node, 'fake', node.id)
         self.assertRaises(exception.NodeNotLocked,
                           self.dbapi.release_node, 'fake', node.uuid)
+
+    @mock.patch.object(timeutils, 'utcnow', autospec=True)
+    def test_touch_node_provisioning(self, mock_utcnow):
+        test_time = datetime.datetime(2000, 1, 1, 0, 0)
+        mock_utcnow.return_value = test_time
+        node = utils.create_test_node()
+        # assert provision_updated_at is None
+        self.assertIsNone(node.provision_updated_at)
+
+        self.dbapi.touch_node_provisioning(node.uuid)
+        node = self.dbapi.get_node_by_uuid(node.uuid)
+        # assert provision_updated_at has been updated
+        self.assertEqual(test_time,
+                         timeutils.normalize_time(node.provision_updated_at))
+
+    def test_touch_node_provisioning_not_found(self):
+        self.assertRaises(
+            exception.NodeNotFound,
+            self.dbapi.touch_node_provisioning, uuidutils.generate_uuid())

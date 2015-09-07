@@ -19,6 +19,7 @@ import time
 from neutronclient.common import exceptions as neutron_client_exc
 from neutronclient.v2_0 import client as clientv20
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import netutils
 
 from ironic.common import exception
@@ -29,31 +30,30 @@ from ironic.common import keystone
 from ironic.common import network
 from ironic.dhcp import base
 from ironic.drivers.modules import ssh
-from ironic.openstack.common import log as logging
 
 
 neutron_opts = [
     cfg.StrOpt('url',
                default='http://$my_ip:9696',
-               help='URL for connecting to neutron.'),
+               help=_('URL for connecting to neutron.')),
     cfg.IntOpt('url_timeout',
                default=30,
-               help='Timeout value for connecting to neutron in seconds.'),
+               help=_('Timeout value for connecting to neutron in seconds.')),
     cfg.IntOpt('retries',
                default=3,
-               help='Client retries in the case of a failed request.'),
+               help=_('Client retries in the case of a failed request.')),
     cfg.StrOpt('auth_strategy',
                default='keystone',
-               help='Default authentication strategy to use when connecting '
-                    'to neutron. Can be either "keystone" or "noauth". '
-                    'Running neutron in noauth mode (related to but not '
-                    'affected by this setting) is insecure and should only be '
-                    'used for testing.'),
+               help=_('Default authentication strategy to use when connecting '
+                      'to neutron. Can be either "keystone" or "noauth". '
+                      'Running neutron in noauth mode (related to but not '
+                      'affected by this setting) is insecure and should only '
+                      'be used for testing.')),
     cfg.StrOpt('cleaning_network_uuid',
-               help='UUID of the network to create Neutron ports on when '
-                    'booting to a ramdisk for cleaning/zapping using Neutron '
-                    'DHCP')
-    ]
+               help=_('UUID of the network to create Neutron ports on when '
+                      'booting to a ramdisk for cleaning/zapping using '
+                      'Neutron DHCP'))
+]
 
 CONF = cfg.CONF
 CONF.import_opt('my_ip', 'ironic.netconf')
@@ -103,7 +103,7 @@ class NeutronDHCPApi(base.BaseDHCP):
 
         Update one or more DHCP options on the specified port.
         For the relevant API spec, see
-        http://docs.openstack.org/api/openstack-network/2.0/content/extra-dhc-opt-ext-update.html  # noqa
+        http://docs.openstack.org/api/openstack-network/2.0/content/extra-dhc-opt-ext-update.html
 
         :param port_id: designate which port these attributes
                         will be applied to.
@@ -282,7 +282,7 @@ class NeutronDHCPApi(base.BaseDHCP):
             LOG.warn(_LW("Some errors were encountered on node %(node)s"
                          " while retrieving IP address on the following"
                          " ports: %(ports)s."),
-                         {'node': task.node.uuid, 'ports': failures})
+                     {'node': task.node.uuid, 'ports': failures})
 
         return ip_addresses
 

@@ -17,6 +17,8 @@
 
 """Test class for iBoot PDU driver module."""
 
+import types
+
 import mock
 
 from ironic.common import driver_factory
@@ -37,9 +39,9 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
 
     def test__parse_driver_info_good(self):
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_iboot',
+            driver_info=INFO_DICT)
         info = iboot._parse_driver_info(node)
         self.assertIsNotNone(info.get('address'))
         self.assertIsNotNone(info.get('username'))
@@ -51,9 +53,9 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         info = dict(INFO_DICT)
         info['iboot_port'] = '1234'
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=info)
+            self.context,
+            driver='fake_iboot',
+            driver_info=info)
         info = iboot._parse_driver_info(node)
         self.assertEqual(1234, info.get('port'))
 
@@ -61,9 +63,9 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         info = dict(INFO_DICT)
         info['iboot_relay_id'] = '2'
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=info)
+            self.context,
+            driver='fake_iboot',
+            driver_info=info)
         info = iboot._parse_driver_info(node)
         self.assertEqual(2, info.get('relay_id'))
 
@@ -71,9 +73,9 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         info = dict(INFO_DICT)
         del info['iboot_address']
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=info)
+            self.context,
+            driver='fake_iboot',
+            driver_info=info)
         self.assertRaises(exception.MissingParameterValue,
                           iboot._parse_driver_info,
                           node)
@@ -82,9 +84,9 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         info = dict(INFO_DICT)
         del info['iboot_username']
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=info)
+            self.context,
+            driver='fake_iboot',
+            driver_info=info)
         self.assertRaises(exception.MissingParameterValue,
                           iboot._parse_driver_info,
                           node)
@@ -93,9 +95,9 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         info = dict(INFO_DICT)
         del info['iboot_password']
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=info)
+            self.context,
+            driver='fake_iboot',
+            driver_info=info)
         self.assertRaises(exception.MissingParameterValue,
                           iboot._parse_driver_info,
                           node)
@@ -104,9 +106,9 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         info = dict(INFO_DICT)
         info['iboot_port'] = 'not-integer'
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=info)
+            self.context,
+            driver='fake_iboot',
+            driver_info=info)
         self.assertRaises(exception.InvalidParameterValue,
                           iboot._parse_driver_info,
                           node)
@@ -115,22 +117,22 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         info = dict(INFO_DICT)
         info['iboot_relay_id'] = 'not-integer'
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=info)
+            self.context,
+            driver='fake_iboot',
+            driver_info=info)
         self.assertRaises(exception.InvalidParameterValue,
                           iboot._parse_driver_info,
                           node)
 
-    @mock.patch.object(iboot, '_get_connection')
+    @mock.patch.object(iboot, '_get_connection', autospec=True)
     def test__power_status_on(self, mock_get_conn):
-        mock_connection = mock.Mock()
+        mock_connection = mock.MagicMock(spec_set=['get_relays'])
         mock_connection.get_relays.return_value = [True]
         mock_get_conn.return_value = mock_connection
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_iboot',
+            driver_info=INFO_DICT)
         info = iboot._parse_driver_info(node)
 
         status = iboot._power_status(info)
@@ -139,15 +141,15 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         mock_get_conn.assert_called_once_with(info)
         mock_connection.get_relays.assert_called_once_with()
 
-    @mock.patch.object(iboot, '_get_connection')
+    @mock.patch.object(iboot, '_get_connection', autospec=True)
     def test__power_status_off(self, mock_get_conn):
-        mock_connection = mock.Mock()
+        mock_connection = mock.MagicMock(spec_set=['get_relays'])
         mock_connection.get_relays.return_value = [False]
         mock_get_conn.return_value = mock_connection
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_iboot',
+            driver_info=INFO_DICT)
         info = iboot._parse_driver_info(node)
 
         status = iboot._power_status(info)
@@ -156,15 +158,15 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         mock_get_conn.assert_called_once_with(info)
         mock_connection.get_relays.assert_called_once_with()
 
-    @mock.patch.object(iboot, '_get_connection')
+    @mock.patch.object(iboot, '_get_connection', autospec=True)
     def test__power_status_exception(self, mock_get_conn):
-        mock_connection = mock.Mock()
+        mock_connection = mock.MagicMock(spec_set=['get_relays'])
         mock_connection.get_relays.return_value = None
         mock_get_conn.return_value = mock_connection
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_iboot',
+            driver_info=INFO_DICT)
         info = iboot._parse_driver_info(node)
 
         self.assertRaises(exception.IBootOperationError,
@@ -174,17 +176,17 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         mock_get_conn.assert_called_once_with(info)
         mock_connection.get_relays.assert_called_once_with()
 
-    @mock.patch.object(iboot, '_get_connection')
+    @mock.patch.object(iboot, '_get_connection', autospec=True)
     def test__power_status_exception_type_error(self, mock_get_conn):
-        mock_connection = mock.Mock()
+        mock_connection = mock.MagicMock(spec_set=['get_relays'])
         side_effect = TypeError("Surprise!")
         mock_connection.get_relays.side_effect = side_effect
 
         mock_get_conn.return_value = mock_connection
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_iboot',
+            driver_info=INFO_DICT)
         info = iboot._parse_driver_info(node)
 
         self.assertRaises(exception.IBootOperationError,
@@ -194,17 +196,17 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         mock_get_conn.assert_called_once_with(info)
         mock_connection.get_relays.assert_called_once_with()
 
-    @mock.patch.object(iboot, '_get_connection')
+    @mock.patch.object(iboot, '_get_connection', autospec=True)
     def test__power_status_exception_index_error(self, mock_get_conn):
-        mock_connection = mock.Mock()
+        mock_connection = mock.MagicMock(spec_set=['get_relays'])
         side_effect = IndexError("Gotcha!")
         mock_connection.get_relays.side_effect = side_effect
 
         mock_get_conn.return_value = mock_connection
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_iboot',
+            driver_info=INFO_DICT)
         info = iboot._parse_driver_info(node)
         status = iboot._power_status(info)
         self.assertEqual(states.ERROR, status)
@@ -212,15 +214,15 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
         mock_get_conn.assert_called_once_with(info)
         mock_connection.get_relays.assert_called_once_with()
 
-    @mock.patch.object(iboot, '_get_connection')
+    @mock.patch.object(iboot, '_get_connection', autospec=True)
     def test__power_status_error(self, mock_get_conn):
-        mock_connection = mock.Mock()
+        mock_connection = mock.MagicMock(spec_set=['get_relays'])
         mock_connection.get_relays.return_value = list()
         mock_get_conn.return_value = mock_connection
         node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_iboot',
+            driver_info=INFO_DICT)
         info = iboot._parse_driver_info(node)
 
         status = iboot._power_status(info)
@@ -237,19 +239,19 @@ class IBootDriverTestCase(db_base.DbTestCase):
         mgr_utils.mock_the_extension_manager(driver='fake_iboot')
         self.driver = driver_factory.get_driver('fake_iboot')
         self.node = obj_utils.create_test_node(
-                self.context,
-                driver='fake_iboot',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_iboot',
+            driver_info=INFO_DICT)
         self.info = iboot._parse_driver_info(self.node)
 
     def test_get_properties(self):
         expected = iboot.COMMON_PROPERTIES
-        with task_manager.acquire(self.context, self.node.uuid,
-                shared=True) as task:
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=True) as task:
             self.assertEqual(expected, task.driver.get_properties())
 
-    @mock.patch.object(iboot, '_power_status')
-    @mock.patch.object(iboot, '_switch')
+    @mock.patch.object(iboot, '_power_status', autospec=True)
+    @mock.patch.object(iboot, '_switch', autospec=True)
     def test_set_power_state_good(self, mock_switch, mock_power_status):
         mock_power_status.return_value = states.POWER_ON
 
@@ -260,8 +262,8 @@ class IBootDriverTestCase(db_base.DbTestCase):
         mock_switch.assert_called_once_with(self.info, True)
         mock_power_status.assert_called_once_with(self.info)
 
-    @mock.patch.object(iboot, '_power_status')
-    @mock.patch.object(iboot, '_switch')
+    @mock.patch.object(iboot, '_power_status', autospec=True)
+    @mock.patch.object(iboot, '_switch', autospec=True)
     def test_set_power_state_bad(self, mock_switch, mock_power_status):
         mock_power_status.return_value = states.POWER_OFF
 
@@ -274,8 +276,8 @@ class IBootDriverTestCase(db_base.DbTestCase):
         mock_switch.assert_called_once_with(self.info, True)
         mock_power_status.assert_called_once_with(self.info)
 
-    @mock.patch.object(iboot, '_power_status')
-    @mock.patch.object(iboot, '_switch')
+    @mock.patch.object(iboot, '_power_status', autospec=True)
+    @mock.patch.object(iboot, '_switch', autospec=True)
     def test_set_power_state_invalid_parameter(self, mock_switch,
                                                mock_power_status):
         mock_power_status.return_value = states.POWER_ON
@@ -285,10 +287,10 @@ class IBootDriverTestCase(db_base.DbTestCase):
                               task.driver.power.set_power_state,
                               task, states.NOSTATE)
 
-    @mock.patch.object(iboot, '_power_status')
-    @mock.patch.object(iboot, '_switch')
+    @mock.patch.object(iboot, '_power_status', autospec=True)
+    @mock.patch.object(iboot, '_switch', spec_set=types.FunctionType)
     def test_reboot_good(self, mock_switch, mock_power_status):
-        manager = mock.MagicMock()
+        manager = mock.MagicMock(spec_set=['switch'])
         mock_power_status.return_value = states.POWER_ON
 
         manager.attach_mock(mock_switch, 'switch')
@@ -300,10 +302,10 @@ class IBootDriverTestCase(db_base.DbTestCase):
 
         self.assertEqual(manager.mock_calls, expected)
 
-    @mock.patch.object(iboot, '_power_status')
-    @mock.patch.object(iboot, '_switch')
+    @mock.patch.object(iboot, '_power_status', autospec=True)
+    @mock.patch.object(iboot, '_switch', spec_set=types.FunctionType)
     def test_reboot_bad(self, mock_switch, mock_power_status):
-        manager = mock.MagicMock()
+        manager = mock.MagicMock(spec_set=['switch'])
         mock_power_status.return_value = states.POWER_OFF
 
         manager.attach_mock(mock_switch, 'switch')
@@ -316,7 +318,7 @@ class IBootDriverTestCase(db_base.DbTestCase):
 
         self.assertEqual(manager.mock_calls, expected)
 
-    @mock.patch.object(iboot, '_power_status')
+    @mock.patch.object(iboot, '_power_status', autospec=True)
     def test_get_power_state(self, mock_power_status):
         mock_power_status.return_value = states.POWER_ON
 
@@ -327,16 +329,16 @@ class IBootDriverTestCase(db_base.DbTestCase):
         # ensure functions were called with the valid parameters
         mock_power_status.assert_called_once_with(self.info)
 
-    @mock.patch.object(iboot, '_parse_driver_info')
+    @mock.patch.object(iboot, '_parse_driver_info', autospec=True)
     def test_validate_good(self, parse_drv_info_mock):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             task.driver.power.validate(task)
         self.assertEqual(1, parse_drv_info_mock.call_count)
 
-    @mock.patch.object(iboot, '_parse_driver_info')
+    @mock.patch.object(iboot, '_parse_driver_info', autospec=True)
     def test_validate_fails(self, parse_drv_info_mock):
-        side_effect = exception.InvalidParameterValue("Bad input")
+        side_effect = iter([exception.InvalidParameterValue("Bad input")])
         parse_drv_info_mock.side_effect = side_effect
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:

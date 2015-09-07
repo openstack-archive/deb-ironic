@@ -22,6 +22,8 @@ import os
 import re
 
 from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_service import loopingcall
 from oslo_utils import importutils
 from six.moves.urllib import parse as urlparse
 
@@ -34,8 +36,6 @@ from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.drivers import base
 from ironic.drivers.modules import console_utils
-from ironic.openstack.common import log as logging
-from ironic.openstack.common import loopingcall
 
 seamicroclient = importutils.try_import('seamicroclient')
 if seamicroclient:
@@ -45,10 +45,10 @@ if seamicroclient:
 opts = [
     cfg.IntOpt('max_retry',
                default=3,
-               help='Maximum retries for SeaMicro operations'),
+               help=_('Maximum retries for SeaMicro operations')),
     cfg.IntOpt('action_timeout',
                default=10,
-               help='Seconds to wait for power action to be completed')
+               help=_('Seconds to wait for power action to be completed'))
 ]
 
 CONF = cfg.CONF
@@ -456,7 +456,7 @@ class VendorPassthru(base.VendorInterface):
 
     @base.passthru(['POST'])
     def set_node_vlan_id(self, task, **kwargs):
-        """Sets a untagged vlan id for NIC 0 of node.
+        """Sets an untagged vlan id for NIC 0 of node.
 
         @kwargs vlan_id: id of untagged vlan for NIC 0 of node
         """
@@ -540,9 +540,10 @@ class Management(base.ManagementInterface):
         """
         _parse_driver_info(task.node)
 
-    def get_supported_boot_devices(self):
+    def get_supported_boot_devices(self, task):
         """Get a list of the supported boot devices.
 
+        :param task: a task from TaskManager.
         :returns: A list with the supported boot devices defined
                   in :mod:`ironic.common.boot_devices`.
 
@@ -567,7 +568,7 @@ class Management(base.ManagementInterface):
         :raises: MissingParameterValue when a required parameter is missing
 
         """
-        if device not in self.get_supported_boot_devices():
+        if device not in self.get_supported_boot_devices(task):
             raise exception.InvalidParameterValue(_(
                 "Invalid boot device %s specified.") % device)
 
@@ -579,8 +580,8 @@ class Management(base.ManagementInterface):
         except seamicro_client_exception.ClientException as ex:
             LOG.error(_LE("Seamicro set boot device failed for node "
                           "%(node)s with the following error: %(error)s"),
-                      {'node': task.node.uuid, 'error': ex.message})
-            raise exception.IronicException(message=ex.message)
+                      {'node': task.node.uuid, 'error': ex.args[0]})
+            raise exception.IronicException(message=ex.args[0])
 
     def get_boot_device(self, task):
         """Get the current boot device for the task's node.
@@ -651,10 +652,10 @@ class ShellinaboxConsole(base.ConsoleInterface):
         chassis_ip = urlparse.urlparse(driver_info['api_endpoint']).netloc
 
         seamicro_cmd = ("/:%(uid)s:%(gid)s:HOME:telnet %(chassis)s %(port)s"
-                       % {'uid': os.getuid(),
-                          'gid': os.getgid(),
-                          'chassis': chassis_ip,
-                          'port': telnet_port})
+                        % {'uid': os.getuid(),
+                           'gid': os.getgid(),
+                           'chassis': chassis_ip,
+                           'port': telnet_port})
 
         console_utils.start_shellinabox_console(driver_info['uuid'],
                                                 driver_info['port'],

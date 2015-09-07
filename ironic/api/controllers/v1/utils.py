@@ -17,10 +17,14 @@ import jsonpatch
 from oslo_config import cfg
 from oslo_utils import uuidutils
 import pecan
+import six
+from six.moves import http_client
+from webob.static import FileIter
 import wsme
 
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common import states
 from ironic.common import utils
 from ironic import objects
 
@@ -34,10 +38,13 @@ JSONPATCH_EXCEPTIONS = (jsonpatch.JsonPatchException,
 
 
 def validate_limit(limit):
-    if limit is not None and limit <= 0:
+    if limit is None:
+        return CONF.api.max_limit
+
+    if limit <= 0:
         raise wsme.exc.ClientSideError(_("Limit must be positive"))
 
-    return min(CONF.api.max_limit, limit) or CONF.api.max_limit
+    return min(CONF.api.max_limit, limit)
 
 
 def validate_sort_dir(sort_dir):
@@ -85,7 +92,7 @@ def get_rpc_node(node_ident):
 
     # We can refer to nodes by their name, if the client supports it
     if allow_node_logical_names():
-        if utils.is_hostname_safe(node_ident):
+        if is_valid_logical_name(node_ident):
             return objects.Node.get_by_name(pecan.request.context, node_ident)
         raise exception.InvalidUuidOrName(name=node_ident)
 
@@ -101,4 +108,114 @@ def is_valid_node_name(name):
     :param: name: the node name to check.
     :returns: True if the name is valid, False otherwise.
     """
-    return utils.is_hostname_safe(name) and (not uuidutils.is_uuid_like(name))
+    return is_valid_logical_name(name) and not uuidutils.is_uuid_like(name)
+
+
+def is_valid_logical_name(name):
+    """Determine if the provided name is a valid hostname."""
+    if pecan.request.version.minor < 10:
+        return utils.is_hostname_safe(name)
+    else:
+        return utils.is_valid_logical_name(name)
+
+
+def vendor_passthru(ident, method, topic, data=None, driver_passthru=False):
+    """Call a vendor passthru API extension.
+
+    Call the vendor passthru API extension and process the method response
+    to set the right return code for methods that are asynchronous or
+    synchronous; Attach the return value to the response object if it's
+    being served statically.
+
+    :param ident: The resource identification. For node's vendor passthru
+        this is the node's UUID, for driver's vendor passthru this is the
+        driver's name.
+    :param method: The vendor method name.
+    :param topic: The RPC topic.
+    :param data: The data passed to the vendor method. Defaults to None.
+    :param driver_passthru: Boolean value. Whether this is a node or
+        driver vendor passthru. Defaults to False.
+    :returns: A WSME response object to be returned by the API.
+
+    """
+    if not method:
+        raise wsme.exc.ClientSideError(_("Method not specified"))
+
+    if data is None:
+        data = {}
+
+    http_method = pecan.request.method.upper()
+    params = (pecan.request.context, ident, method, http_method, data, topic)
+    if driver_passthru:
+        response = pecan.request.rpcapi.driver_vendor_passthru(*params)
+    else:
+        response = pecan.request.rpcapi.vendor_passthru(*params)
+
+    status_code = http_client.ACCEPTED if response['async'] else http_client.OK
+    return_value = response['return']
+    response_params = {'status_code': status_code}
+
+    # Attach the return value to the response object
+    if response.get('attach'):
+        if isinstance(return_value, six.text_type):
+            # If unicode, convert to bytes
+            return_value = return_value.encode('utf-8')
+        file_ = wsme.types.File(content=return_value)
+        pecan.response.app_iter = FileIter(file_.file)
+        # Since we've attached the return value to the response
+        # object the response body should now be empty.
+        return_value = None
+        response_params['return_type'] = None
+
+    return wsme.api.Response(return_value, **response_params)
+
+
+def check_for_invalid_fields(fields, object_fields):
+    """Check for requested non-existent fields.
+
+    Check if the user requested non-existent fields.
+
+    :param fields: A list of fields requested by the user
+    :object_fields: A list of fields supported by the object.
+    :raises: InvalidParameterValue if invalid fields were requested.
+
+    """
+    invalid_fields = set(fields) - set(object_fields)
+    if invalid_fields:
+        raise exception.InvalidParameterValue(
+            _('Field(s) "%s" are not valid') % ', '.join(invalid_fields))
+
+
+def check_allow_specify_fields(fields):
+    """Check if fetching a subset of the resource attributes is allowed.
+
+    Version 1.8 of the API allows fetching a subset of the resource
+    attributes, this method checks if the required version is being
+    requested.
+    """
+    if fields is not None and pecan.request.version.minor < 8:
+        raise exception.NotAcceptable()
+
+
+def check_for_invalid_state_and_allow_filter(provision_state):
+    """Check if filtering nodes by provision state is allowed.
+
+    Version 1.9 of the API allows filter nodes by provision state.
+    """
+    if provision_state is not None:
+        if pecan.request.version.minor < 9:
+            raise exception.NotAcceptable()
+        valid_states = states.machine.states
+        if provision_state not in valid_states:
+            raise exception.InvalidParameterValue(
+                _('Provision state "%s" is not valid') % provision_state)
+
+
+def initial_node_provision_state():
+    """Return node state to use by default when creating new nodes.
+
+    Previously the default state for new nodes was AVAILABLE.
+    Starting with API 1.11 it is ENROLL.
+    """
+    return (states.AVAILABLE if pecan.request.version.minor < 11
+            else states.ENROLL)

@@ -17,6 +17,8 @@ iLO Power Driver
 """
 
 from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_service import loopingcall
 from oslo_utils import importutils
 
 from ironic.common import boot_devices
@@ -28,8 +30,6 @@ from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
 from ironic.drivers.modules.ilo import common as ilo_common
-from ironic.openstack.common import log as logging
-from ironic.openstack.common import loopingcall
 
 ilo_error = importutils.try_import('proliantutils.exception')
 
@@ -37,11 +37,12 @@ ilo_error = importutils.try_import('proliantutils.exception')
 opts = [
     cfg.IntOpt('power_retry',
                default=6,
-               help='Number of times a power operation needs to be retried'),
+               help=_('Number of times a power operation needs to be '
+                      'retried')),
     cfg.IntOpt('power_wait',
                default=2,
-               help='Amount of time in seconds to wait in between power '
-                    'operations'),
+               help=_('Amount of time in seconds to wait in between power '
+                      'operations')),
 ]
 
 CONF = cfg.CONF
@@ -50,12 +51,14 @@ CONF.register_opts(opts, group='ilo')
 LOG = logging.getLogger(__name__)
 
 
-def _attach_boot_iso(task):
+def _attach_boot_iso_if_needed(task):
     """Attaches boot ISO for a deployed node.
 
     This method checks the instance info of the baremetal node for a
-    boot iso.  It attaches the boot ISO on the baremetal node, and then
-    sets the node to boot from virtual media cdrom.
+    boot iso. If the instance info has a value of key 'ilo_boot_iso',
+    it indicates that 'boot_option' is 'netboot'. Therefore it attaches
+    the boot ISO on the baremetal node and then sets the node to boot from
+    virtual media cdrom.
 
     :param task: a TaskManager instance containing the node to act on.
     """
@@ -149,22 +152,22 @@ def _set_power_state(task, target_state):
         if target_state == states.POWER_OFF:
             ilo_object.hold_pwr_btn()
         elif target_state == states.POWER_ON:
-            _attach_boot_iso(task)
+            _attach_boot_iso_if_needed(task)
             ilo_object.set_host_power('ON')
         elif target_state == states.REBOOT:
-            _attach_boot_iso(task)
+            _attach_boot_iso_if_needed(task)
             ilo_object.reset_server()
             target_state = states.POWER_ON
         else:
             msg = _("_set_power_state called with invalid power state "
-                "'%s'") % target_state
+                    "'%s'") % target_state
             raise exception.InvalidParameterValue(msg)
 
     except ilo_error.IloError as ilo_exception:
         LOG.error(_LE("iLO set_power_state failed to set state to %(tstate)s "
                       " for node %(node_id)s with error: %(error)s"),
-                   {'tstate': target_state, 'node_id': node.uuid,
-                     'error': ilo_exception})
+                  {'tstate': target_state, 'node_id': node.uuid,
+                   'error': ilo_exception})
         operation = _('iLO set_power_state')
         raise exception.IloOperationError(operation=operation,
                                           error=ilo_exception)
@@ -176,7 +179,7 @@ def _set_power_state(task, target_state):
         timeout = (CONF.ilo.power_wait) * (CONF.ilo.power_retry)
         LOG.error(_LE("iLO failed to change state to %(tstate)s "
                       "within %(timeout)s sec"),
-                    {'tstate': target_state, 'timeout': timeout})
+                  {'tstate': target_state, 'timeout': timeout})
         raise exception.PowerStateFailure(pstate=target_state)
 
 

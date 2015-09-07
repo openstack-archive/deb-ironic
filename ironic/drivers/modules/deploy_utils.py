@@ -28,6 +28,7 @@ import time
 
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
 from oslo_utils import units
@@ -39,7 +40,9 @@ from ironic.common import disk_partitioner
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
+from ironic.common.i18n import _LI
 from ironic.common.i18n import _LW
+from ironic.common import image_service
 from ironic.common import images
 from ironic.common import states
 from ironic.common import utils
@@ -48,29 +51,42 @@ from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import image_cache
 from ironic.drivers import utils as driver_utils
 from ironic import objects
-from ironic.openstack.common import log as logging
 
 
 deploy_opts = [
     cfg.IntOpt('efi_system_partition_size',
                default=200,
-               help='Size of EFI system partition in MiB when configuring '
-                    'UEFI systems for local boot.'),
+               help=_('Size of EFI system partition in MiB when configuring '
+                      'UEFI systems for local boot.')),
     cfg.StrOpt('dd_block_size',
                default='1M',
-               help='Block size to use when writing to the nodes disk.'),
+               help=_('Block size to use when writing to the nodes disk.')),
     cfg.IntOpt('iscsi_verify_attempts',
                default=3,
-               help='Maximum attempts to verify an iSCSI connection is '
-                    'active, sleeping 1 second between attempts.'),
-    ]
-
+               help=_('Maximum attempts to verify an iSCSI connection is '
+                      'active, sleeping 1 second between attempts.')),
+    cfg.StrOpt('http_url',
+               help='ironic-conductor node\'s HTTP server URL. '
+                    'Example: http://192.1.2.3:8080',
+               deprecated_group='pxe'),
+    cfg.StrOpt('http_root',
+               default='/httpboot',
+               help='ironic-conductor node\'s HTTP root path.',
+               deprecated_group='pxe'),
+]
 CONF = cfg.CONF
 CONF.register_opts(deploy_opts, group='deploy')
 
 LOG = logging.getLogger(__name__)
 
 VALID_ROOT_DEVICE_HINTS = set(('size', 'model', 'wwn', 'serial', 'vendor'))
+
+SUPPORTED_CAPABILITIES = {
+    'boot_option': ('local', 'netboot'),
+    'boot_mode': ('bios', 'uefi'),
+    'secure_boot': ('true', 'false'),
+    'trusted_boot': ('true', 'false'),
+}
 
 
 # All functions are called from deploy() directly or indirectly.
@@ -146,8 +162,9 @@ def verify_iscsi_connection(target_iqn):
             break
         time.sleep(1)
         LOG.debug("iSCSI connection not active. Rechecking. Attempt "
-                  "%(attempt)d out of %(total)d", {"attempt": attempt + 1,
-                  "total": CONF.deploy.iscsi_verify_attempts})
+                  "%(attempt)d out of %(total)d",
+                  {"attempt": attempt + 1,
+                   "total": CONF.deploy.iscsi_verify_attempts})
     else:
         msg = _("iSCSI connection did not become active after attempting to "
                 "verify %d times.") % CONF.deploy.iscsi_verify_attempts
@@ -208,18 +225,18 @@ def get_disk_identifier(dev):
     :returns The Disk Identifier.
     """
     disk_identifier = utils.execute('hexdump', '-s', '440', '-n', '4',
-                                     '-e', '''\"0x%08x\"''',
-                                     dev,
-                                     run_as_root=True,
-                                     check_exit_code=[0],
-                                     attempts=5,
-                                     delay_on_retry=True)
+                                    '-e', '''\"0x%08x\"''',
+                                    dev,
+                                    run_as_root=True,
+                                    check_exit_code=[0],
+                                    attempts=5,
+                                    delay_on_retry=True)
     return disk_identifier[0]
 
 
 def make_partitions(dev, root_mb, swap_mb, ephemeral_mb,
-                    configdrive_mb, commit=True, boot_option="netboot",
-                    boot_mode="bios"):
+                    configdrive_mb, node_uuid, commit=True,
+                    boot_option="netboot", boot_mode="bios"):
     """Partition the disk device.
 
     Create partitions for root, swap, ephemeral and configdrive on a
@@ -236,12 +253,14 @@ def make_partitions(dev, root_mb, swap_mb, ephemeral_mb,
         partitions will not be written to disk.
     :param boot_option: Can be "local" or "netboot". "netboot" by default.
     :param boot_mode: Can be "bios" or "uefi". "bios" by default.
+    :param node_uuid: Node's uuid. Used for logging.
     :returns: A dictionary containing the partition type as Key and partition
         path as Value for the partitions created by this method.
 
     """
-    LOG.debug("Starting to partition the disk device: %(dev)s",
-              {'dev': dev})
+    LOG.debug("Starting to partition the disk device: %(dev)s "
+              "for node %(node)s",
+              {'dev': dev, 'node': node_uuid})
     part_template = dev + '-part%d'
     part_dict = {}
 
@@ -257,26 +276,30 @@ def make_partitions(dev, root_mb, swap_mb, ephemeral_mb,
         dp = disk_partitioner.DiskPartitioner(dev)
 
     if ephemeral_mb:
-        LOG.debug("Add ephemeral partition (%(size)d MB) to device: %(dev)s",
-                 {'dev': dev, 'size': ephemeral_mb})
+        LOG.debug("Add ephemeral partition (%(size)d MB) to device: %(dev)s "
+                  "for node %(node)s",
+                  {'dev': dev, 'size': ephemeral_mb, 'node': node_uuid})
         part_num = dp.add_partition(ephemeral_mb)
         part_dict['ephemeral'] = part_template % part_num
     if swap_mb:
-        LOG.debug("Add Swap partition (%(size)d MB) to device: %(dev)s",
-                 {'dev': dev, 'size': swap_mb})
+        LOG.debug("Add Swap partition (%(size)d MB) to device: %(dev)s "
+                  "for node %(node)s",
+                  {'dev': dev, 'size': swap_mb, 'node': node_uuid})
         part_num = dp.add_partition(swap_mb, fs_type='linux-swap')
         part_dict['swap'] = part_template % part_num
     if configdrive_mb:
         LOG.debug("Add config drive partition (%(size)d MB) to device: "
-                  "%(dev)s", {'dev': dev, 'size': configdrive_mb})
+                  "%(dev)s for node %(node)s",
+                  {'dev': dev, 'size': configdrive_mb, 'node': node_uuid})
         part_num = dp.add_partition(configdrive_mb)
         part_dict['configdrive'] = part_template % part_num
 
     # NOTE(lucasagomes): Make the root partition the last partition. This
     # enables tools like cloud-init's growroot utility to expand the root
     # partition until the end of the disk.
-    LOG.debug("Add root partition (%(size)d MB) to device: %(dev)s",
-             {'dev': dev, 'size': root_mb})
+    LOG.debug("Add root partition (%(size)d MB) to device: %(dev)s "
+              "for node %(node)s",
+              {'dev': dev, 'size': root_mb, 'node': node_uuid})
     part_num = dp.add_partition(root_mb, bootable=(boot_option == "local" and
                                                    boot_mode == "bios"))
     part_dict['root'] = part_template % part_num
@@ -295,8 +318,9 @@ def is_block_device(dev):
             s = os.stat(dev)
         except OSError as e:
             LOG.debug("Unable to stat device %(dev)s. Attempt %(attempt)d "
-                      "out of %(total)d. Error: %(err)s", {"dev": dev,
-                      "attempt": attempt + 1, "total": attempts, "err": e})
+                      "out of %(total)d. Error: %(err)s",
+                      {"dev": dev, "attempt": attempt + 1,
+                       "total": attempts, "err": e})
             time.sleep(1)
         else:
             return stat.S_ISBLK(s.st_mode)
@@ -317,13 +341,6 @@ def populate_image(src, dst):
         dd(src, dst)
     else:
         images.convert_image(src, dst, 'raw', True)
-
-
-# TODO(rameshg87): Remove this one-line method and use utils.mkfs
-# directly.
-def mkfs(fs, dev, label=None):
-    """Execute mkfs on a device."""
-    utils.mkfs(fs, dev, label)
 
 
 def block_uuid(dev):
@@ -347,19 +364,22 @@ def _replace_lines_in_file(path, regex_pattern, replacement):
 
 def _replace_root_uuid(path, root_uuid):
     root = 'UUID=%s' % root_uuid
-    pattern = r'\{\{ ROOT \}\}'
+    pattern = r'(\(\(|\{\{) ROOT (\)\)|\}\})'
     _replace_lines_in_file(path, pattern, root)
 
 
-def _replace_boot_line(path, boot_mode, is_whole_disk_image):
+def _replace_boot_line(path, boot_mode, is_whole_disk_image,
+                       trusted_boot=False):
     if is_whole_disk_image:
         boot_disk_type = 'boot_whole_disk'
+    elif trusted_boot:
+        boot_disk_type = 'trusted_boot'
     else:
         boot_disk_type = 'boot_partition'
 
     if boot_mode == 'uefi':
-        pattern = '^default=.*$'
-        boot_line = 'default=%s' % boot_disk_type
+        pattern = '^((set )?default)=.*$'
+        boot_line = '\\1=%s' % boot_disk_type
     else:
         pxe_cmd = 'goto' if CONF.pxe.ipxe_enabled else 'default'
         pattern = '^%s .*$' % pxe_cmd
@@ -369,12 +389,12 @@ def _replace_boot_line(path, boot_mode, is_whole_disk_image):
 
 
 def _replace_disk_identifier(path, disk_identifier):
-    pattern = r'\{\{ DISK_IDENTIFIER \}\}'
+    pattern = r'(\(\(|\{\{) DISK_IDENTIFIER (\)\)|\}\})'
     _replace_lines_in_file(path, pattern, disk_identifier)
 
 
 def switch_pxe_config(path, root_uuid_or_disk_id, boot_mode,
-                      is_whole_disk_image):
+                      is_whole_disk_image, trusted_boot=False):
     """Switch a pxe config from deployment mode to service mode.
 
     :param path: path to the pxe config file in tftpboot.
@@ -382,13 +402,16 @@ def switch_pxe_config(path, root_uuid_or_disk_id, boot_mode,
                                  disk_id in case of whole disk image.
     :param boot_mode: if boot mode is uefi or bios.
     :param is_whole_disk_image: if the image is a whole disk image or not.
+    :param trusted_boot: if boot with trusted_boot or not. The usage of
+        is_whole_disk_image and trusted_boot are mutually exclusive. You can
+        have one or neither, but not both.
     """
     if not is_whole_disk_image:
         _replace_root_uuid(path, root_uuid_or_disk_id)
     else:
         _replace_disk_identifier(path, root_uuid_or_disk_id)
 
-    _replace_boot_line(path, boot_mode, is_whole_disk_image)
+    _replace_boot_line(path, boot_mode, is_whole_disk_image, trusted_boot)
 
 
 def notify(address, port):
@@ -477,6 +500,8 @@ def destroy_disk_metadata(dev, node_uuid):
                           {'node': node_uuid,
                            'command': err.cmd,
                            'error': err.stderr})
+    LOG.info(_LI("Disk metadata on %(dev)s successfully destroyed for node "
+                 "%(node)s"), {'dev': dev, 'node': node_uuid})
 
 
 def _get_configdrive(configdrive, node_uuid):
@@ -505,7 +530,7 @@ def _get_configdrive(configdrive, node_uuid):
         data = configdrive
 
     try:
-        data = six.StringIO(base64.b64decode(data))
+        data = six.BytesIO(base64.b64decode(data))
     except TypeError:
         error_msg = (_('Config drive for node %s is not base64 encoded '
                        'or the content is malformed.') % node_uuid)
@@ -514,7 +539,8 @@ def _get_configdrive(configdrive, node_uuid):
         raise exception.InstanceDeployFailure(error_msg)
 
     configdrive_file = tempfile.NamedTemporaryFile(delete=False,
-                                                   prefix='configdrive')
+                                                   prefix='configdrive',
+                                                   dir=CONF.tempdir)
     configdrive_mb = 0
     with gzip.GzipFile('configdrive', 'rb', fileobj=data) as gunzipped:
         try:
@@ -583,9 +609,13 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
                                                                 node_uuid)
 
         part_dict = make_partitions(dev, root_mb, swap_mb, ephemeral_mb,
-                                    configdrive_mb, commit=commit,
+                                    configdrive_mb, node_uuid,
+                                    commit=commit,
                                     boot_option=boot_option,
                                     boot_mode=boot_mode)
+        LOG.info(_LI("Successfully completed the disk device"
+                     " %(dev)s partitioning for node %(node)s"),
+                 {'dev': dev, "node": node_uuid})
 
         ephemeral_part = part_dict.get('ephemeral')
         swap_part = part_dict.get('swap')
@@ -600,8 +630,8 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
                      'efi system partition'):
             part_device = part_dict.get(part)
             LOG.debug("Checking for %(part)s device (%(dev)s) on node "
-                      "%(node)s.", {'part': part, 'dev': part_device,
-                      'node': node_uuid})
+                      "%(node)s.",
+                      {'part': part, 'dev': part_device, 'node': node_uuid})
             if part_device and not is_block_device(part_device):
                 raise exception.InstanceDeployFailure(
                     _("'%(partition)s' device '%(part_device)s' not found") %
@@ -611,11 +641,14 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
         # partition.  Create a fat filesystem on it.
         if boot_mode == "uefi" and boot_option == "local":
             efi_system_part = part_dict.get('efi system partition')
-            mkfs(dev=efi_system_part, fs='vfat', label='efi-part')
+            utils.mkfs('vfat', efi_system_part, 'efi-part')
 
         if configdrive_part:
             # Copy the configdrive content to the configdrive partition
             dd(configdrive_file, configdrive_part)
+            LOG.info(_LI("Configdrive for node %(node)s successfully copied "
+                         "onto partition %(partition)s"),
+                     {'node': node_uuid, 'partition': configdrive_part})
 
     finally:
         # If the configdrive was requested make sure we delete the file
@@ -624,12 +657,20 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
             utils.unlink_without_raise(configdrive_file)
 
     populate_image(image_path, root_part)
+    LOG.info(_LI("Image for %(node)s successfully populated"),
+             {'node': node_uuid})
 
     if swap_part:
-        mkfs(dev=swap_part, fs='swap', label='swap1')
+        utils.mkfs('swap', swap_part, 'swap1')
+        LOG.info(_LI("Swap partition %(swap)s successfully formatted "
+                     "for node %(node)s"),
+                 {'swap': swap_part, 'node': node_uuid})
 
     if ephemeral_part and not preserve_ephemeral:
-        mkfs(dev=ephemeral_part, fs=ephemeral_format, label="ephemeral0")
+        utils.mkfs(ephemeral_format, ephemeral_part, "ephemeral0")
+        LOG.info(_LI("Ephemeral partition %(ephemeral)s successfully "
+                     "formatted for node %(node)s"),
+                 {'ephemeral': ephemeral_part, 'node': node_uuid})
 
     uuids_to_return = {
         'root uuid': root_part,
@@ -648,10 +689,11 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
     return uuids_to_return
 
 
-def deploy_partition_image(address, port, iqn, lun, image_path,
-           root_mb, swap_mb, ephemeral_mb, ephemeral_format, node_uuid,
-           preserve_ephemeral=False, configdrive=None,
-           boot_option="netboot", boot_mode="bios"):
+def deploy_partition_image(
+        address, port, iqn, lun, image_path,
+        root_mb, swap_mb, ephemeral_mb, ephemeral_format, node_uuid,
+        preserve_ephemeral=False, configdrive=None,
+        boot_option="netboot", boot_mode="bios"):
     """All-in-one function to deploy a partition image to a node.
 
     :param address: The iSCSI IP address.
@@ -673,6 +715,8 @@ def deploy_partition_image(address, port, iqn, lun, image_path,
                         or configdrive HTTP URL.
     :param boot_option: Can be "local" or "netboot". "netboot" by default.
     :param boot_mode: Can be "bios" or "uefi". "bios" by default.
+    :raises: InstanceDeployFailure if image virtual size is bigger than root
+        partition size.
     :returns: a dictionary containing the following keys:
         'root uuid': UUID of root partition
         'efi system partition uuid': UUID of the uefi system partition
@@ -680,12 +724,14 @@ def deploy_partition_image(address, port, iqn, lun, image_path,
         NOTE: If key exists but value is None, it means partition doesn't
               exist.
     """
-    with _iscsi_setup_and_handle_errors(address, port, iqn,
-                                        lun, image_path) as dev:
-        image_mb = get_image_mb(image_path)
-        if image_mb > root_mb:
-            root_mb = image_mb
+    image_mb = get_image_mb(image_path)
+    if image_mb > root_mb:
+        msg = (_('Root partition is too small for requested image. Image '
+                 'virtual size: %(image_mb)d MB, Root size: %(root_mb)d MB')
+               % {'image_mb': image_mb, 'root_mb': root_mb})
+        raise exception.InstanceDeployFailure(msg)
 
+    with _iscsi_setup_and_handle_errors(address, port, iqn, lun) as dev:
         uuid_dict_returned = work_on_disk(
             dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format, image_path,
             node_uuid, preserve_ephemeral=preserve_ephemeral,
@@ -710,7 +756,7 @@ def deploy_disk_image(address, port, iqn, lun,
         the disk which was used for deployment.
     """
     with _iscsi_setup_and_handle_errors(address, port, iqn,
-                                        lun, image_path) as dev:
+                                        lun) as dev:
         populate_image(image_path, dev)
         disk_identifier = get_disk_identifier(dev)
 
@@ -718,22 +764,20 @@ def deploy_disk_image(address, port, iqn, lun,
 
 
 @contextlib.contextmanager
-def _iscsi_setup_and_handle_errors(address, port, iqn, lun,
-                                   image_path):
+def _iscsi_setup_and_handle_errors(address, port, iqn, lun):
     """Function that yields an iSCSI target device to work on.
 
     :param address: The iSCSI IP address.
     :param port: The iSCSI port number.
     :param iqn: The iSCSI qualified name.
     :param lun: The iSCSI logical unit number.
-    :param image_path: Path for the instance's disk image.
     """
     dev = get_dev(address, port, iqn, lun)
     discovery(address, port)
     login_iscsi(address, port, iqn)
     if not is_block_device(dev):
         raise exception.InstanceDeployFailure(_("Parent device '%s' not found")
-                                                % dev)
+                                              % dev)
     try:
         yield dev
     except processutils.ProcessExecutionError as err:
@@ -784,8 +828,8 @@ def check_for_missing_params(info_dict, error_msg, param_prefix=''):
 
     if missing_info:
         exc_msg = _("%(error_msg)s. Missing are: %(missing_info)s")
-        raise exception.MissingParameterValue(exc_msg %
-                    {'error_msg': error_msg, 'missing_info': missing_info})
+        raise exception.MissingParameterValue(
+            exc_msg % {'error_msg': error_msg, 'missing_info': missing_info})
 
 
 def fetch_images(ctx, cache, images_info, force_raw=True):
@@ -821,11 +865,16 @@ def set_failed_state(task, msg):
 
     :param task: a TaskManager instance containing the node to act on.
     :param msg: the message to set in last_error of the node.
-    :raises: InvalidState if the event is not allowed by the associated
-             state machine.
     """
-    task.process_event('fail')
     node = task.node
+    try:
+        task.process_event('fail')
+    except exception.InvalidState:
+        msg2 = (_LE('Internal error. Node %(node)s in provision state '
+                    '"%(state)s" could not transition to a failed state.')
+                % {'node': node.uuid, 'state': node.provision_state})
+        LOG.exception(msg2)
+
     try:
         manager_utils.node_power_action(task, states.POWER_OFF)
     except Exception:
@@ -834,11 +883,11 @@ def set_failed_state(task, msg):
                     'should be removed from Ironic or put in maintenance '
                     'mode until the problem is resolved.') % node.uuid)
         LOG.exception(msg2)
-    finally:
-        # NOTE(deva): node_power_action() erases node.last_error
-        #             so we need to set it again here.
-        node.last_error = msg
-        node.save()
+
+    # NOTE(deva): node_power_action() erases node.last_error
+    #             so we need to set it here.
+    node.last_error = msg
+    node.save()
 
 
 def get_single_nic_with_vif_port_id(task):
@@ -935,7 +984,7 @@ def agent_execute_clean_step(task, step):
     :param task: a TaskManager object containing the node
     :param step: a clean step dictionary to execute
     :raises: NodeCleaningFailure if the agent does not return a command status
-    :returns: states.CLEANING to signify the step will be completed async
+    :returns: states.CLEANWAIT to signify the step will be completed async
     """
     client = agent_client.AgentClient()
     ports = objects.Port.list_by_node_id(
@@ -946,7 +995,23 @@ def agent_execute_clean_step(task, step):
             'Agent on node %(node)s returned bad command result: '
             '%(result)s') % {'node': task.node.uuid,
                              'result': result.get('command_error')})
-    return states.CLEANING
+    return states.CLEANWAIT
+
+
+def agent_add_clean_params(task):
+    """Add required config parameters to node's driver_interal_info.
+
+    Adds the required conf options to node's driver_internal_info.
+    It is Required to pass the information to IPA.
+
+    :param task: a TaskManager instance.
+    """
+    agent_params = CONF.agent
+    info = task.node.driver_internal_info
+    passes = agent_params.agent_erase_devices_iterations
+    info['agent_erase_devices_iterations'] = passes
+    task.node.driver_internal_info = info
+    task.node.save()
 
 
 def try_set_boot_device(task, device, persistent=True):
@@ -1043,12 +1108,30 @@ def is_secure_boot_requested(node):
     return sec_boot == 'true'
 
 
+def is_trusted_boot_requested(node):
+    """Returns True if trusted_boot is requested for deploy.
+
+    This method checks instance property for trusted_boot and returns True
+    if it is requested.
+
+    :param node: a single Node.
+    :raises: InvalidParameterValue if the capabilities string is not a
+             dictionary or is malformed.
+    :returns: True if trusted_boot is requested.
+    """
+
+    capabilities = parse_instance_info_capabilities(node)
+    trusted_boot = capabilities.get('trusted_boot', 'false').lower()
+
+    return trusted_boot == 'true'
+
+
 def get_boot_mode_for_deploy(node):
     """Returns the boot mode that would be used for deploy.
 
     This method returns boot mode to be used for deploy.
-    It returns 'uefi' if 'secure_boot' is set to 'true' in
-    'instance_info/capabilities' of node.
+    It returns 'uefi' if 'secure_boot' is set to 'true' or returns 'bios' if
+    'trusted_boot' is set to 'true' in 'instance_info/capabilities' of node.
     Otherwise it returns value of 'boot_mode' in 'properties/capabilities'
     of node if set. If that is not set, it returns boot mode in
     'instance_info/deploy_boot_mode' for the node.
@@ -1063,6 +1146,12 @@ def get_boot_mode_for_deploy(node):
         LOG.debug('Deploy boot mode is uefi for %s.', node.uuid)
         return 'uefi'
 
+    if is_trusted_boot_requested(node):
+        # TODO(lintan) Trusted boot also supports uefi, but at the moment,
+        # it should only boot with bios.
+        LOG.debug('Deploy boot mode is bios for %s.', node.uuid)
+        return 'bios'
+
     boot_mode = driver_utils.get_node_capability(node, 'boot_mode')
     if boot_mode is None:
         instance_info = node.instance_info
@@ -1072,3 +1161,104 @@ def get_boot_mode_for_deploy(node):
               {'boot_mode': boot_mode, 'node': node.uuid})
 
     return boot_mode.lower() if boot_mode else boot_mode
+
+
+def validate_capabilities(node):
+    """Validates that specified supported capabilities have valid value
+
+    This method checks if the any of the supported capability is present in
+    Node capabilities. For all supported capabilities specified for a Node,
+    it validates that it has a valid value.
+    The node can have capability as part of the 'properties' or
+    'instance_info' or both.
+    Note that the actual value of a capability does not need to be the same
+    in the node's 'properties' and 'instance_info'.
+
+    :param node: an ironic node object.
+    :raises: InvalidParameterValue, if the capability is not set to a
+        valid value.
+    """
+    exp_str = _("The parameter '%(capability)s' from %(field)s has an "
+                "invalid value: '%(value)s'. Acceptable values are: "
+                "%(valid_values)s.")
+
+    for capability_name, valid_values in SUPPORTED_CAPABILITIES.items():
+        # Validate capability_name in node's properties/capabilities
+        value = driver_utils.get_node_capability(node, capability_name)
+        if value and (value not in valid_values):
+            field = "properties/capabilities"
+            raise exception.InvalidParameterValue(
+                exp_str %
+                {'capability': capability_name, 'field': field,
+                 'value': value, 'valid_values': ', '.join(valid_values)})
+
+        # Validate capability_name in node's instance_info/['capabilities']
+        capabilities = parse_instance_info_capabilities(node)
+        value = capabilities.get(capability_name)
+
+        if value and (value not in valid_values):
+            field = "instance_info['capabilities']"
+            raise exception.InvalidParameterValue(
+                exp_str %
+                {'capability': capability_name, 'field': field,
+                 'value': value, 'valid_values': ', '.join(valid_values)})
+
+
+def validate_image_properties(ctx, deploy_info, properties):
+    """Validate the image.
+
+    For Glance images it checks that the image exists in Glance and its
+    properties or deployment info contain the properties passed. If it's not a
+    Glance image, it checks that deployment info contains needed properties.
+
+    :param ctx: security context
+    :param deploy_info: the deploy_info to be validated
+    :param properties: the list of image meta-properties to be validated.
+    :raises: InvalidParameterValue if:
+        * connection to glance failed;
+        * authorization for accessing image failed;
+        * HEAD request to image URL failed or returned response code != 200;
+        * HEAD request response does not contain Content-Length header;
+        * the protocol specified in image URL is not supported.
+    :raises: MissingParameterValue if the image doesn't contain
+        the mentioned properties.
+    """
+    image_href = deploy_info['image_source']
+    try:
+        img_service = image_service.get_image_service(image_href, context=ctx)
+        image_props = img_service.show(image_href)['properties']
+    except (exception.GlanceConnectionFailed,
+            exception.ImageNotAuthorized,
+            exception.Invalid):
+        raise exception.InvalidParameterValue(_(
+            "Failed to connect to Glance to get the properties "
+            "of the image %s") % image_href)
+    except exception.ImageNotFound:
+        raise exception.InvalidParameterValue(_(
+            "Image %s can not be found.") % image_href)
+    except exception.ImageRefValidationFailed as e:
+        raise exception.InvalidParameterValue(e)
+
+    missing_props = []
+    for prop in properties:
+        if not (deploy_info.get(prop) or image_props.get(prop)):
+            missing_props.append(prop)
+
+    if missing_props:
+        props = ', '.join(missing_props)
+        raise exception.MissingParameterValue(_(
+            "Image %(image)s is missing the following properties: "
+            "%(properties)s") % {'image': image_href, 'properties': props})
+
+
+def get_boot_option(node):
+    """Gets the boot option.
+
+    :param node: A single Node.
+    :raises: InvalidParameterValue if the capabilities string is not a
+         dict or is malformed.
+    :returns: A string representing the boot option type. Defaults to
+        'netboot'.
+    """
+    capabilities = parse_instance_info_capabilities(node)
+    return capabilities.get('boot_option', 'netboot').lower()

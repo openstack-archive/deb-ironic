@@ -17,7 +17,7 @@
 from ironic.common.i18n import _
 from ironic.db import api as db_api
 from ironic.objects import base
-from ironic.objects import utils
+from ironic.objects import fields as object_fields
 
 
 class Conductor(base.IronicObject):
@@ -25,10 +25,10 @@ class Conductor(base.IronicObject):
     dbapi = db_api.get_instance()
 
     fields = {
-            'id': int,
-            'drivers': utils.list_or_none,
-            'hostname': str,
-            }
+        'id': object_fields.IntegerField(),
+        'drivers': object_fields.ListOfStringsField(nullable=True),
+        'hostname': object_fields.StringField(),
+    }
 
     @staticmethod
     def _from_db_object(conductor, db_obj):
@@ -53,7 +53,7 @@ class Conductor(base.IronicObject):
     def save(self, context):
         """Save is not supported by Conductor objects."""
         raise NotImplementedError(
-                _('Cannot update a conductor record directly.'))
+            _('Cannot update a conductor record directly.'))
 
     @base.remotable
     def refresh(self, context=None):
@@ -72,10 +72,7 @@ class Conductor(base.IronicObject):
         """
         current = self.__class__.get_by_hostname(self._context,
                                                  hostname=self.hostname)
-        for field in self.fields:
-            if (hasattr(self, base.get_attrname(field)) and
-                    self[field] != current[field]):
-                self[field] = current[field]
+        self.obj_refresh(current)
 
     @base.remotable
     def touch(self, context):

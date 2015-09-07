@@ -25,7 +25,6 @@ from ironic.drivers import base
 from ironic.drivers.modules import agent
 from ironic.drivers.modules.amt import management as amt_mgmt
 from ironic.drivers.modules.amt import power as amt_power
-from ironic.drivers.modules import discoverd
 from ironic.drivers.modules.drac import management as drac_mgmt
 from ironic.drivers.modules.drac import power as drac_power
 from ironic.drivers.modules import fake
@@ -33,15 +32,22 @@ from ironic.drivers.modules import iboot
 from ironic.drivers.modules.ilo import inspect as ilo_inspect
 from ironic.drivers.modules.ilo import management as ilo_management
 from ironic.drivers.modules.ilo import power as ilo_power
+from ironic.drivers.modules import inspector
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules.irmc import management as irmc_management
 from ironic.drivers.modules.irmc import power as irmc_power
+from ironic.drivers.modules import iscsi_deploy
+from ironic.drivers.modules.msftocs import management as msftocs_management
+from ironic.drivers.modules.msftocs import power as msftocs_power
 from ironic.drivers.modules import pxe
 from ironic.drivers.modules import seamicro
 from ironic.drivers.modules import snmp
 from ironic.drivers.modules import ssh
+from ironic.drivers.modules.ucs import management as ucs_mgmt
+from ironic.drivers.modules.ucs import power as ucs_power
 from ironic.drivers.modules import virtualbox
+from ironic.drivers.modules import wol
 from ironic.drivers import utils
 
 
@@ -51,6 +57,7 @@ class FakeDriver(base.BaseDriver):
     def __init__(self):
         self.power = fake.FakePower()
         self.deploy = fake.FakeDeploy()
+        self.boot = fake.FakeBoot()
 
         self.a = fake.FakeVendorA()
         self.b = fake.FakeVendorB()
@@ -61,6 +68,7 @@ class FakeDriver(base.BaseDriver):
         self.console = fake.FakeConsole()
         self.management = fake.FakeManagement()
         self.inspect = fake.FakeInspect()
+        self.raid = fake.FakeRAID()
 
 
 class FakeIPMIToolDriver(base.BaseDriver):
@@ -79,8 +87,9 @@ class FakePXEDriver(base.BaseDriver):
 
     def __init__(self):
         self.power = fake.FakePower()
-        self.deploy = pxe.PXEDeploy()
-        self.vendor = pxe.VendorPassthru()
+        self.boot = pxe.PXEBoot()
+        self.deploy = iscsi_deploy.ISCSIDeploy()
+        self.vendor = iscsi_deploy.VendorPassthru()
 
 
 class FakeSSHDriver(base.BaseDriver):
@@ -98,8 +107,8 @@ class FakeIPMINativeDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('pyghmi'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_("Unable to import pyghmi IPMI library"))
+                driver=self.__class__.__name__,
+                reason=_("Unable to import pyghmi IPMI library"))
         self.power = ipminative.NativeIPMIPower()
         self.console = ipminative.NativeIPMIShellinaboxConsole()
         self.deploy = fake.FakeDeploy()
@@ -112,8 +121,8 @@ class FakeSeaMicroDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('seamicroclient'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_("Unable to import seamicroclient library"))
+                driver=self.__class__.__name__,
+                reason=_("Unable to import seamicroclient library"))
         self.power = seamicro.Power()
         self.deploy = fake.FakeDeploy()
         self.management = seamicro.Management()
@@ -136,8 +145,8 @@ class FakeIBootDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('iboot'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_("Unable to import iboot library"))
+                driver=self.__class__.__name__,
+                reason=_("Unable to import iboot library"))
         self.power = iboot.IBootPower()
         self.deploy = fake.FakeDeploy()
 
@@ -148,8 +157,8 @@ class FakeIloDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('proliantutils'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_("Unable to import proliantutils library"))
+                driver=self.__class__.__name__,
+                reason=_("Unable to import proliantutils library"))
         self.power = ilo_power.IloPower()
         self.deploy = fake.FakeDeploy()
         self.management = ilo_management.IloManagement()
@@ -162,8 +171,8 @@ class FakeDracDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('pywsman'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_('Unable to import pywsman library'))
+                driver=self.__class__.__name__,
+                reason=_('Unable to import pywsman library'))
 
         self.power = drac_power.DracPower()
         self.deploy = fake.FakeDeploy()
@@ -176,8 +185,8 @@ class FakeSNMPDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('pysnmp'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_("Unable to import pysnmp library"))
+                driver=self.__class__.__name__,
+                reason=_("Unable to import pysnmp library"))
         self.power = snmp.SNMPPower()
         self.deploy = fake.FakeDeploy()
 
@@ -188,8 +197,8 @@ class FakeIRMCDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('scciclient'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_("Unable to import python-scciclient library"))
+                driver=self.__class__.__name__,
+                reason=_("Unable to import python-scciclient library"))
         self.power = irmc_power.IRMCPower()
         self.deploy = fake.FakeDeploy()
         self.management = irmc_management.IRMCManagement()
@@ -201,15 +210,15 @@ class FakeVirtualBoxDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('pyremotevbox'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_("Unable to import pyremotevbox library"))
+                driver=self.__class__.__name__,
+                reason=_("Unable to import pyremotevbox library"))
         self.power = virtualbox.VirtualBoxPower()
         self.deploy = fake.FakeDeploy()
         self.management = virtualbox.VirtualBoxManagement()
 
 
-class FakeIPMIToolDiscoverdDriver(base.BaseDriver):
-    """Fake Discoverd driver."""
+class FakeIPMIToolInspectorDriver(base.BaseDriver):
+    """Fake Inspector driver."""
 
     def __init__(self):
         self.power = ipmitool.IPMIPower()
@@ -217,10 +226,10 @@ class FakeIPMIToolDiscoverdDriver(base.BaseDriver):
         self.deploy = fake.FakeDeploy()
         self.vendor = ipmitool.VendorPassthru()
         self.management = ipmitool.IPMIManagement()
-        # NOTE(dtantsur): unlike other uses of DiscoverdInspect, this one is
-        # unconditional, as this driver is designed for testing discoverd
+        # NOTE(dtantsur): unlike other uses of Inspector, this one is
+        # unconditional, as this driver is designed for testing inspector
         # integration.
-        self.inspect = discoverd.DiscoverdInspect()
+        self.inspect = inspector.Inspector()
 
 
 class FakeAMTDriver(base.BaseDriver):
@@ -229,8 +238,38 @@ class FakeAMTDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('pywsman'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_("Unable to import pywsman library"))
+                driver=self.__class__.__name__,
+                reason=_("Unable to import pywsman library"))
         self.power = amt_power.AMTPower()
         self.deploy = fake.FakeDeploy()
         self.management = amt_mgmt.AMTManagement()
+
+
+class FakeMSFTOCSDriver(base.BaseDriver):
+    """Fake MSFT OCS driver."""
+
+    def __init__(self):
+        self.power = msftocs_power.MSFTOCSPower()
+        self.deploy = fake.FakeDeploy()
+        self.management = msftocs_management.MSFTOCSManagement()
+
+
+class FakeUcsDriver(base.BaseDriver):
+    """Fake UCS driver."""
+
+    def __init__(self):
+        if not importutils.try_import('UcsSdk'):
+            raise exception.DriverLoadError(
+                driver=self.__class__.__name__,
+                reason=_("Unable to import UcsSdk library"))
+        self.power = ucs_power.Power()
+        self.deploy = fake.FakeDeploy()
+        self.management = ucs_mgmt.UcsManagement()
+
+
+class FakeWakeOnLanDriver(base.BaseDriver):
+    """Fake Wake-On-Lan driver."""
+
+    def __init__(self):
+        self.power = wol.WakeOnLanPower()
+        self.deploy = fake.FakeDeploy()

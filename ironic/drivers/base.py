@@ -22,17 +22,23 @@ import collections
 import copy
 import functools
 import inspect
+import json
+import os
 
 import eventlet
+from oslo_log import log as logging
+from oslo_service import periodic_task
 from oslo_utils import excutils
 import six
 
 from ironic.common import exception
 from ironic.common.i18n import _LE
-from ironic.openstack.common import log as logging
-from ironic.openstack.common import periodic_task
+from ironic.common import raid
 
 LOG = logging.getLogger(__name__)
+
+RAID_CONFIG_SCHEMA = os.path.join(os.path.dirname(__file__),
+                                  'raid_config_schema.json')
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -88,6 +94,14 @@ class BaseDriver(object):
     """
     standard_interfaces.append('management')
 
+    boot = None
+    """`Standard` attribute for boot related features.
+
+    A reference to an instance of :class:BootInterface.
+    May be None, if unsupported by a driver.
+    """
+    standard_interfaces.append('boot')
+
     vendor = None
     """Attribute for accessing any vendor-specific extensions.
 
@@ -102,6 +116,14 @@ class BaseDriver(object):
     May be None, if unsupported by a driver.
     """
     standard_interfaces.append('inspect')
+
+    raid = None
+    """`Standard` attribute for RAID related features.
+
+    A reference to an instance of :class:RaidInterface.
+    May be None, if unsupported by a driver.
+    """
+    standard_interfaces.append('raid')
 
     @abc.abstractmethod
     def __init__(self):
@@ -132,7 +154,12 @@ class BaseInterface(object):
         # the conductor. We use __new__ instead of __init___
         # to avoid breaking backwards compatibility with all the drivers.
         # We want to return all steps, regardless of priority.
-        instance = super(BaseInterface, cls).__new__(cls, *args, **kwargs)
+
+        super_new = super(BaseInterface, cls).__new__
+        if super_new is object.__new__:
+            instance = super_new(cls)
+        else:
+            instance = super_new(cls, *args, **kwargs)
         instance.clean_steps = []
         for n, method in inspect.getmembers(instance, inspect.ismethod):
             if getattr(method, '_is_clean_step', False):
@@ -164,7 +191,7 @@ class BaseInterface(object):
         A clean step should take a single argument: a TaskManager object.
         A step can be executed synchronously or asynchronously. A step should
         return None if the method has completed synchronously or
-        states.CLEANING if the step will continue to execute asynchronously.
+        states.CLEANWAIT if the step will continue to execute asynchronously.
         If the step executes asynchronously, it should issue a call to the
         'continue_node_clean' RPC, so the conductor can begin the next
         clean step.
@@ -172,7 +199,7 @@ class BaseInterface(object):
         :param task: A TaskManager object
         :param step: The clean step dictionary representing the step to execute
         :returns: None if this method has completed synchronously, or
-            states.CLEANING if the step will continue to execute
+            states.CLEANWAIT if the step will continue to execute
             asynchronously.
         """
         return getattr(self, step['step'])(task)
@@ -299,7 +326,7 @@ class DeployInterface(BaseInterface):
 
         :param task: a TaskManager instance containing the node to act on.
         :returns: If this function is going to be asynchronous, should return
-            `states.CLEANING`. Otherwise, should return `None`. The interface
+            `states.CLEANWAIT`. Otherwise, should return `None`. The interface
             will need to call _get_cleaning_steps and then RPC to
             continue_node_cleaning
         """
@@ -317,6 +344,88 @@ class DeployInterface(BaseInterface):
         :param task: a TaskManager instance containing the node to act on.
         """
         pass
+
+
+@six.add_metaclass(abc.ABCMeta)
+class BootInterface(object):
+    """Interface for boot-related actions."""
+
+    @abc.abstractmethod
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+    @abc.abstractmethod
+    def validate(self, task):
+        """Validate the driver-specific info for booting.
+
+        This method validates the driver-specific info for booting the
+        ramdisk and instance on the node.  If invalid, raises an
+        exception; otherwise returns None.
+
+        :param task: a task from TaskManager.
+        :returns: None
+        :raises: InvalidParameterValue
+        :raises: MissingParameterValue
+        """
+
+    @abc.abstractmethod
+    def prepare_ramdisk(self, task, ramdisk_params):
+        """Prepares the boot of Ironic ramdisk.
+
+        This method prepares the boot of the deploy ramdisk after
+        reading relevant information from the node's database.
+
+        :param task: a task from TaskManager.
+        :param ramdisk_params: the options to be passed to the ironic ramdisk.
+            Different implementations might want to boot the ramdisk in
+            different ways by passing parameters to them.  For example,
+
+            - When DIB ramdisk is booted to deploy a node, it takes the
+              parameters iscsi_target_iqn, deployment_id, ironic_api_url, etc.
+            - When Agent ramdisk is booted to deploy a node, it takes the
+              parameters ipa-driver-name, ipa-api-url, root_device, etc.
+
+            Other implementations can make use of ramdisk_params to pass such
+            information.  Different implementations of boot interface will
+            have different ways of passing parameters to the ramdisk.
+        :returns: None
+        """
+
+    @abc.abstractmethod
+    def clean_up_ramdisk(self, task):
+        """Cleans up the boot of ironic ramdisk.
+
+        This method cleans up the environment that was setup for booting the
+        deploy ramdisk.
+
+        :param task: a task from TaskManager.
+        :returns: None
+        """
+
+    @abc.abstractmethod
+    def prepare_instance(self, task):
+        """Prepares the boot of instance.
+
+        This method prepares the boot of the instance after reading
+        relevant information from the node's database.
+
+        :param task: a task from TaskManager.
+        :returns: None
+        """
+
+    @abc.abstractmethod
+    def clean_up_instance(self, task):
+        """Cleans up the boot of instance.
+
+        This method cleans up the environment that was setup for booting
+        the instance.
+
+        :param task: a task from TaskManager.
+        :returns: None
+        """
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -469,7 +578,7 @@ VendorMetadata = collections.namedtuple('VendorMetadata', ['method',
 
 
 def _passthru(http_methods, method=None, async=True, driver_passthru=False,
-              description=None):
+              description=None, attach=False):
     """A decorator for registering a function as a passthru function.
 
     Decorator ensures function is ready to catch any ironic exceptions
@@ -490,6 +599,10 @@ def _passthru(http_methods, method=None, async=True, driver_passthru=False,
     :param driver_passthru: Boolean value. True if this is a driver vendor
                             passthru method, and False if it is a node
                             vendor passthru method.
+    :param attach: Boolean value. True if the return value should be
+                   attached to the response object, and False if the return
+                   value should be returned in the response body.
+                   Defaults to False.
     :param description: a string shortly describing what the method does.
 
     """
@@ -502,7 +615,8 @@ def _passthru(http_methods, method=None, async=True, driver_passthru=False,
         description_ = description or ''
         metadata = VendorMetadata(api_method, {'http_methods': supported_,
                                                'async': async,
-                                               'description': description_})
+                                               'description': description_,
+                                               'attach': attach})
         if driver_passthru:
             func._driver_metadata = metadata
         else:
@@ -525,14 +639,16 @@ def _passthru(http_methods, method=None, async=True, driver_passthru=False,
     return handle_passthru
 
 
-def passthru(http_methods, method=None, async=True, description=None):
+def passthru(http_methods, method=None, async=True, description=None,
+             attach=False):
     return _passthru(http_methods, method, async, driver_passthru=False,
-                     description=description)
+                     description=description, attach=attach)
 
 
-def driver_passthru(http_methods, method=None, async=True, description=None):
+def driver_passthru(http_methods, method=None, async=True, description=None,
+                    attach=False):
     return _passthru(http_methods, method, async, driver_passthru=True,
-                     description=description)
+                     description=description, attach=attach)
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -548,7 +664,11 @@ class VendorInterface(object):
     """
 
     def __new__(cls, *args, **kwargs):
-        inst = super(VendorInterface, cls).__new__(cls, *args, **kwargs)
+        super_new = super(VendorInterface, cls).__new__
+        if super_new is object.__new__:
+            inst = super_new(cls)
+        else:
+            inst = super_new(cls, *args, **kwargs)
 
         inst.vendor_routes = {}
         inst.driver_routes = {}
@@ -628,10 +748,18 @@ class ManagementInterface(BaseInterface):
         :raises: MissingParameterValue
         """
 
+    @property
+    def get_supported_boot_devices_task_arg(self):
+        # NOTE(MattMan): remove this method in next cycle(Mitaka) as task
+        #                parameter will be mandatory then.
+        argspec = inspect.getargspec(self.get_supported_boot_devices)
+        return len(argspec.args) > 1
+
     @abc.abstractmethod
-    def get_supported_boot_devices(self):
+    def get_supported_boot_devices(self, task):
         """Get a list of the supported boot devices.
 
+        :param task: a task from TaskManager.
         :returns: A list with the supported boot devices defined
                   in :mod:`ironic.common.boot_devices`.
         """
@@ -719,6 +847,9 @@ class ManagementInterface(BaseInterface):
 class InspectInterface(object):
     """Interface for inspection-related actions."""
 
+    ESSENTIAL_PROPERTIES = {'memory_mb', 'local_gb', 'cpus', 'cpu_arch'}
+    """The properties required by scheduler/deploy."""
+
     @abc.abstractmethod
     def get_properties(self):
         """Return the properties of the interface.
@@ -752,16 +883,100 @@ class InspectInterface(object):
         """
 
 
+class RAIDInterface(BaseInterface):
+    interface_type = 'raid'
+
+    def __init__(self):
+        """Constructor for RAIDInterface class."""
+        with open(RAID_CONFIG_SCHEMA, 'r') as raid_schema_fobj:
+            self.raid_schema = json.load(raid_schema_fobj)
+
+    @abc.abstractmethod
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+
+    def validate(self, task):
+        """Validate a given RAID configuration.
+
+        This method validates the properties defined by Ironic for RAID
+        configuration. Driver implementations of this interface can override
+        this method for doing more validations.
+
+        :param task: a TaskManager instance.
+        :raises: InvalidParameterValue, if the RAID configuration is invalid.
+        """
+        target_raid_config = task.node.target_raid_config
+        if not target_raid_config:
+            return
+
+        raid.validate_configuration(target_raid_config, self.raid_schema)
+
+    @abc.abstractmethod
+    def create_configuration(self, task,
+                             create_root_volume=True,
+                             create_nonroot_volumes=True):
+        """Creates RAID configuration on the given node.
+
+        This method creates a RAID configuration on the given node.
+        It assumes that the target RAID configuration is already
+        available in node.target_raid_config.
+        Implementations of this interface are supposed to read the
+        RAID configuration from node.target_raid_config. After the
+        RAID configuration is done (either in this method OR in a call-back
+        method), ironic.common.raid.update_raid_info()
+        may be called to sync the node's RAID-related information with the
+        RAID configuration applied on the node.
+
+        :param task: a TaskManager instance.
+        :param create_root_volume: Setting this to False indicates
+            not to create root volume that is specified in the node's
+            target_raid_config. Default value is True.
+        :param create_nonroot_volumes: Setting this to False indicates
+            not to create non-root volumes (all except the root volume) in the
+            node's target_raid_config.  Default value is True.
+        :returns: states.CLEANWAIT if RAID configuration is in progress
+            asynchronously or None if it is complete.
+        """
+
+    @abc.abstractmethod
+    def delete_configuration(self, task):
+        """Deletes RAID configuration on the given node.
+
+        This method deletes the RAID configuration on the give node.
+        After RAID configuration is deleted, node.raid_config should be
+        cleared by the implementation.
+
+        :param task: a TaskManager instance.
+        :returns: states.CLEANWAIT if deletion is in progress
+            asynchronously or None if it is complete.
+        """
+
+    def get_logical_disk_properties(self):
+        """Get the properties that can be specified for logical disks.
+
+        This method returns a dictionary containing the properties that can
+        be specified for logical disks and a textual description for them.
+
+        :returns: A dictionary containing properties that can be mentioned for
+            logical disks and a textual description for them.
+        """
+        return raid.get_logical_disk_properties(self.raid_schema)
+
+
 def clean_step(priority):
     """Decorator for cleaning and zapping steps.
 
-    If priority is greater than 0, the function will be executed as part of the
-    CLEANING state for any node using the interface with the decorated clean
-    step. During CLEANING, a list of steps will be ordered by priority for all
-    interfaces associated with the node, and then execute_clean_step() will be
-    called on each step. Steps will be executed based on priority, with the
-    highest priority step being called first, the next highest priority
-    being call next, and so on.
+    If priority is greater than 0, the function will be executed as part
+    of the CLEANING (sync) or CLEANWAIT (async) state for any node using
+    the interface with the decorated clean step. During the cleaning,
+    a list of steps will be ordered by priority for all interfaces
+    associated with the node, and then execute_clean_step() will be
+    called on each step. Steps will be executed based on priority,
+    with the highest priority step being called first, the next highest
+    priority being call next, and so on.
 
     Decorated clean steps should take a single argument, a TaskManager object.
 
@@ -773,7 +988,7 @@ def clean_step(priority):
     Clean steps can be either synchronous or asynchronous. If the step is
     synchronous, it should return `None` when finished, and the conductor will
     continue on to the next step. If the step is asynchronous, the step should
-    return `states.CLEANING` to signal to the conductor. When the step is
+    return `states.CLEANWAIT` to signal to the conductor. When the step is
     complete, the step should make an RPC call to `continue_node_clean` to move
     to the next step in cleaning.
 

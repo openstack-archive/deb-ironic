@@ -24,6 +24,8 @@ from ironic.tests import base
 
 
 class MockResponse(object):
+    status_code = 200
+
     def __init__(self, text):
         assert isinstance(text, six.string_types)
         self.text = text
@@ -55,8 +57,13 @@ class TestAgentClient(base.TestCase):
     def setUp(self):
         super(TestAgentClient, self).setUp()
         self.client = agent_client.AgentClient()
-        self.client.session = mock.Mock(autospec=requests.Session)
+        self.client.session = mock.MagicMock(autospec=requests.Session)
         self.node = MockNode()
+
+    def test_content_type_header(self):
+        client = agent_client.AgentClient()
+        self.assertEqual('application/json',
+                         client.session.headers['Content-Type'])
 
     def test__get_command_url(self):
         command_url = self.client._get_command_url(self.node)
@@ -84,14 +91,12 @@ class TestAgentClient(base.TestCase):
 
         url = self.client._get_command_url(self.node)
         body = self.client._get_command_body(method, params)
-        headers = {'Content-Type': 'application/json'}
 
         response = self.client._command(self.node, method, params)
         self.assertEqual(response, response_data)
         self.client.session.post.assert_called_once_with(
             url,
             data=body,
-            headers=headers,
             params={'wait': 'false'})
 
     def test__command_fail_json(self):
@@ -103,7 +108,6 @@ class TestAgentClient(base.TestCase):
 
         url = self.client._get_command_url(self.node)
         body = self.client._get_command_body(method, params)
-        headers = {'Content-Type': 'application/json'}
 
         self.assertRaises(exception.IronicException,
                           self.client._command,
@@ -111,33 +115,32 @@ class TestAgentClient(base.TestCase):
         self.client.session.post.assert_called_once_with(
             url,
             data=body,
-            headers=headers,
             params={'wait': 'false'})
 
     def test_get_commands_status(self):
-        with mock.patch.object(self.client.session, 'get') as mock_get:
-            res = mock.Mock()
+        with mock.patch.object(self.client.session, 'get',
+                               autospec=True) as mock_get:
+            res = mock.MagicMock(spec_set=['json'])
             res.json.return_value = {'commands': []}
             mock_get.return_value = res
             self.assertEqual([], self.client.get_commands_status(self.node))
 
-    @mock.patch('uuid.uuid4', mock.MagicMock(return_value='uuid'))
+    @mock.patch('uuid.uuid4', mock.MagicMock(spec_set=[], return_value='uuid'))
     def test_prepare_image(self):
-        self.client._command = mock.Mock()
+        self.client._command = mock.MagicMock(spec_set=[])
         image_info = {'image_id': 'image'}
         params = {'image_info': image_info}
 
         self.client.prepare_image(self.node,
                                   image_info,
                                   wait=False)
-        self.client._command.assert_called_once_with(node=self.node,
-                                         method='standby.prepare_image',
-                                         params=params,
-                                         wait=False)
+        self.client._command.assert_called_once_with(
+            node=self.node, method='standby.prepare_image',
+            params=params, wait=False)
 
-    @mock.patch('uuid.uuid4', mock.MagicMock(return_value='uuid'))
+    @mock.patch('uuid.uuid4', mock.MagicMock(spec_set=[], return_value='uuid'))
     def test_prepare_image_with_configdrive(self):
-        self.client._command = mock.Mock()
+        self.client._command = mock.MagicMock(spec_set=[])
         configdrive_url = 'http://swift/configdrive'
         self.node.instance_info['configdrive'] = configdrive_url
         image_info = {'image_id': 'image'}
@@ -149,26 +152,24 @@ class TestAgentClient(base.TestCase):
         self.client.prepare_image(self.node,
                                   image_info,
                                   wait=False)
-        self.client._command.assert_called_once_with(node=self.node,
-                                         method='standby.prepare_image',
-                                         params=params,
-                                         wait=False)
+        self.client._command.assert_called_once_with(
+            node=self.node, method='standby.prepare_image',
+            params=params, wait=False)
 
-    @mock.patch('uuid.uuid4', mock.MagicMock(return_value='uuid'))
+    @mock.patch('uuid.uuid4', mock.MagicMock(spec_set=[], return_value='uuid'))
     def test_start_iscsi_target(self):
-        self.client._command = mock.Mock()
+        self.client._command = mock.MagicMock(spec_set=[])
         iqn = 'fake-iqn'
         params = {'iqn': iqn}
 
         self.client.start_iscsi_target(self.node, iqn)
-        self.client._command.assert_called_once_with(node=self.node,
-                                         method='iscsi.start_iscsi_target',
-                                         params=params,
-                                         wait=True)
+        self.client._command.assert_called_once_with(
+            node=self.node, method='iscsi.start_iscsi_target',
+            params=params, wait=True)
 
-    @mock.patch('uuid.uuid4', mock.MagicMock(return_value='uuid'))
+    @mock.patch('uuid.uuid4', mock.MagicMock(spec_set=[], return_value='uuid'))
     def test_install_bootloader(self):
-        self.client._command = mock.Mock()
+        self.client._command = mock.MagicMock(spec_set=[])
         root_uuid = 'fake-root-uuid'
         efi_system_part_uuid = 'fake-efi-system-part-uuid'
         params = {'root_uuid': root_uuid,
@@ -181,7 +182,7 @@ class TestAgentClient(base.TestCase):
             wait=True)
 
     def test_get_clean_steps(self):
-        self.client._command = mock.Mock()
+        self.client._command = mock.MagicMock(spec_set=[])
         ports = []
         expected_params = {
             'node': self.node.as_dict(),
@@ -190,13 +191,12 @@ class TestAgentClient(base.TestCase):
 
         self.client.get_clean_steps(self.node,
                                     ports)
-        self.client._command.assert_called_once_with(node=self.node,
-                                         method='clean.get_clean_steps',
-                                         params=expected_params,
-                                         wait=True)
+        self.client._command.assert_called_once_with(
+            node=self.node, method='clean.get_clean_steps',
+            params=expected_params, wait=True)
 
     def test_execute_clean_step(self):
-        self.client._command = mock.Mock()
+        self.client._command = mock.MagicMock(spec_set=[])
         ports = []
         step = {'priority': 10, 'step': 'erase_devices', 'interface': 'deploy'}
         expected_params = {
@@ -209,7 +209,12 @@ class TestAgentClient(base.TestCase):
         self.client.execute_clean_step(step,
                                        self.node,
                                        ports)
-        self.client._command.assert_called_once_with(node=self.node,
-                                         method='clean.execute_clean_step',
-                                         params=expected_params,
-                                         wait=False)
+        self.client._command.assert_called_once_with(
+            node=self.node, method='clean.execute_clean_step',
+            params=expected_params, wait=False)
+
+    def test_power_off(self):
+        self.client._command = mock.MagicMock(spec_set=[])
+        self.client.power_off(self.node)
+        self.client._command.assert_called_once_with(
+            node=self.node, method='standby.power_off', params={})

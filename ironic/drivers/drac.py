@@ -19,10 +19,13 @@ from oslo_utils import importutils
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.drivers import base
-from ironic.drivers.modules import discoverd
 from ironic.drivers.modules.drac import management
 from ironic.drivers.modules.drac import power
+from ironic.drivers.modules.drac import vendor_passthru
+from ironic.drivers.modules import inspector
+from ironic.drivers.modules import iscsi_deploy
 from ironic.drivers.modules import pxe
+from ironic.drivers import utils
 
 
 class PXEDracDriver(base.BaseDriver):
@@ -31,12 +34,23 @@ class PXEDracDriver(base.BaseDriver):
     def __init__(self):
         if not importutils.try_import('pywsman'):
             raise exception.DriverLoadError(
-                    driver=self.__class__.__name__,
-                    reason=_('Unable to import pywsman library'))
+                driver=self.__class__.__name__,
+                reason=_('Unable to import pywsman library'))
 
         self.power = power.DracPower()
-        self.deploy = pxe.PXEDeploy()
+        self.boot = pxe.PXEBoot()
+        self.deploy = iscsi_deploy.ISCSIDeploy()
         self.management = management.DracManagement()
-        self.vendor = pxe.VendorPassthru()
-        self.inspect = discoverd.DiscoverdInspect.create_if_enabled(
+        self.iscsi_vendor = iscsi_deploy.VendorPassthru()
+        self.drac_vendor = vendor_passthru.DracVendorPassthru()
+        self.mapping = {'pass_deploy_info': self.iscsi_vendor,
+                        'heartbeat': self.iscsi_vendor,
+                        'pass_bootloader_install_info': self.iscsi_vendor,
+                        'get_bios_config': self.drac_vendor,
+                        'set_bios_config': self.drac_vendor,
+                        'commit_bios_config': self.drac_vendor,
+                        'abandon_bios_config': self.drac_vendor,
+                        }
+        self.vendor = utils.MixinVendorInterface(self.mapping)
+        self.inspect = inspector.Inspector.create_if_enabled(
             'PXEDracDriver')

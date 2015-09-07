@@ -47,9 +47,9 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     def setUp(self):
         super(ConsoleUtilsTestCase, self).setUp()
         self.node = obj_utils.get_test_node(
-                self.context,
-                driver='fake_ipmitool',
-                driver_info=INFO_DICT)
+            self.context,
+            driver='fake_ipmitool',
+            driver_info=INFO_DICT)
         self.info = ipmi._parse_driver_info(self.node)
 
     def test__get_console_pid_dir(self):
@@ -59,9 +59,9 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
         self.assertEqual(pid_dir, dir)
 
     def test__get_console_pid_dir_tempdir(self):
-        tempdir = tempfile.gettempdir()
+        self.config(tempdir='/tmp/fake_dir')
         dir = console_utils._get_console_pid_dir()
-        self.assertEqual(tempdir, dir)
+        self.assertEqual(CONF.tempdir, dir)
 
     @mock.patch.object(os, 'makedirs', autospec=True)
     @mock.patch.object(os.path, 'exists', autospec=True)
@@ -94,8 +94,8 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     def test__get_console_pid_file(self, mock_dir):
         mock_dir.return_value = tempfile.gettempdir()
         expected_path = '%(tempdir)s/%(uuid)s.pid' % {
-                            'tempdir': mock_dir.return_value,
-                            'uuid': self.info.get('uuid')}
+            'tempdir': mock_dir.return_value,
+            'uuid': self.info.get('uuid')}
         path = console_utils._get_console_pid_file(self.info['uuid'])
         self.assertEqual(expected_path, path)
         mock_dir.assert_called_once_with()
@@ -154,7 +154,8 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     @mock.patch.object(console_utils, '_get_console_pid', autospec=True)
     def test__stop_console_nopid(self, mock_pid, mock_execute, mock_unlink):
         pid_file = console_utils._get_console_pid_file(self.info['uuid'])
-        mock_pid.side_effect = exception.NoConsolePid(pid_path="/tmp/blah")
+        mock_pid.side_effect = iter(
+            [exception.NoConsolePid(pid_path="/tmp/blah")])
 
         self.assertRaises(exception.NoConsolePid,
                           console_utils._stop_console,
@@ -170,7 +171,7 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     def test__stop_console_nokill(self, mock_pid, mock_execute, mock_unlink):
         pid_file = console_utils._get_console_pid_file(self.info['uuid'])
         mock_pid.return_value = '12345'
-        mock_execute.side_effect = processutils.ProcessExecutionError()
+        mock_execute.side_effect = iter([processutils.ProcessExecutionError()])
 
         self.assertRaises(processutils.ProcessExecutionError,
                           console_utils._stop_console,
@@ -181,21 +182,30 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
                                              check_exit_code=[0, 99])
         mock_unlink.assert_called_once_with(pid_file)
 
-    def test_get_shellinabox_console_url(self):
-        generated_url = console_utils.get_shellinabox_console_url(
-                self.info['port'])
+    def _get_shellinabox_console(self, scheme):
+        generated_url = (
+            console_utils.get_shellinabox_console_url(self.info['port']))
         console_host = CONF.my_ip
         if netutils.is_valid_ipv6(console_host):
             console_host = '[%s]' % console_host
-        http_url = "http://%s:%s" % (console_host, self.info['port'])
-        self.assertEqual(generated_url, http_url)
+        http_url = "%s://%s:%s" % (scheme, console_host, self.info['port'])
+        self.assertEqual(http_url, generated_url)
+
+    def test_get_shellinabox_console_url(self):
+        self._get_shellinabox_console('http')
+
+    def test_get_shellinabox_console_https_url(self):
+        # specify terminal_cert_dir in /etc/ironic/ironic.conf
+        self.config(terminal_cert_dir='/tmp', group='console')
+        # use https
+        self._get_shellinabox_console('https')
 
     def test_make_persistent_password_file(self):
         filepath = '%(tempdir)s/%(node_uuid)s' % {
-                'tempdir': tempfile.gettempdir(),
-                'node_uuid': self.info['uuid']}
+            'tempdir': tempfile.gettempdir(),
+            'node_uuid': self.info['uuid']}
         password = ''.join([random.choice(string.ascii_letters)
-                            for n in xrange(16)])
+                            for n in range(16)])
         console_utils.make_persistent_password_file(filepath, password)
         # make sure file exists
         self.assertTrue(os.path.exists(filepath))
@@ -210,8 +220,8 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     def test_make_persistent_password_file_fail(self, mock_chmod):
         mock_chmod.side_effect = IOError()
         filepath = '%(tempdir)s/%(node_uuid)s' % {
-                'tempdir': tempfile.gettempdir(),
-                'node_uuid': self.info['uuid']}
+            'tempdir': tempfile.gettempdir(),
+            'node_uuid': self.info['uuid']}
         self.assertRaises(exception.PasswordFileFailedToCreate,
                           console_utils.make_persistent_password_file,
                           filepath,
@@ -231,8 +241,8 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
         self.assertTrue(os.path.exists(pid_file))
 
         console_utils.start_shellinabox_console(self.info['uuid'],
-                                                 self.info['port'],
-                                                 'ls&')
+                                                self.info['port'],
+                                                'ls&')
 
         mock_stop.assert_called_once_with(self.info['uuid'])
         mock_dir_exists.assert_called_once_with()
@@ -248,7 +258,7 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     def test_start_shellinabox_console_nopid(self, mock_stop, mock_dir_exists,
                                              mock_popen):
         # no existing PID file before starting
-        mock_stop.side_effect = exception.NoConsolePid('/tmp/blah')
+        mock_stop.side_effect = iter([exception.NoConsolePid('/tmp/blah')])
         mock_popen.return_value.poll.return_value = 0
 
         # touch the pid file
@@ -257,8 +267,8 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
         self.assertTrue(os.path.exists(pid_file))
 
         console_utils.start_shellinabox_console(self.info['uuid'],
-                                                 self.info['port'],
-                                                 'ls&')
+                                                self.info['port'],
+                                                'ls&')
 
         mock_stop.assert_called_once_with(self.info['uuid'])
         mock_dir_exists.assert_called_once_with()
@@ -296,7 +306,8 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     def test_start_shellinabox_console_fail_nopiddir(self, mock_stop,
                                                      mock_dir_exists,
                                                      mock_popen):
-        mock_dir_exists.side_effect = exception.ConsoleError(message='fail')
+        mock_dir_exists.side_effect = iter(
+            [exception.ConsoleError(message='fail')])
         mock_popen.return_value.poll.return_value = 0
 
         self.assertRaises(exception.ConsoleError,
@@ -318,7 +329,7 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
 
     @mock.patch.object(console_utils, '_stop_console', autospec=True)
     def test_stop_shellinabox_console_fail_nopid(self, mock_stop):
-        mock_stop.side_effect = exception.NoConsolePid('/tmp/blah')
+        mock_stop.side_effect = iter([exception.NoConsolePid('/tmp/blah')])
 
         console_utils.stop_shellinabox_console(self.info['uuid'])
 
@@ -326,7 +337,7 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
 
     @mock.patch.object(console_utils, '_stop_console', autospec=True)
     def test_stop_shellinabox_console_fail_nokill(self, mock_stop):
-        mock_stop.side_effect = processutils.ProcessExecutionError()
+        mock_stop.side_effect = iter([processutils.ProcessExecutionError()])
 
         self.assertRaises(exception.ConsoleError,
                           console_utils.stop_shellinabox_console,

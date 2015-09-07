@@ -11,6 +11,53 @@ The Ironic service is tightly coupled with the Ironic driver that is shipped
 with Nova. Currently, some special considerations must be taken into account
 when upgrading your cloud from previous versions of OpenStack.
 
+Upgrading from Kilo to Liberty
+==============================
+
+In-band Inspection
+------------------
+
+If you used in-band inspection with **ironic-discoverd**, you have to install
+**python-ironic-inspector-client** during the upgrade. This package contains a
+client module for in-band inspection service, which was previously part of
+**ironic-discoverd** package. Ironic Liberty supports **ironic-discoverd**
+service, but does not support its in-tree client module. Please refer to
+`ironic-inspector version support matrix
+<https://github.com/openstack/ironic-inspector#version-support-matrix>`_ for
+details on which Ironic version can work with which
+**ironic-inspector**/**ironic-discoverd** version.
+
+It's also highly recommended that you switch to using **ironic-inspector**,
+which is a newer (and compatible on API level) version of the same service.
+
+The discoverd to inspector upgrade procedure:
+
+#. Install **ironic-inspector** on the machine where you have
+   **ironic-discoverd** (usually the same as conductor).
+
+#. (Recommended) update the **ironic-inspector** configuration file to stop
+   using deprecated configuration options, as marked by the comments in the
+   `example.conf
+   <https://github.com/openstack/ironic-inspector/blob/master/example.conf>`_.
+
+   The file name is provided on command line when starting
+   **ironic-discoverd**, and the previously recommended default was
+   ``/etc/ironic-discoverd/discoverd.conf``. In this case, for the sake of
+   consistency it's recommended you move the configuration file to
+   ``/etc/ironic-inspector/inspector.conf``.
+
+#. Shutdown **ironic-discoverd**, start **ironic-inspector**.
+
+#. During upgrade of each conductor instance:
+
+    #. Shutdown the conductor
+    #. Uninstall **ironic-discoverd**,
+       install **python-ironic-inspector-client**
+    #. Update the conductor Kilo -> Liberty
+    #. (Recommended) update ``ironic.conf`` to use ``[inspector]`` section
+       instead of ``[discoverd]`` (option names are the same)
+    #. Start the conductor
+
 Upgrading from Juno to Kilo
 ===========================
 
@@ -27,10 +74,23 @@ your Nova and Ironic services are as follows:
 - Install new python-ironicclient code.
 - Restart Nova services.
 - Install new Ironic code, run database migrations, restart Ironic services.
-- Edit nova.conf and set force_config_drive to your liking, restaring
+- Edit nova.conf and set force_config_drive to your liking, restarting
   nova-compute if necessary.
 
 Note that during the period between Nova's upgrade and Ironic's upgrades,
 instances can still be provisioned to nodes, however, any attempt by users
 to specify a config drive for an instance will cause error until Ironic's
 upgrade has completed.
+
+Cleaning
+--------
+A new feature in Kilo is support for the cleaning of nodes between workloads to
+ensure the node is ready for another workload. This can include erasing the
+hard drives, updating firmware, and other steps. For more information, see
+:ref:`cleaning`.
+
+If Ironic is configured with cleaning enabled (defaults to True) and to use
+Neutron as the DHCP provider (also the default), you will need to set the
+`cleaning_network_uuid` option in the Ironic configuration file before starting
+the Kilo Ironic service. See :ref:`CleaningNetworkSetup` for information on
+how to set up the cleaning network for Ironic.

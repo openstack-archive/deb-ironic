@@ -30,19 +30,20 @@ eventlet.monkey_patch(os=False)
 import fixtures
 from oslo_config import cfg
 from oslo_context import context as ironic_context
+from oslo_log import log as logging
 import testtools
 
 from ironic.common import hash_ring
 from ironic.objects import base as objects_base
-from ironic.openstack.common import log as logging
 from ironic.tests import conf_fixture
 from ironic.tests import policy_fixture
 
 
 CONF = cfg.CONF
+logging.register_options(CONF)
 CONF.set_override('use_stderr', False)
 
-logging.setup('ironic')
+logging.setup(CONF, 'ironic')
 
 
 class ReplaceModule(fixtures.Fixture):
@@ -101,7 +102,7 @@ class TestCase(testtools.TestCase):
         # registry
         objects_base.IronicObject.indirection_api = None
         self._base_test_obj_backup = copy.copy(
-                objects_base.IronicObject._obj_classes)
+            objects_base.IronicObject._obj_classes)
         self.addCleanup(self._restore_obj_registry)
 
         self.addCleanup(self._clear_attrs)
@@ -123,7 +124,7 @@ class TestCase(testtools.TestCase):
     def config(self, **kw):
         """Override config options for a test."""
         group = kw.pop('group', None)
-        for k, v in kw.iteritems():
+        for k, v in kw.items():
             CONF.set_override(k, v, group)
 
     def path_get(self, project_file=None):

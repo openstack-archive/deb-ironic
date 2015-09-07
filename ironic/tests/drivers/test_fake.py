@@ -37,7 +37,7 @@ class FakeDriverTestCase(db_base.DbTestCase):
         mgr_utils.mock_the_extension_manager()
         self.driver = driver_factory.get_driver("fake")
         self.node = obj_utils.get_test_node(self.context)
-        self.task = mock.Mock(spec=task_manager.TaskManager)
+        self.task = mock.MagicMock(spec=task_manager.TaskManager)
         self.task.shared = False
         self.task.node = self.node
         self.task.driver = self.driver
@@ -48,7 +48,7 @@ class FakeDriverTestCase(db_base.DbTestCase):
         self.assertIsInstance(self.driver.deploy, driver_base.DeployInterface)
         self.assertIsInstance(self.driver.vendor, driver_base.VendorInterface)
         self.assertIsInstance(self.driver.console,
-                                                  driver_base.ConsoleInterface)
+                              driver_base.ConsoleInterface)
         self.assertIsNone(self.driver.rescue)
 
     def test_get_properties(self):
@@ -101,8 +101,9 @@ class FakeDriverTestCase(db_base.DbTestCase):
 
     def test_management_interface_get_supported_boot_devices(self):
         expected = [boot_devices.PXE]
-        self.assertEqual(expected,
-                         self.driver.management.get_supported_boot_devices())
+        self.assertEqual(
+            expected,
+            self.driver.management.get_supported_boot_devices(self.task))
 
     def test_management_interface_get_boot_device(self):
         expected = {'boot_device': boot_devices.PXE, 'persistent': False}

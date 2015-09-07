@@ -20,9 +20,9 @@ from wsme import types as wtypes
 
 from ironic.api.controllers import base
 from ironic.api.controllers import link
+from ironic.api.controllers.v1 import utils as api_utils
 from ironic.api import expose
 from ironic.common import exception
-from ironic.common.i18n import _
 
 
 # Property information for drivers:
@@ -68,9 +68,9 @@ class Driver(base.APIBase):
                                 pecan.request.host_url,
                                 'drivers', name),
             link.Link.make_link('bookmark',
-                                 pecan.request.host_url,
-                                 'drivers', name,
-                                 bookmark=True)
+                                pecan.request.host_url,
+                                'drivers', name,
+                                bookmark=True)
         ]
         return driver
 
@@ -127,13 +127,13 @@ class DriverPassthruController(rest.RestController):
         if driver_name not in _VENDOR_METHODS:
             topic = pecan.request.rpcapi.get_topic_for_driver(driver_name)
             ret = pecan.request.rpcapi.get_driver_vendor_passthru_methods(
-                        pecan.request.context, driver_name, topic=topic)
+                pecan.request.context, driver_name, topic=topic)
             _VENDOR_METHODS[driver_name] = ret
 
         return _VENDOR_METHODS[driver_name]
 
     @expose.expose(wtypes.text, wtypes.text, wtypes.text,
-                         body=wtypes.text)
+                   body=wtypes.text)
     def _default(self, driver_name, method, data=None):
         """Call a driver API extension.
 
@@ -142,19 +142,9 @@ class DriverPassthruController(rest.RestController):
                        implementation.
         :param data: body of data to supply to the specified method.
         """
-        if not method:
-            raise wsme.exc.ClientSideError(_("Method not specified"))
-
-        if data is None:
-            data = {}
-
-        http_method = pecan.request.method.upper()
         topic = pecan.request.rpcapi.get_topic_for_driver(driver_name)
-        ret, is_async = pecan.request.rpcapi.driver_vendor_passthru(
-                            pecan.request.context, driver_name, method,
-                            http_method, data, topic=topic)
-        status_code = 202 if is_async else 200
-        return wsme.api.Response(ret, status_code=status_code)
+        return api_utils.vendor_passthru(driver_name, method, topic, data=data,
+                                         driver_passthru=True)
 
 
 class DriversController(rest.RestController):
@@ -185,7 +175,7 @@ class DriversController(rest.RestController):
         # choose to expose below it.
 
         driver_dict = pecan.request.dbapi.get_active_driver_dict()
-        for name, hosts in driver_dict.iteritems():
+        for name, hosts in driver_dict.items():
             if name == driver_name:
                 return Driver.convert_with_links(name, list(hosts))
 
@@ -204,7 +194,7 @@ class DriversController(rest.RestController):
         if driver_name not in _DRIVER_PROPERTIES:
             topic = pecan.request.rpcapi.get_topic_for_driver(driver_name)
             properties = pecan.request.rpcapi.get_driver_properties(
-                             pecan.request.context, driver_name, topic=topic)
+                pecan.request.context, driver_name, topic=topic)
             _DRIVER_PROPERTIES[driver_name] = properties
 
         return _DRIVER_PROPERTIES[driver_name]

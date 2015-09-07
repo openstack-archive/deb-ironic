@@ -13,18 +13,18 @@
 # limitations under the License.
 
 from oslo_config import cfg
+from oslo_log import log
 from oslo_serialization import jsonutils
 import requests
 
 from ironic.common import exception
 from ironic.common.i18n import _
-from ironic.openstack.common import log
 
 agent_opts = [
     cfg.StrOpt('agent_api_version',
                default='v1',
-               help='API version to use for communicating with the ramdisk '
-                    'agent.')
+               help=_('API version to use for communicating with the ramdisk '
+                      'agent.'))
 ]
 
 CONF = cfg.CONF
@@ -37,6 +37,7 @@ class AgentClient(object):
     """Client for interacting with nodes via a REST API."""
     def __init__(self):
         self.session = requests.Session()
+        self.session.headers.update({'Content-Type': 'application/json'})
 
     def _get_command_url(self, node):
         agent_url = node.driver_internal_info.get('agent_url')
@@ -64,31 +65,47 @@ class AgentClient(object):
         request_params = {
             'wait': str(wait).lower()
         }
-        headers = {
-            'Content-Type': 'application/json'
-        }
+        LOG.debug('Executing agent command %(method)s for node %(node)s',
+                  {'node': node.uuid, 'method': method})
         response = self.session.post(url,
                                      params=request_params,
-                                     data=body,
-                                     headers=headers)
+                                     data=body)
 
         # TODO(russellhaering): real error handling
         try:
-            return response.json()
+            result = response.json()
         except ValueError:
             msg = _(
                 'Unable to decode response as JSON.\n'
                 'Request URL: %(url)s\nRequest body: "%(body)s"\n'
+                'Response status code: %(code)s\n'
                 'Response: "%(response)s"'
-                ) % ({'response': response.text, 'body': body, 'url': url})
+            ) % ({'response': response.text, 'body': body, 'url': url,
+                  'code': response.status_code})
             LOG.error(msg)
             raise exception.IronicException(msg)
 
+        LOG.debug('Agent command %(method)s for node %(node)s returned '
+                  'result %(res)s, error %(error)s, HTTP status code %(code)d',
+                  {'node': node.uuid, 'method': method,
+                   'res': result.get('command_result'),
+                   'error': result.get('command_error'),
+                   'code': response.status_code})
+        return result
+
     def get_commands_status(self, node):
         url = self._get_command_url(node)
-        headers = {'Content-Type': 'application/json'}
-        res = self.session.get(url, headers=headers)
-        return res.json()['commands']
+        LOG.debug('Fetching status of agent commands for node %s', node.uuid)
+        resp = self.session.get(url)
+        result = resp.json()['commands']
+        status = '; '.join('%(cmd)s: result "%(res)s", error "%(err)s"' %
+                           {'cmd': r.get('command_name'),
+                            'res': r.get('command_result'),
+                            'err': r.get('command_error')}
+                           for r in result)
+        LOG.debug('Status of agent commands for node %(node)s: %(status)s',
+                  {'node': node.uuid, 'status': status})
+        return result
 
     def prepare_image(self, node, image_info, wait=False):
         """Call the `prepare_image` method on the node."""
@@ -146,3 +163,9 @@ class AgentClient(object):
                              method='clean.execute_clean_step',
                              params=params,
                              wait=False)
+
+    def power_off(self, node):
+        """Soft powers off the bare metal node by shutting down ramdisk OS."""
+        return self._command(node=node,
+                             method='standby.power_off',
+                             params={})

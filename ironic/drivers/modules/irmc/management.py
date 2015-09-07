@@ -1,3 +1,4 @@
+# Copyright 2015 FUJITSU LIMITED
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -14,6 +15,7 @@
 iRMC Management Driver
 """
 
+from oslo_log import log as logging
 from oslo_utils import importutils
 
 from ironic.common import boot_devices
@@ -24,7 +26,6 @@ from ironic.conductor import task_manager
 from ironic.drivers.modules import ipmitool
 from ironic.drivers.modules.irmc import common as irmc_common
 from ironic.drivers import utils as driver_utils
-from ironic.openstack.common import log as logging
 
 scci = importutils.try_import('scciclient.irmc.scci')
 
@@ -56,12 +57,15 @@ def _get_sensors_data(task):
         report = irmc_common.get_irmc_report(task.node)
         sensor = scci.get_sensor_data(report)
 
-    except Exception as e:
+    except (exception.InvalidParameterValue,
+            exception.MissingParameterValue,
+            scci.SCCIInvalidInputError,
+            scci.SCCIClientError) as e:
         LOG.error(_LE("SCCI get sensor data failed for node %(node_id)s "
                   "with the following error: %(error)s"),
                   {'node_id': task.node.uuid, 'error': e})
         raise exception.FailedToGetSensorData(
-                    node=task.node.uuid, error=e)
+            node=task.node.uuid, error=e)
 
     sensors_data = {}
     for sdr in sensor:
@@ -138,7 +142,7 @@ class IRMCManagement(ipmitool.IPMIManagement):
 
         """
         if driver_utils.get_node_capability(task.node, 'boot_mode') == 'uefi':
-            if device not in self.get_supported_boot_devices():
+            if device not in self.get_supported_boot_devices(task):
                 raise exception.InvalidParameterValue(_(
                     "Invalid boot device %s specified.") % device)
             timeout_disable = "0x00 0x08 0x03 0x08"
@@ -178,6 +182,7 @@ class IRMCManagement(ipmitool.IPMIManagement):
         :raises: MissingParameterValue if a required parameter is missing.
         :returns: Returns a consistent formatted dict of sensor data grouped
                   by sensor type, which can be processed by Ceilometer.
+                  Example::
 
                       {
                         'Sensor Type 1': {

@@ -30,6 +30,8 @@ import os
 
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
 
 from ironic.common import boot_devices
 from ironic.common import exception
@@ -41,12 +43,11 @@ from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.drivers import base
 from ironic.drivers import utils as driver_utils
-from ironic.openstack.common import log as logging
 
 libvirt_opts = [
     cfg.StrOpt('libvirt_uri',
                default='qemu:///system',
-               help='libvirt uri')
+               help=_('libvirt URI'))
 ]
 
 CONF = cfg.CONF
@@ -116,14 +117,17 @@ def _get_command_sets(virt_type):
             'reboot_cmd': 'controlvm {_NodeName_} reset',
             'list_all': "list vms|awk -F'\"' '{print $2}'",
             'list_running': 'list runningvms',
-            'get_node_macs': ("showvminfo --machinereadable {_NodeName_} | "
+            'get_node_macs': (
+                "showvminfo --machinereadable {_NodeName_} | "
                 "awk -F '\"' '/macaddress/{print $2}'"),
-            'set_boot_device': ('{_BaseCmd_} modifyvm {_NodeName_} '
+            'set_boot_device': (
+                '{_BaseCmd_} modifyvm {_NodeName_} '
                 '--boot1 {_BootDevice_}'),
-            'get_boot_device': ("{_BaseCmd_} showvminfo "
+            'get_boot_device': (
+                "{_BaseCmd_} showvminfo "
                 "--machinereadable {_NodeName_} | "
                 "awk -F '\"' '/boot1/{print $2}'"),
-            }
+        }
     elif virt_type == 'vmware':
         return {
             'base_cmd': 'LC_ALL=C /bin/vim-cmd',
@@ -156,14 +160,18 @@ def _get_command_sets(virt_type):
             'stop_cmd': 'destroy {_NodeName_}',
             'reboot_cmd': 'reset {_NodeName_}',
             'list_all': "list --all | tail -n +2 | awk -F\" \" '{print $2}'",
-            'list_running': ("list --all|grep running | "
+            'list_running': (
+                "list --all|grep running | "
                 "awk -v qc='\"' -F\" \" '{print qc$2qc}'"),
-            'get_node_macs': ("dumpxml {_NodeName_} | "
+            'get_node_macs': (
+                "dumpxml {_NodeName_} | "
                 "awk -F \"'\" '/mac address/{print $2}'| tr -d ':'"),
-            'set_boot_device': ("EDITOR=\"sed -i '/<boot \(dev\|order\)=*\>/d;"
+            'set_boot_device': (
+                "EDITOR=\"sed -i '/<boot \(dev\|order\)=*\>/d;"
                 "/<\/os>/i\<boot dev=\\\"{_BootDevice_}\\\"/>'\" "
                 "{_BaseCmd_} edit {_NodeName_}"),
-            'get_boot_device': ("{_BaseCmd_} dumpxml {_NodeName_} | "
+            'get_boot_device': (
+                "{_BaseCmd_} dumpxml {_NodeName_} | "
                 "awk '/boot dev=/ { gsub( \".*dev=\" Q, \"\" ); "
                 "gsub( Q \".*\", \"\" ); print; }' "
                 "Q=\"'\" RS=\"[<>]\" | "
@@ -182,14 +190,17 @@ def _get_command_sets(virt_type):
             'reboot_cmd': 'reset {_NodeName_}',
             'list_all': "list -a -o name |tail -n +2",
             'list_running': 'list -o name |tail -n +2',
-            'get_node_macs': ("list -j -i \"{_NodeName_}\" | "
+            'get_node_macs': (
+                "list -j -i \"{_NodeName_}\" | "
                 "awk -F'\"' '/\"mac\":/ {print $4}' | "
                 "sed 's/\\(..\\)\\(..\\)\\(..\\)\\(..\\)\\(..\\)\\(..\\)/"
                 "\\1:\\2:\\3:\\4:\\5\\6/' | "
                 "tr '[:upper:]' '[:lower:]'"),
-            'set_boot_device': ("{_BaseCmd_} set {_NodeName_} "
+            'set_boot_device': (
+                "{_BaseCmd_} set {_NodeName_} "
                 "--device-bootorder \"{_BootDevice_}\""),
-            'get_boot_device': ("{_BaseCmd_} list -i {_NodeName_} | "
+            'get_boot_device': (
+                "{_BaseCmd_} list -i {_NodeName_} | "
                 "awk '/^Boot order:/ {print $3}'"),
         }
     else:
@@ -302,19 +313,19 @@ def _parse_driver_info(node):
 
     # NOTE(deva): we map 'address' from API to 'host' for common utils
     res = {
-           'host': address,
-           'username': username,
-           'port': port,
-           'virt_type': virt_type,
-           'uuid': node.uuid
-          }
+        'host': address,
+        'username': username,
+        'port': port,
+        'virt_type': virt_type,
+        'uuid': node.uuid
+    }
 
     cmd_set = _get_command_sets(virt_type)
     res['cmd_set'] = cmd_set
 
     # Only one credential may be set (avoids complexity around having
     # precedence etc).
-    if len(filter(None, (password, key_filename, key_contents))) != 1:
+    if len([v for v in (password, key_filename, key_contents) if v]) != 1:
         raise exception.InvalidParameterValue(_(
             "SSHPowerDriver requires one and only one of password, "
             "key_contents and key_filename to be set."))
@@ -505,8 +516,9 @@ class SSHPower(base.PowerInterface):
                  node.
         """
         if not driver_utils.get_node_mac_addresses(task):
-            raise exception.MissingParameterValue(_("Node %s does not have "
-                              "any port associated with it.") % task.node.uuid)
+            raise exception.MissingParameterValue(
+                _("Node %s does not have any port associated with it."
+                  ) % task.node.uuid)
         try:
             _get_connection(task.node)
         except exception.SSHConnectFailed as e:
@@ -558,8 +570,9 @@ class SSHPower(base.PowerInterface):
         elif pstate == states.POWER_OFF:
             state = _power_off(ssh_obj, driver_info)
         else:
-            raise exception.InvalidParameterValue(_("set_power_state called "
-                    "with invalid power state %s.") % pstate)
+            raise exception.InvalidParameterValue(
+                _("set_power_state called with invalid power state %s."
+                  ) % pstate)
 
         if state != pstate:
             raise exception.PowerStateFailure(pstate=pstate)
@@ -608,9 +621,10 @@ class SSHManagement(base.ManagementInterface):
         """
         _parse_driver_info(task.node)
 
-    def get_supported_boot_devices(self):
+    def get_supported_boot_devices(self, task):
         """Get a list of the supported boot devices.
 
+        :param task: a task from TaskManager.
         :returns: A list with the supported boot devices defined
                   in :mod:`ironic.common.boot_devices`.
 
@@ -640,7 +654,7 @@ class SSHManagement(base.ManagementInterface):
         """
         node = task.node
         driver_info = _parse_driver_info(node)
-        if device not in self.get_supported_boot_devices():
+        if device not in self.get_supported_boot_devices(task):
             raise exception.InvalidParameterValue(_(
                 "Invalid boot device %s specified.") % device)
         driver_info['macs'] = driver_utils.get_node_mac_addresses(task)
@@ -650,11 +664,12 @@ class SSHManagement(base.ManagementInterface):
         try:
             _set_boot_device(ssh_obj, driver_info, boot_device_map[device])
         except NotImplementedError:
-            LOG.error(_LE("Failed to set boot device for node %(node)s, "
-                          "virt_type %(vtype)s does not support this "
-                          "operation") % {'node': node.uuid,
-                                          'vtype': driver_info['virt_type']})
-            raise
+            with excutils.save_and_reraise_exception():
+                LOG.error(_LE("Failed to set boot device for node %(node)s, "
+                              "virt_type %(vtype)s does not support this "
+                              "operation"),
+                          {'node': node.uuid,
+                           'vtype': driver_info['virt_type']})
 
     def get_boot_device(self, task):
         """Get the current boot device for the task's node.

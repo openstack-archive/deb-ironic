@@ -17,8 +17,10 @@
 import json
 
 import mock
-from oslo import messaging
 from oslo_config import cfg
+import oslo_messaging as messaging
+import six
+from six.moves import http_client
 from webob import exc as webob_exc
 
 from ironic.api.controllers import root
@@ -137,7 +139,8 @@ class TestNoExceptionTracebackHook(base.FunctionalTest):
         # rare thing (happens due to wrong deserialization settings etc.)
         # we don't care about this garbage.
         expected_msg = ("Remote error: %s %s"
-                        % (test_exc_type, self.MSG_WITHOUT_TRACE) + "\n[u'")
+                        % (test_exc_type, self.MSG_WITHOUT_TRACE)
+                        + ("\n[u'" if six.PY2 else "\n['"))
         actual_msg = json.loads(response.json['error_message'])['faultstring']
         self.assertEqual(expected_msg, actual_msg)
 
@@ -163,7 +166,7 @@ class TestNoExceptionTracebackHook(base.FunctionalTest):
     def test_hook_server_debug_on_clientfault(self):
         cfg.CONF.set_override('debug', True)
         client_error = Exception(self.MSG_WITH_TRACE)
-        client_error.code = 400
+        client_error.code = http_client.BAD_REQUEST
         self.root_convert_mock.side_effect = client_error
 
         response = self.get_json('/', path_prefix='', expect_errors=True)
@@ -226,6 +229,24 @@ class TestContextHook(base.FunctionalTest):
             is_admin=True,
             roles=headers['X-Roles'].split(','))
 
+    @mock.patch.object(context, 'RequestContext')
+    def test_context_hook_noauth_token_removed(self, mock_ctx):
+        cfg.CONF.set_override('auth_strategy', 'noauth')
+        headers = fake_headers(admin=False)
+        reqstate = FakeRequestState(headers=headers)
+        context_hook = hooks.ContextHook(None)
+        context_hook.before(reqstate)
+        mock_ctx.assert_called_with(
+            auth_token=None,
+            user=headers['X-User'],
+            tenant=headers['X-Tenant'],
+            domain_id=headers['X-User-Domain-Id'],
+            domain_name=headers['X-User-Domain-Name'],
+            is_public_api=False,
+            show_password=False,
+            is_admin=False,
+            roles=headers['X-Roles'].split(','))
+
 
 class TestContextHookCompatJuno(TestContextHook):
     def setUp(self):
@@ -277,7 +298,7 @@ class TestTrustedCallHook(base.FunctionalTest):
         reqstate.set_context()
         trusted_call_hook = hooks.TrustedCallHook()
         self.assertRaises(webob_exc.HTTPForbidden,
-            trusted_call_hook.before, reqstate)
+                          trusted_call_hook.before, reqstate)
 
     def test_trusted_call_hook_admin(self):
         headers = fake_headers(admin=True)

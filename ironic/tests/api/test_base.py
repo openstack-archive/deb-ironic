@@ -14,6 +14,7 @@
 #    under the License.
 
 import mock
+from six.moves import http_client
 from webob import exc
 
 from ironic.api.controllers import base as cbase
@@ -29,7 +30,7 @@ class TestBase(base.FunctionalTest):
         response = self.get_json('/bad/path',
                                  expect_errors=True,
                                  headers={"Accept": "application/json"})
-        self.assertEqual(404, response.status_int)
+        self.assertEqual(http_client.NOT_FOUND, response.status_int)
         self.assertEqual("application/json", response.content_type)
         self.assertTrue(response.json['error_message'])
 
@@ -63,26 +64,28 @@ class TestVersion(base.FunctionalTest):
 
     def test_parse_headers_ok(self):
         version = cbase.Version.parse_headers(
-                {cbase.Version.string: '123.456'}, mock.ANY, mock.ANY)
+            {cbase.Version.string: '123.456'}, mock.ANY, mock.ANY)
         self.assertEqual((123, 456), version)
 
     def test_parse_headers_latest(self):
         for s in ['latest', 'LATEST']:
             version = cbase.Version.parse_headers(
-                    {cbase.Version.string: s}, mock.ANY, '1.9')
+                {cbase.Version.string: s}, mock.ANY, '1.9')
             self.assertEqual((1, 9), version)
 
     def test_parse_headers_bad_length(self):
-        self.assertRaises(exc.HTTPNotAcceptable,
-                cbase.Version.parse_headers,
-                {cbase.Version.string: '1'},
-                mock.ANY,
-                mock.ANY)
-        self.assertRaises(exc.HTTPNotAcceptable,
-                cbase.Version.parse_headers,
-                {cbase.Version.string: '1.2.3'},
-                mock.ANY,
-                mock.ANY)
+        self.assertRaises(
+            exc.HTTPNotAcceptable,
+            cbase.Version.parse_headers,
+            {cbase.Version.string: '1'},
+            mock.ANY,
+            mock.ANY)
+        self.assertRaises(
+            exc.HTTPNotAcceptable,
+            cbase.Version.parse_headers,
+            {cbase.Version.string: '1.2.3'},
+            mock.ANY,
+            mock.ANY)
 
     def test_parse_no_header(self):
         # this asserts that the minimum version string of "1.1" is applied

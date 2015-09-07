@@ -19,6 +19,7 @@
 """Utilities and helper functions."""
 
 import contextlib
+import datetime
 import errno
 import hashlib
 import os
@@ -30,23 +31,27 @@ import tempfile
 import netaddr
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import excutils
+from oslo_utils import timeutils
 import paramiko
+import pytz
 import six
 
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LW
-from ironic.openstack.common import log as logging
 
 utils_opts = [
     cfg.StrOpt('rootwrap_config',
                default="/etc/ironic/rootwrap.conf",
-               help='Path to the rootwrap configuration file to use for '
-                    'running commands as root.'),
+               help=_('Path to the rootwrap configuration file to use for '
+                      'running commands as root.')),
     cfg.StrOpt('tempdir',
-               help='Explicitly specify the temporary working directory.'),
+               default=tempfile.gettempdir(),
+               help=_('Temporary working directory, default is Python temp '
+                      'dir.')),
 ]
 
 CONF = cfg.CONF
@@ -177,33 +182,50 @@ def is_valid_mac(address):
             re.match(m, address.lower()))
 
 
-def is_hostname_safe(hostname):
-    """Determine if the supplied hostname is RFC compliant.
+_is_valid_logical_name_re = re.compile(r'^[A-Z0-9-._~]+$', re.I)
 
-    Check that the supplied hostname conforms to:
-        * http://en.wikipedia.org/wiki/Hostname
-        * http://tools.ietf.org/html/rfc952
-        * http://tools.ietf.org/html/rfc1123
-    Allowing for hostnames, and hostnames + domains.
+# old is_hostname_safe() regex, retained for backwards compat
+_is_hostname_safe_re = re.compile(r"""^
+[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?  # host
+(\.[a-z0-9\-_]{0,62}[a-z0-9])*       # domain
+\.?                                  # trailing dot
+$""", re.X)
 
-    :param hostname: The hostname to be validated.
-    :returns: True if valid. False if not.
 
+def is_valid_logical_name(hostname):
+    """Determine if a logical name is valid.
+
+    The logical name may only consist of RFC3986 unreserved
+    characters, to wit:
+
+        ALPHA / DIGIT / "-" / "." / "_" / "~"
     """
     if not isinstance(hostname, six.string_types) or len(hostname) > 255:
         return False
 
-    # Periods on the end of a hostname are ok, but complicates the
-    # regex so we'll do this manually
-    if hostname.endswith('.'):
-        hostname = hostname[:-1]
+    return _is_valid_logical_name_re.match(hostname) is not None
 
-    host = '[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?'
-    domain = '[a-z0-9\-_]{0,62}[a-z0-9]'
 
-    m = '^' + host + '(\.' + domain + ')*$'
+def is_hostname_safe(hostname):
+    """Old check for valid logical node names.
 
-    return re.match(m, hostname) is not None
+    Retained for compatibility with REST API < 1.10.
+
+    Nominally, checks that the supplied hostname conforms to:
+        * http://en.wikipedia.org/wiki/Hostname
+        * http://tools.ietf.org/html/rfc952
+        * http://tools.ietf.org/html/rfc1123
+
+    In practice, this check has several shortcomings and errors that
+    are more thoroughly documented in bug #1468508.
+
+    :param hostname: The hostname to be validated.
+    :returns: True if valid. False if not.
+    """
+    if not isinstance(hostname, six.string_types) or len(hostname) > 255:
+        return False
+
+    return _is_hostname_safe_re.match(hostname) is not None
 
 
 def validate_and_normalize_mac(address):
@@ -288,10 +310,10 @@ def sanitize_hostname(hostname):
     if isinstance(hostname, six.text_type):
         hostname = hostname.encode('latin-1', 'ignore')
 
-    hostname = re.sub('[ _]', '-', hostname)
-    hostname = re.sub('[^\w.-]+', '', hostname)
+    hostname = re.sub(b'[ _]', b'-', hostname)
+    hostname = re.sub(b'[^\w.-]+', b'', hostname)
     hostname = hostname.lower()
-    hostname = hostname.strip('.-')
+    hostname = hostname.strip(b'.-')
 
     return hostname
 
@@ -446,7 +468,7 @@ def unlink_without_raise(path):
             return
         else:
             LOG.warn(_LW("Failed to unlink %(path)s, error: %(e)s"),
-                        {'path': path, 'e': e})
+                     {'path': path, 'e': e})
 
 
 def rmtree_without_raise(path):
@@ -455,7 +477,7 @@ def rmtree_without_raise(path):
             shutil.rmtree(path)
     except OSError as e:
         LOG.warn(_LW("Failed to remove dir %(path)s, error: %(e)s"),
-                {'path': path, 'e': e})
+                 {'path': path, 'e': e})
 
 
 def write_to_file(path, contents):
@@ -472,7 +494,7 @@ def create_link_without_raise(source, link):
         else:
             LOG.warn(_LW("Failed to create symlink from %(source)s to %(link)s"
                          ", error: %(e)s"),
-                         {'source': source, 'link': link, 'e': e})
+                     {'source': source, 'link': link, 'e': e})
 
 
 def safe_rstrip(value, chars=None):
@@ -536,3 +558,116 @@ def dd(src, dst, *args):
 def is_http_url(url):
     url = url.lower()
     return url.startswith('http://') or url.startswith('https://')
+
+
+def check_dir(directory_to_check=None, required_space=1):
+    """Check a directory is usable.
+
+    This function can be used by drivers to check that directories
+    they need to write to are usable. This should be called from the
+    drivers init function. This function checks that the directory
+    exists and then calls check_dir_writable and check_dir_free_space.
+    If directory_to_check is not provided the default is to use the
+    temp directory.
+
+    :param directory_to_check: the directory to check.
+    :param required_space: amount of space to check for in MiB.
+    :raises: PathNotFound if directory can not be found
+    :raises: DirectoryNotWritable if user is unable to write to the
+             directory
+    :raises InsufficientDiskSpace: if free space is < required space
+    """
+    # check if directory_to_check is passed in, if not set to tempdir
+    if directory_to_check is None:
+        directory_to_check = CONF.tempdir
+
+    LOG.debug("checking directory: %s", directory_to_check)
+
+    if not os.path.exists(directory_to_check):
+        raise exception.PathNotFound(dir=directory_to_check)
+
+    _check_dir_writable(directory_to_check)
+    _check_dir_free_space(directory_to_check, required_space)
+
+
+def _check_dir_writable(chk_dir):
+    """Check that the chk_dir is able to be written to.
+
+    :param chk_dir: Directory to check
+    :raises: DirectoryNotWritable if user is unable to write to the
+             directory
+    """
+    is_writable = os.access(chk_dir, os.W_OK)
+    if not is_writable:
+        raise exception.DirectoryNotWritable(dir=chk_dir)
+
+
+def _check_dir_free_space(chk_dir, required_space=1):
+    """Check that directory has some free space.
+
+    :param chk_dir: Directory to check
+    :param required_space: amount of space to check for in MiB.
+    :raises InsufficientDiskSpace: if free space is < required space
+    """
+    # check that we have some free space
+    stat = os.statvfs(chk_dir)
+    # get dir free space in MiB.
+    free_space = float(stat.f_bsize * stat.f_bavail) / 1024 / 1024
+    # check for at least required_space MiB free
+    if free_space < required_space:
+        raise exception.InsufficientDiskSpace(path=chk_dir,
+                                              required=required_space,
+                                              actual=free_space)
+
+
+def get_updated_capabilities(current_capabilities, new_capabilities):
+    """Returns an updated capability string.
+
+    This method updates the original (or current) capabilities with the new
+    capabilities. The original capabilities would typically be from a node's
+    properties['capabilities']. From new_capabilities, any new capabilities
+    are added, and existing capabilities may have their values updated. This
+    updated capabilities string is returned.
+
+    :param current_capabilities: Current capability string
+    :param new_capabilities: the dictionary of capabilities to be updated.
+    :returns: An updated capability string.
+        with new_capabilities.
+    :raises: ValueError, if current_capabilities is malformed or
+        if new_capabilities is not a dictionary
+    """
+    if not isinstance(new_capabilities, dict):
+        raise ValueError(
+            _("Cannot update capabilities. The new capabilities should be in "
+              "a dictionary. Provided value is %s") % new_capabilities)
+
+    cap_dict = {}
+    if current_capabilities:
+        try:
+            cap_dict = dict(x.split(':', 1)
+                            for x in current_capabilities.split(','))
+        except ValueError:
+            # Capabilities can be filled by operator.  ValueError can
+            # occur in malformed capabilities like:
+            # properties/capabilities='boot_mode:bios,boot_option'.
+            raise ValueError(
+                _("Invalid capabilities string '%s'.") % current_capabilities)
+
+    cap_dict.update(new_capabilities)
+    return ','.join('%(key)s:%(value)s' % {'key': key, 'value': value}
+                    for key, value in six.iteritems(cap_dict))
+
+
+def is_regex_string_in_file(path, string):
+    with open(path, 'r') as inf:
+        return any(re.search(string, line) for line in inf.readlines())
+
+
+def unix_file_modification_datetime(file_name):
+    return timeutils.normalize_time(
+        # normalize time to be UTC without timezone
+        datetime.datetime.fromtimestamp(
+            # fromtimestamp will return local time by default, make it UTC
+            os.path.getmtime(file_name), tz=pytz.utc
+        )
+    )

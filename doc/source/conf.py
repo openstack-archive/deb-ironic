@@ -9,6 +9,7 @@ extensions = ['sphinx.ext.autodoc',
               'sphinx.ext.viewcode',
               'sphinxcontrib.httpdomain',
               'sphinxcontrib.pecanwsme.rest',
+              'sphinxcontrib.seqdiag',
               'wsmeext.sphinxext',
               'oslosphinx',
               ]
@@ -56,6 +57,13 @@ add_module_names = True
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
 
+# NOTE(cinerama): mock out nova modules so docs can build without warnings
+import mock
+import sys
+MOCK_MODULES = ['nova', 'nova.compute', 'nova.context']
+for module in MOCK_MODULES:
+    sys.modules[module] = mock.Mock()
+
 # -- Options for HTML output --------------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  Major themes that come with
@@ -80,3 +88,7 @@ latex_documents = [
         'manual'
     ),
 ]
+
+# -- Options for seqdiag ------------------------------------------------------
+
+seqdiag_html_image_format = "SVG"

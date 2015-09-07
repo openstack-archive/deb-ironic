@@ -19,6 +19,7 @@ Common functionalities shared between different iLO modules.
 import tempfile
 
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import importutils
 import six.moves.urllib.parse as urlparse
 
@@ -29,9 +30,7 @@ from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.common import images
 from ironic.common import swift
-from ironic.common import utils
 from ironic.drivers.modules import deploy_utils
-from ironic.openstack.common import log as logging
 
 ilo_client = importutils.try_import('proliantutils.ilo.client')
 ilo_error = importutils.try_import('proliantutils.exception')
@@ -43,17 +42,17 @@ ADVANCED_LICENSE = 3
 opts = [
     cfg.IntOpt('client_timeout',
                default=60,
-               help='Timeout (in seconds) for iLO operations'),
+               help=_('Timeout (in seconds) for iLO operations')),
     cfg.IntOpt('client_port',
                default=443,
-               help='Port to be used for iLO operations'),
+               help=_('Port to be used for iLO operations')),
     cfg.StrOpt('swift_ilo_container',
                default='ironic_ilo_container',
-               help='The Swift iLO container to store data.'),
+               help=_('The Swift iLO container to store data.')),
     cfg.IntOpt('swift_object_expiry_timeout',
                default=900,
-               help='Amount of time in seconds for Swift objects to '
-                    'auto-expire.'),
+               help=_('Amount of time in seconds for Swift objects to '
+                      'auto-expire.')),
 ]
 
 CONF = cfg.CONF
@@ -85,8 +84,8 @@ COMMON_PROPERTIES.update(OPTIONAL_PROPERTIES)
 DEFAULT_BOOT_MODE = 'LEGACY'
 
 BOOT_MODE_GENERIC_TO_ILO = {'bios': 'legacy', 'uefi': 'uefi'}
-BOOT_MODE_ILO_TO_GENERIC = dict((v, k)
-                           for (k, v) in BOOT_MODE_GENERIC_TO_ILO.items())
+BOOT_MODE_ILO_TO_GENERIC = dict(
+    (v, k) for (k, v) in BOOT_MODE_GENERIC_TO_ILO.items())
 
 
 def parse_driver_info(node):
@@ -113,8 +112,8 @@ def parse_driver_info(node):
             missing_info.append(param)
     if missing_info:
         raise exception.MissingParameterValue(_(
-                "The following required iLO parameters are missing from the "
-                "node's driver_info: %s") % missing_info)
+            "The following required iLO parameters are missing from the "
+            "node's driver_info: %s") % missing_info)
 
     not_integers = []
     for param in OPTIONAL_PROPERTIES:
@@ -134,8 +133,8 @@ def parse_driver_info(node):
 
     if not_integers:
         raise exception.InvalidParameterValue(_(
-                "The following iLO parameters from the node's driver_info "
-                "should be integers: %s") % not_integers)
+            "The following iLO parameters from the node's driver_info "
+            "should be integers: %s") % not_integers)
 
     return d_info
 
@@ -227,11 +226,11 @@ def _prepare_floppy_image(task, params):
     """Prepares the floppy image for passing the parameters.
 
     This method prepares a temporary vfat filesystem image. Then it adds
-    two files into the image - one containing the authentication token and
-    the other containing the parameters to be passed to the ramdisk. Then it
-    uploads the file to Swift in 'swift_ilo_container', setting it to
-    auto-expire after 'swift_object_expiry_timeout' seconds. Then it returns
-    the temp url for the Swift object.
+    a file into the image which contains the parameters to be passed to
+    the ramdisk. After adding the parameters, it then uploads the file to Swift
+    in 'swift_ilo_container', setting it to auto-expire after
+    'swift_object_expiry_timeout' seconds. Then it returns the temp url for the
+    Swift object.
 
     :param task: a TaskManager instance containing the node to act on.
     :param params: a dictionary containing 'parameter name'->'value' mapping
@@ -240,26 +239,11 @@ def _prepare_floppy_image(task, params):
     :raises: SwiftOperationError, if any operation with Swift fails.
     :returns: the Swift temp url for the floppy image.
     """
-    with tempfile.NamedTemporaryFile() as vfat_image_tmpfile_obj:
+    with tempfile.NamedTemporaryFile(
+            dir=CONF.tempdir) as vfat_image_tmpfile_obj:
 
-        files_info = {}
-        token_tmpfile_obj = None
         vfat_image_tmpfile = vfat_image_tmpfile_obj.name
-
-        # If auth_strategy is noauth, then no need to write token into
-        # the image file.
-        if task.context.auth_token:
-            token_tmpfile_obj = tempfile.NamedTemporaryFile()
-            token_tmpfile = token_tmpfile_obj.name
-            utils.write_to_file(token_tmpfile, task.context.auth_token)
-            files_info[token_tmpfile] = 'token'
-
-        try:
-            images.create_vfat_image(vfat_image_tmpfile, files_info=files_info,
-                                     parameters=params)
-        finally:
-            if token_tmpfile_obj:
-                token_tmpfile_obj.close()
+        images.create_vfat_image(vfat_image_tmpfile, parameters=params)
 
         container = CONF.ilo.swift_ilo_container
         object_name = _get_floppy_image_name(task.node)
@@ -290,12 +274,12 @@ def attach_vmedia(node, device, url):
 
     try:
         ilo_object.insert_virtual_media(url, device=device)
-        ilo_object.set_vm_status(device=device, boot_option='CONNECT',
-                write_protect='YES')
+        ilo_object.set_vm_status(
+            device=device, boot_option='CONNECT', write_protect='YES')
     except ilo_error.IloError as ilo_exception:
         operation = _("Inserting virtual media %s") % device
-        raise exception.IloOperationError(operation=operation,
-                error=ilo_exception)
+        raise exception.IloOperationError(
+            operation=operation, error=ilo_exception)
 
     LOG.info(_LI("Attached virtual media %s successfully."), device)
 
@@ -321,11 +305,11 @@ def set_boot_mode(node, boot_mode):
 
     try:
         ilo_object.set_pending_boot_mode(
-                        BOOT_MODE_GENERIC_TO_ILO[boot_mode].upper())
+            BOOT_MODE_GENERIC_TO_ILO[boot_mode].upper())
     except ilo_error.IloError as ilo_exception:
         operation = _("Setting %s as boot mode") % boot_mode
-        raise exception.IloOperationError(operation=operation,
-                error=ilo_exception)
+        raise exception.IloOperationError(
+            operation=operation, error=ilo_exception)
 
     LOG.info(_LI("Node %(uuid)s boot mode is set to %(boot_mode)s."),
              {'uuid': node.uuid, 'boot_mode': boot_mode})
@@ -370,15 +354,15 @@ def update_boot_mode(task):
         try:
             boot_mode = 'uefi'
             ilo_object.set_pending_boot_mode(
-                                   BOOT_MODE_GENERIC_TO_ILO[boot_mode].upper())
+                BOOT_MODE_GENERIC_TO_ILO[boot_mode].upper())
         except ilo_error.IloError as ilo_exception:
             operation = _("Setting %s as boot mode") % boot_mode
             raise exception.IloOperationError(operation=operation,
                                               error=ilo_exception)
 
         LOG.debug("Node %(uuid)s boot mode is being set to %(boot_mode)s "
-                      "as pending boot mode is unknown.",
-                      {'uuid': node.uuid, 'boot_mode': boot_mode})
+                  "as pending boot mode is unknown.",
+                  {'uuid': node.uuid, 'boot_mode': boot_mode})
 
     instance_info = node.instance_info
     instance_info['deploy_boot_mode'] = boot_mode
@@ -421,13 +405,37 @@ def setup_vmedia_for_boot(task, boot_iso, parameters=None):
         container = CONF.ilo.swift_ilo_container
         object_name = parsed_ref.path
         timeout = CONF.ilo.swift_object_expiry_timeout
-        boot_iso_url = swift_api.get_temp_url(container, object_name,
-                timeout)
+        boot_iso_url = swift_api.get_temp_url(
+            container, object_name, timeout)
     elif service_utils.is_glance_image(boot_iso):
-        boot_iso_url = images.get_temp_url_for_glance_image(task.context,
-                boot_iso)
+        boot_iso_url = (
+            images.get_temp_url_for_glance_image(task.context, boot_iso))
 
     attach_vmedia(task.node, 'CDROM', boot_iso_url or boot_iso)
+
+
+def eject_vmedia_devices(task):
+    """Ejects virtual media devices.
+
+    This method ejects virtual media floppy and cdrom.
+
+    :param task: a TaskManager instance containing the node to act on.
+    :returns: None
+    :raises: IloOperationError, if some error was encountered while
+        trying to eject virtual media floppy or cdrom.
+    """
+    ilo_object = get_ilo_object(task.node)
+    for device in ('FLOPPY', 'CDROM'):
+        try:
+            ilo_object.eject_virtual_media(device)
+        except ilo_error.IloError as ilo_exception:
+            LOG.error(_LE("Error while ejecting virtual media %(device)s "
+                          "from node %(uuid)s. Error: %(error)s"),
+                      {'device': device, 'uuid': task.node.uuid,
+                       'error': ilo_exception})
+            operation = _("Eject virtual media %s") % device.lower()
+            raise exception.IloOperationError(operation=operation,
+                                              error=ilo_exception)
 
 
 def cleanup_vmedia_boot(task):
@@ -451,16 +459,7 @@ def cleanup_vmedia_boot(task):
                           "%(container)s. Error: %(error)s"),
                       {'object_name': object_name, 'container': container,
                        'error': e})
-
-    ilo_object = get_ilo_object(task.node)
-    for device in ('FLOPPY', 'CDROM'):
-        try:
-            ilo_object.eject_virtual_media(device)
-        except ilo_error.IloError as ilo_exception:
-            LOG.exception(_LE("Error while ejecting virtual media %(device)s "
-                              "from node %(uuid)s. Error: %(error)s"),
-                          {'device': device, 'uuid': task.node.uuid,
-                           'error': ilo_exception})
+    eject_vmedia_devices(task)
 
 
 def get_secure_boot_mode(task):
@@ -510,7 +509,7 @@ def set_secure_boot_mode(task, flag):
     """
 
     operation = (_("Setting secure boot to %(flag)s for node %(node)s.") %
-                   {'flag': flag, 'node': task.node.uuid})
+                 {'flag': flag, 'node': task.node.uuid})
     ilo_object = get_ilo_object(task.node)
 
     try:

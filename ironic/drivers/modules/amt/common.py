@@ -17,6 +17,7 @@ Common functionalities for AMT Driver
 from xml.etree import ElementTree
 
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import importutils
 import six
 
@@ -24,7 +25,6 @@ from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
-from ironic.openstack.common import log as logging
 
 
 pywsman = importutils.try_import('pywsman')
@@ -48,8 +48,8 @@ COMMON_PROPERTIES.update(OPTIONAL_PROPERTIES)
 opts = [
     cfg.StrOpt('protocol',
                default='http',
-               help='Protocol used for AMT endpoint, '
-               'support http/https'),
+               help=_('Protocol used for AMT endpoint, '
+                      'support http/https')),
 ]
 
 CONF = cfg.CONF
@@ -151,7 +151,9 @@ def parse_driver_info(node):
     for param in REQUIRED_PROPERTIES:
         value = info.get(param)
         if value:
-            d_info[param[4:]] = six.binary_type(value)
+            if not isinstance(value, six.binary_type):
+                value = value.encode()
+            d_info[param[4:]] = value
         else:
             missing_info.append(param)
 
@@ -164,9 +166,11 @@ def parse_driver_info(node):
     param = 'amt_protocol'
     protocol = info.get(param, CONF.amt.get(param[4:]))
     if protocol not in AMT_PROTOCOL_PORT_MAP:
-        raise exception.InvalidParameterValue(_("Invalid "
-                "protocol %s.") % protocol)
-    d_info[param[4:]] = six.binary_type(protocol)
+        raise exception.InvalidParameterValue(
+            _("Invalid protocol %s.") % protocol)
+    if not isinstance(value, six.binary_type):
+        protocol = protocol.encode()
+    d_info[param[4:]] = protocol
 
     return d_info
 

@@ -15,6 +15,7 @@ VirtualBox Driver Modules
 """
 
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import importutils
 
 from ironic.common import boot_devices
@@ -24,7 +25,6 @@ from ironic.common.i18n import _LE
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.drivers import base
-from ironic.openstack.common import log as logging
 
 pyremotevbox = importutils.try_import('pyremotevbox')
 if pyremotevbox:
@@ -32,23 +32,23 @@ if pyremotevbox:
     from pyremotevbox import vbox as virtualbox
 
 IRONIC_TO_VIRTUALBOX_DEVICE_MAPPING = {
-                                 boot_devices.PXE: 'Network',
-                                 boot_devices.DISK: 'HardDisk',
-                                 boot_devices.CDROM: 'DVD',
-                                }
-VIRTUALBOX_TO_IRONIC_DEVICE_MAPPING = {v: k
-                       for k, v in IRONIC_TO_VIRTUALBOX_DEVICE_MAPPING.items()}
+    boot_devices.PXE: 'Network',
+    boot_devices.DISK: 'HardDisk',
+    boot_devices.CDROM: 'DVD',
+}
+VIRTUALBOX_TO_IRONIC_DEVICE_MAPPING = {
+    v: k for k, v in IRONIC_TO_VIRTUALBOX_DEVICE_MAPPING.items()}
 
 VIRTUALBOX_TO_IRONIC_POWER_MAPPING = {
-                                'PoweredOff': states.POWER_OFF,
-                                'Running': states.POWER_ON,
-                                'Error': states.ERROR
-                               }
+    'PoweredOff': states.POWER_OFF,
+    'Running': states.POWER_ON,
+    'Error': states.ERROR
+}
 
 opts = [
     cfg.IntOpt('port',
                default=18083,
-               help='Port on which VirtualBox web service is listening.'),
+               help=_('Port on which VirtualBox web service is listening.')),
 ]
 CONF = cfg.CONF
 CONF.register_opts(opts, group='virtualbox')
@@ -109,7 +109,7 @@ def _parse_driver_info(node):
 
     if missing_params:
         msg = (_("The following parameters are missing in driver_info: %s") %
-                 ', '.join(missing_params))
+               ', '.join(missing_params))
         raise exception.MissingParameterValue(msg)
 
     for param in OPTIONAL_PROPERTIES:
@@ -281,9 +281,10 @@ class VirtualBoxManagement(base.ManagementInterface):
         """
         _parse_driver_info(task.node)
 
-    def get_supported_boot_devices(self):
+    def get_supported_boot_devices(self, task):
         """Get a list of the supported boot devices.
 
+        :param task: a task from TaskManager.
         :returns: A list with the supported boot devices defined
                   in :mod:`ironic.common.boot_devices`.
         """
@@ -335,8 +336,8 @@ class VirtualBoxManagement(base.ManagementInterface):
         try:
             boot_dev = IRONIC_TO_VIRTUALBOX_DEVICE_MAPPING[device]
         except KeyError:
-            raise exception.InvalidParameterValue(_(
-                 "Invalid boot device %s specified.") % device)
+            raise exception.InvalidParameterValue(
+                _("Invalid boot device %s specified.") % device)
 
         try:
             _run_virtualbox_method(task.node, 'set_boot_device',
@@ -362,6 +363,6 @@ class VirtualBoxManagement(base.ManagementInterface):
         :raises: FailedToGetSensorData when getting the sensor data fails.
         :raises: FailedToParseSensorData when parsing sensor data fails.
         :returns: returns a consistent format dict of sensor data grouped by
-        sensor type, which can be processed by Ceilometer.
+            sensor type, which can be processed by Ceilometer.
         """
         raise NotImplementedError()
