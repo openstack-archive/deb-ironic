@@ -22,7 +22,7 @@ Build-Depends-Indep: alembic (>= 0.8.0),
                      python-glanceclient (>= 1:0.18.0),
                      python-greenlet,
                      python-hacking (>= 0.10.0),
-                     python-ironicclient (>= 0.6.0),
+                     python-ironicclient (>= 0.8.0),
                      python-iso8601,
                      python-jinja2,
                      python-jsonpatch,
@@ -32,28 +32,28 @@ Build-Depends-Indep: alembic (>= 0.8.0),
                      python-lxml,
                      python-mock (>= 1.3),
                      python-mysqldb,
-                     python-netaddr,
+                     python-netaddr (>= 0.7.12),
                      python-neutronclient (>= 1:2.6.0),
                      python-oslo.concurrency (>= 2.3.0),
-                     python-oslo.config (>= 1:2.1.0),
+                     python-oslo.config (>= 1:2.3.0),
                      python-oslo.context (>= 0.2.0),
                      python-oslo.db (>= 2.4.1),
                      python-oslo.i18n (>= 1.5.0),
                      python-oslo.log (>= 1.8.0),
                      python-oslo.messaging (>= 1.16.0),
+                     python-oslo.middleware (>= 2.8.0),
                      python-oslo.policy (>= 0.5.0),
                      python-oslo.rootwrap (>= 2.0.0),
                      python-oslo.serialization (>= 1.4.0),
                      python-oslo.service (>= 0.8.0),
                      python-oslo.utils (>= 2.0.0),
-                     python-oslo.versionedobjects (>= 0.6.0),
+                     python-oslo.versionedobjects (>= 0.9.0),
                      python-oslosphinx (>= 2.5.0),
                      python-oslotest (>= 1.10.0),
                      python-paramiko,
                      python-pecan (>= 1.0.0),
-                     python-posix-ipc,
                      python-proliantutils (>= 2.1.0),
-                     python-psycopg2,
+                     python-psycopg2 (>= 2.5),
                      python-pyghmi,
                      python-pysnmp4,
                      python-pymysql,
@@ -64,7 +64,7 @@ Build-Depends-Indep: alembic (>= 0.8.0),
                      python-six (>= 1.9.0),
                      python-sphinxcontrib-pecanwsme,
                      python-sphinxcontrib.seqdiag,
-                     python-sqlalchemy (>= 0.9.7),
+                     python-sqlalchemy (>= 0.9.9),
                      python-stevedore (>= 1.5.0),
                      python-swiftclient (>= 1:2.2.0),
                      python-testtools (>= 1.4.0),
@@ -96,26 +96,27 @@ Depends: alembic (>= 0.8.0),
          python-keystoneclient (>= 1:1.6.0),
          python-keystonemiddleware (>= 2.0.0),
          python-lxml,
-         python-netaddr,
+         python-netaddr (>= 0.7.12),
          python-neutronclient (>= 1:2.6.0),
          python-oslo.concurrency (>= 2.3.0),
-         python-oslo.config (>= 1:2.1.0),
+         python-oslo.config (>= 1:2.3.0),
          python-oslo.context (>= 0.2.0),
          python-oslo.db (>= 2.4.1),
          python-oslo.i18n (>= 1.5.0),
          python-oslo.log (>= 1.8.0),
          python-oslo.messaging (>= 1.16.0),
+         python-oslo.middleware (>= 2.8.0),
          python-oslo.policy (>= 0.5.0),
          python-oslo.rootwrap (>= 2.0.0),
          python-oslo.serialization (>= 1.4.0),
          python-oslo.service (>= 0.8.0),
          python-oslo.utils (>= 2.0.0),
-         python-oslo.versionedobjects (>= 0.6.0),
+         python-oslo.versionedobjects (>= 0.9.0),
          python-paramiko,
          python-pbr (>= 1.6),
          python-pecan (>= 1.0.0),
-         python-posix-ipc,
          python-proliantutils (>= 2.1.0),
+         python-psycopg2 (>= 2.5),
          python-pyghmi,
          python-pysnmp4,
          python-pymysql,
@@ -124,7 +125,7 @@ Depends: alembic (>= 0.8.0),
          python-seamicroclient,
          python-sendfile,
          python-six (>= 1.9.0),
-         python-sqlalchemy (>= 0.9.7),
+         python-sqlalchemy (>= 0.9.9),
          python-stevedore (>= 1.5.0),
          python-swiftclient (>= 1:2.2.0),
          python-tz,
@@ -146,7 +147,6 @@ Description: bare metal hypervisor API for OpenStack - Python lib
 
 Package: ironic-common
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          dbconfig-common,
          ipmitool,
@@ -167,7 +167,6 @@ Description: bare metal hypervisor API for OpenStack - common files
 
 Package: ironic-api
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ironic-common, ${misc:Depends}, ${ostack-lsb-base}, ${python:Depends}
 Description: bare metal hypervisor API for OpenStack - API server
  Ironic provision bare metal machines instead of virtual machines. It is a fork
@@ -182,7 +181,6 @@ Description: bare metal hypervisor API for OpenStack - API server
 
 Package: ironic-conductor
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ironic-common, ${misc:Depends}, ${ostack-lsb-base}, ${python:Depends}
 Description: bare metal hypervisor API for OpenStack - conductor
  Ironic provision bare metal machines instead of virtual machines. It is a fork
@@ -198,7 +196,6 @@ Description: bare metal hypervisor API for OpenStack - conductor
 Package: ironic-doc
 Section: doc
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${misc:Depends}, ${sphinxdoc:Depends}
 Description: bare metal hypervisor API for OpenStack - doc
  Ironic provision bare metal machines instead of virtual machines. It is a fork
