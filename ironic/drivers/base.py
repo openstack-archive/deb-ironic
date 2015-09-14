@@ -32,7 +32,7 @@ from oslo_utils import excutils
 import six
 
 from ironic.common import exception
-from ironic.common.i18n import _LE
+from ironic.common.i18n import _LE, _LW
 from ironic.common import raid
 
 LOG = logging.getLogger(__name__)
@@ -899,20 +899,33 @@ class RAIDInterface(BaseInterface):
         """
 
     def validate(self, task):
-        """Validate a given RAID configuration.
+        """Validates the RAID Interface.
 
         This method validates the properties defined by Ironic for RAID
         configuration. Driver implementations of this interface can override
-        this method for doing more validations.
+        this method for doing more validations (such as BMC's credentials).
 
         :param task: a TaskManager instance.
         :raises: InvalidParameterValue, if the RAID configuration is invalid.
+        :raises: MissingParameterValue, if some parameters are missing.
         """
         target_raid_config = task.node.target_raid_config
         if not target_raid_config:
             return
+        self.validate_raid_config(task, target_raid_config)
 
-        raid.validate_configuration(target_raid_config, self.raid_schema)
+    def validate_raid_config(self, task, raid_config):
+        """Validates the given RAID configuration.
+
+        This method validates the given RAID configuration.  Driver
+        implementations of this interface can override this method to support
+        custom parameters for RAID configuration.
+
+        :param task: a TaskManager instance.
+        :param raid_config: The RAID configuration to validate.
+        :raises: InvalidParameterValue, if the RAID configuration is invalid.
+        """
+        raid.validate_configuration(raid_config, self.raid_schema)
 
     @abc.abstractmethod
     def create_configuration(self, task,
@@ -1021,11 +1034,8 @@ def driver_periodic_task(parallel=True, **other):
 
     :param parallel: If True (default), this task is run in a separate thread.
             If False, this task will be run in the conductor's periodic task
-            loop, rather than a separate greenthread. False should be used with
-            caution, as it will cause all other periodic tasks to be blocked
-            from starting while the non-parallel task is running. Long running
-            tasks, especially any tasks that make a remote call (to a BMC,
-            HTTP, etc.) must be parallelized.
+            loop, rather than a separate greenthread. This parameter is
+            deprecated and will be ignored starting with Mitaka cycle.
     :param other: arguments to pass to @periodic_task.periodic_task
     """
     # TODO(dtantsur): drop all this magic once
@@ -1042,6 +1052,10 @@ def driver_periodic_task(parallel=True, **other):
 
                 eventlet.greenthread.spawn_n(_internal)
             else:
+                LOG.warn(_LW(
+                    'Using periodic tasks with parallel=False is deprecated, '
+                    '"parallel" argument will be ignored starting with '
+                    'the Mitaka release'))
                 func(*args, **kwargs)
 
         # NOTE(dtantsur): name should be unique

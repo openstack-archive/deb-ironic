@@ -23,7 +23,6 @@ from oslo_config import cfg
 from oslo_utils import fileutils
 from oslo_utils import uuidutils
 
-from ironic.common import boot_devices
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import keystone
@@ -36,6 +35,7 @@ from ironic.drivers.modules import agent
 from ironic.drivers.modules import agent_base_vendor
 from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils
+from ironic.drivers.modules import fake
 from ironic.drivers.modules import iscsi_deploy
 from ironic.drivers.modules import pxe
 from ironic.tests.conductor import utils as mgr_utils
@@ -1095,14 +1095,15 @@ class TestVendorPassthru(db_base.DbTestCase):
                               address='123456', iqn='aaa-bbb',
                               key='fake-12345')
 
-    @mock.patch.object(manager_utils, 'node_set_boot_device', autospec=True)
+    @mock.patch.object(fake.FakeBoot, 'prepare_instance', autospec=True)
     @mock.patch.object(deploy_utils, 'notify_ramdisk_to_proceed',
                        autospec=True)
     @mock.patch.object(iscsi_deploy, 'InstanceImageCache', autospec=True)
     @mock.patch.object(deploy_utils, 'deploy_partition_image', autospec=True)
     def _test_pass_deploy_info_deploy(self, is_localboot, mock_deploy,
                                       mock_image_cache,
-                                      notify_mock, mock_node_boot_dev):
+                                      notify_mock,
+                                      fakeboot_prepare_instance_mock):
         # set local boot
         i_info = self.node.instance_info
         if is_localboot:
@@ -1130,13 +1131,9 @@ class TestVendorPassthru(db_base.DbTestCase):
         mock_image_cache.assert_called_once_with()
         mock_image_cache.return_value.clean_up.assert_called_once_with()
         notify_mock.assert_called_once_with('123456')
-        if is_localboot:
-            mock_node_boot_dev.assert_called_once_with(
-                mock.ANY, boot_devices.DISK, persistent=True)
-        else:
-            self.assertFalse(mock_node_boot_dev.called)
+        fakeboot_prepare_instance_mock.assert_called_once_with(mock.ANY, task)
 
-    @mock.patch.object(manager_utils, 'node_set_boot_device', autospec=True)
+    @mock.patch.object(fake.FakeBoot, 'prepare_instance', autospec=True)
     @mock.patch.object(deploy_utils, 'notify_ramdisk_to_proceed',
                        autospec=True)
     @mock.patch.object(iscsi_deploy, 'InstanceImageCache', autospec=True)
@@ -1145,7 +1142,7 @@ class TestVendorPassthru(db_base.DbTestCase):
                                                 mock_deploy,
                                                 mock_image_cache,
                                                 notify_mock,
-                                                mock_node_boot_dev):
+                                                fakeboot_prep_inst_mock):
         i_info = self.node.instance_info
         # set local boot
         if is_localboot:
@@ -1174,11 +1171,7 @@ class TestVendorPassthru(db_base.DbTestCase):
         mock_image_cache.assert_called_once_with()
         mock_image_cache.return_value.clean_up.assert_called_once_with()
         notify_mock.assert_called_once_with('123456')
-        if is_localboot:
-            mock_node_boot_dev.assert_called_once_with(
-                mock.ANY, boot_devices.DISK, persistent=True)
-        else:
-            self.assertFalse(mock_node_boot_dev.called)
+        fakeboot_prep_inst_mock.assert_called_once_with(mock.ANY, task)
 
     def test_pass_deploy_info_deploy(self):
         self._test_pass_deploy_info_deploy(False)

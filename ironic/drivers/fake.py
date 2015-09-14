@@ -112,6 +112,7 @@ class FakeIPMINativeDriver(base.BaseDriver):
         self.power = ipminative.NativeIPMIPower()
         self.console = ipminative.NativeIPMIShellinaboxConsole()
         self.deploy = fake.FakeDeploy()
+        self.vendor = ipminative.VendorPassthru()
         self.management = ipminative.NativeIPMIManagement()
 
 
@@ -135,6 +136,7 @@ class FakeAgentDriver(base.BaseDriver):
 
     def __init__(self):
         self.power = fake.FakePower()
+        self.boot = pxe.PXEBoot()
         self.deploy = agent.AgentDeploy()
         self.vendor = agent.AgentVendorInterface()
 

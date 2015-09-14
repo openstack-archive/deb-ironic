@@ -167,7 +167,7 @@ def parse_image_ref(image_href):
 
     :raises ValueError
     """
-    if '/' not in str(image_href):
+    if '/' not in six.text_type(image_href):
         image_id = image_href
         (glance_host, glance_port, use_ssl) = _get_api_server()
         return (image_id, glance_host, glance_port, use_ssl)
@@ -253,7 +253,7 @@ def is_glance_image(image_href):
 
 
 def is_image_href_ordinary_file_name(image_href):
-    """judge if image_href is a ordinary file name.
+    """Check if image_href is a ordinary file name.
 
     This method judges if image_href is a ordinary file name or not,
     which is a file supposed to be stored in share file system.

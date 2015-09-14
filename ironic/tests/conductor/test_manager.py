@@ -1321,6 +1321,22 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         self.assertIsNotNone(node.last_error)
         mock_cleanup.assert_called_once_with(mock.ANY)
 
+    def test__check_cleanwait_timeouts(self):
+        self._start_service()
+        CONF.set_override('clean_callback_timeout', 1, group='conductor')
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.CLEANWAIT,
+            target_provision_state=states.AVAILABLE,
+            provision_updated_at=datetime.datetime(2000, 1, 1, 0, 0))
+
+        self.service._check_cleanwait_timeouts(self.context)
+        self.service._worker_pool.waitall()
+        node.refresh()
+        self.assertEqual(states.CLEANFAIL, node.provision_state)
+        self.assertEqual(states.AVAILABLE, node.target_provision_state)
+        self.assertIsNotNone(node.last_error)
+
     def test_do_node_tear_down_invalid_state(self):
         self._start_service()
         # test node.provision_state is incorrect for tear_down
@@ -2735,6 +2751,63 @@ class UpdatePortTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         # Compare true exception hidden by @messaging.expected_exceptions
         self.assertEqual(exception.UnsupportedDriverExtension,
                          exc.exc_info[0])
+
+
+@_mock_record_keepalive
+class RaidTestCases(_ServiceSetUpMixin, tests_db_base.DbTestCase):
+
+    def setUp(self):
+        super(RaidTestCases, self).setUp()
+        self.node = obj_utils.create_test_node(
+            self.context, driver='fake', provision_state=states.MANAGEABLE)
+
+    def test_get_raid_logical_disk_properties(self):
+        self._start_service()
+        properties = self.service.get_raid_logical_disk_properties(
+            self.context, 'fake')
+        self.assertIn('raid_level', properties)
+        self.assertIn('size_gb', properties)
+
+    def test_get_raid_logical_disk_properties_iface_not_supported(self):
+        self.driver.raid = None
+        self._start_service()
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.get_raid_logical_disk_properties,
+                                self.context, 'fake')
+        self.assertEqual(exception.UnsupportedDriverExtension, exc.exc_info[0])
+
+    def test_set_target_raid_config(self):
+        raid_config = {'logical_disks': [{'size_gb': 100, 'raid_level': '1'}]}
+        self.service.set_target_raid_config(
+            self.context, self.node.uuid, raid_config)
+        self.node.refresh()
+        self.assertEqual(raid_config, self.node.target_raid_config)
+
+    def test_set_target_raid_config_iface_not_supported(self):
+        raid_config = {'logical_disks': [{'size_gb': 100, 'raid_level': '1'}]}
+        self.driver.raid = None
+        exc = self.assertRaises(
+            messaging.rpc.ExpectedException,
+            self.service.set_target_raid_config,
+            self.context, self.node.uuid, raid_config)
+        self.node.refresh()
+        self.assertEqual({}, self.node.target_raid_config)
+        self.assertEqual(exception.UnsupportedDriverExtension, exc.exc_info[0])
+
+    def test_set_target_raid_config_invalid_parameter_value(self):
+        # Missing raid_level in the below raid config.
+        raid_config = {'logical_disks': [{'size_gb': 100}]}
+        self.node.target_raid_config = {'foo': 'bar'}
+        self.node.save()
+
+        exc = self.assertRaises(
+            messaging.rpc.ExpectedException,
+            self.service.set_target_raid_config,
+            self.context, self.node.uuid, raid_config)
+
+        self.node.refresh()
+        self.assertEqual({'foo': 'bar'}, self.node.target_raid_config)
+        self.assertEqual(exception.InvalidParameterValue, exc.exc_info[0])
 
 
 class ManagerSpawnWorkerTestCase(tests_base.TestCase):

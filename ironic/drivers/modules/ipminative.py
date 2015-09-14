@@ -134,8 +134,8 @@ def _power_on(driver_info):
              from ipmi.
     """
 
-    msg = _LW("IPMI power on failed for node %(node_id)s with the "
-              "following error: %(error)s")
+    msg = _("IPMI power on failed for node %(node_id)s with the "
+            "following error: %(error)s")
     try:
         ipmicmd = ipmi_command.Command(bmc=driver_info['address'],
                                        userid=driver_info['username'],
@@ -143,15 +143,17 @@ def _power_on(driver_info):
         wait = CONF.ipmi.retry_timeout
         ret = ipmicmd.set_power('on', wait)
     except pyghmi_exception.IpmiException as e:
-        LOG.warning(msg, {'node_id': driver_info['uuid'], 'error': str(e)})
-        raise exception.IPMIFailure(cmd=str(e))
+        error = msg % {'node_id': driver_info['uuid'], 'error': e}
+        LOG.error(error)
+        raise exception.IPMIFailure(error)
 
     state = ret.get('powerstate')
     if state == 'on':
         return states.POWER_ON
     else:
-        LOG.warning(msg, {'node_id': driver_info['uuid'], 'error': ret})
-        raise exception.PowerStateFailure(pstate=state)
+        error = _("bad response: %s") % ret
+        LOG.error(msg, {'node_id': driver_info['uuid'], 'error': error})
+        raise exception.PowerStateFailure(pstate=states.POWER_ON)
 
 
 def _power_off(driver_info):
@@ -164,8 +166,8 @@ def _power_off(driver_info):
              from ipmi.
     """
 
-    msg = _LW("IPMI power off failed for node %(node_id)s with the "
-              "following error: %(error)s")
+    msg = _("IPMI power off failed for node %(node_id)s with the "
+            "following error: %(error)s")
     try:
         ipmicmd = ipmi_command.Command(bmc=driver_info['address'],
                                        userid=driver_info['username'],
@@ -173,15 +175,17 @@ def _power_off(driver_info):
         wait = CONF.ipmi.retry_timeout
         ret = ipmicmd.set_power('off', wait)
     except pyghmi_exception.IpmiException as e:
-        LOG.warning(msg, {'node_id': driver_info['uuid'], 'error': str(e)})
-        raise exception.IPMIFailure(cmd=str(e))
+        error = msg % {'node_id': driver_info['uuid'], 'error': e}
+        LOG.error(error)
+        raise exception.IPMIFailure(error)
 
     state = ret.get('powerstate')
     if state == 'off':
         return states.POWER_OFF
     else:
-        LOG.warning(msg % {'node_id': driver_info['uuid'], 'error': ret})
-        raise exception.PowerStateFailure(pstate=state)
+        error = _("bad response: %s") % ret
+        LOG.error(msg, {'node_id': driver_info['uuid'], 'error': error})
+        raise exception.PowerStateFailure(pstate=states.POWER_OFF)
 
 
 def _reboot(driver_info):
@@ -196,8 +200,8 @@ def _reboot(driver_info):
              from ipmi.
     """
 
-    msg = _LW("IPMI power reboot failed for node %(node_id)s with the "
-              "following error: %(error)s")
+    msg = _("IPMI power reboot failed for node %(node_id)s with the "
+            "following error: %(error)s")
     try:
         ipmicmd = ipmi_command.Command(bmc=driver_info['address'],
                                        userid=driver_info['username'],
@@ -205,15 +209,17 @@ def _reboot(driver_info):
         wait = CONF.ipmi.retry_timeout
         ret = ipmicmd.set_power('boot', wait)
     except pyghmi_exception.IpmiException as e:
-        LOG.warning(msg % {'node_id': driver_info['uuid'], 'error': str(e)})
-        raise exception.IPMIFailure(cmd=str(e))
+        error = msg % {'node_id': driver_info['uuid'], 'error': e}
+        LOG.error(error)
+        raise exception.IPMIFailure(error)
 
     state = ret.get('powerstate')
     if state == 'on':
         return states.POWER_ON
     else:
-        LOG.warning(msg % {'node_id': driver_info['uuid'], 'error': ret})
-        raise exception.PowerStateFailure(pstate=state)
+        error = _("bad response: %s") % ret
+        LOG.error(msg, {'node_id': driver_info['uuid'], 'error': error})
+        raise exception.PowerStateFailure(pstate=states.REBOOT)
 
 
 def _power_status(driver_info):
@@ -231,10 +237,11 @@ def _power_status(driver_info):
                                        password=driver_info['password'])
         ret = ipmicmd.get_power()
     except pyghmi_exception.IpmiException as e:
-        LOG.warning(_LW("IPMI get power state failed for node %(node_id)s "
-                        "with the following error: %(error)s"),
-                    {'node_id': driver_info['uuid'], 'error': str(e)})
-        raise exception.IPMIFailure(cmd=str(e))
+        msg = (_("IPMI get power state failed for node %(node_id)s "
+                 "with the following error: %(error)s") %
+               {'node_id': driver_info['uuid'], 'error': e})
+        LOG.error(msg)
+        raise exception.IPMIFailure(msg)
 
     state = ret.get('powerstate')
     if state == 'on':
@@ -288,6 +295,44 @@ def _get_sensors_data(driver_info):
                 'Health': str(reading.health)}
 
     return sensors_data
+
+
+def _parse_raw_bytes(raw_bytes):
+    """Parse raw bytes string.
+
+    :param raw_bytes: a string of hexadecimal raw bytes, e.g. '0x00 0x01'.
+    :returns: a tuple containing the arguments for pyghmi call as integers,
+             (IPMI net function, IPMI command, list of command's data).
+    :raises: InvalidParameterValue when an invalid value is specified.
+    """
+    try:
+        bytes_list = [int(x, base=16) for x in raw_bytes.split()]
+        return bytes_list[0], bytes_list[1], bytes_list[2:]
+    except ValueError:
+        raise exception.InvalidParameterValue(_(
+            "Invalid raw bytes string: '%s'") % raw_bytes)
+    except IndexError:
+        raise exception.InvalidParameterValue(_(
+            "Raw bytes string requires two bytes at least."))
+
+
+def _send_raw(driver_info, raw_bytes):
+    """Send raw bytes to the BMC."""
+    netfn, command, data = _parse_raw_bytes(raw_bytes)
+    LOG.debug("Sending raw bytes %(bytes)s to node %(node_id)s",
+              {'bytes': raw_bytes, 'node_id': driver_info['uuid']})
+    try:
+        ipmicmd = ipmi_command.Command(bmc=driver_info['address'],
+                                       userid=driver_info['username'],
+                                       password=driver_info['password'])
+        ipmicmd.xraw_command(netfn, command, data=data)
+    except pyghmi_exception.IpmiException as e:
+        msg = (_("IPMI send raw bytes '%(bytes)s' failed for node %(node_id)s"
+                 " with the following error: %(error)s") %
+               {'bytes': raw_bytes, 'node_id': driver_info['uuid'],
+                'error': e})
+        LOG.error(msg)
+        raise exception.IPMIFailure(msg)
 
 
 class NativeIPMIPower(base.PowerInterface):
@@ -562,3 +607,65 @@ class NativeIPMIShellinaboxConsole(base.ConsoleInterface):
         driver_info = _parse_driver_info(task.node)
         url = console_utils.get_shellinabox_console_url(driver_info['port'])
         return {'type': 'shellinabox', 'url': url}
+
+
+class VendorPassthru(base.VendorInterface):
+
+    def get_properties(self):
+        return COMMON_PROPERTIES
+
+    def validate(self, task, method, **kwargs):
+        """Validate vendor-specific actions.
+
+        :param task: a task from TaskManager.
+        :param method: method to be validated
+        :param kwargs: info for action.
+        :raises: InvalidParameterValue when an invalid parameter value is
+                 specified.
+        :raises: MissingParameterValue if a required parameter is missing.
+
+        """
+        if method == 'send_raw':
+            raw_bytes = kwargs.get('raw_bytes')
+            if not raw_bytes:
+                raise exception.MissingParameterValue(_(
+                    'Parameter raw_bytes (string of bytes) was not '
+                    'specified.'))
+            _parse_raw_bytes(raw_bytes)
+
+        _parse_driver_info(task.node)
+
+    @base.passthru(['POST'])
+    @task_manager.require_exclusive_lock
+    def send_raw(self, task, http_method, raw_bytes):
+        """Send raw bytes to the BMC. Bytes should be a string of bytes.
+
+        :param task: a TaskManager instance.
+        :param http_method: the HTTP method used on the request.
+        :param raw_bytes: a string of raw bytes to send, e.g. '0x00 0x01'
+        :raises: IPMIFailure on an error from native IPMI call.
+        :raises: MissingParameterValue if a required parameter is missing.
+        :raises: InvalidParameterValue when an invalid value is specified.
+
+        """
+        driver_info = _parse_driver_info(task.node)
+        _send_raw(driver_info, raw_bytes)
+
+    @base.passthru(['POST'])
+    @task_manager.require_exclusive_lock
+    def bmc_reset(self, task, http_method, warm=True):
+        """Reset BMC via IPMI command.
+
+        :param task: a TaskManager instance.
+        :param http_method: the HTTP method used on the request.
+        :param warm: boolean parameter to decide on warm or cold reset.
+        :raises: IPMIFailure on an error from native IPMI call.
+        :raises: MissingParameterValue if a required parameter is missing.
+        :raises: InvalidParameterValue when an invalid value is specified
+
+        """
+        driver_info = _parse_driver_info(task.node)
+        # NOTE(yuriyz): pyghmi 0.8.0 does not have a method for BMC reset
+        command = '0x03' if warm else '0x02'
+        raw_command = '0x06 ' + command
+        _send_raw(driver_info, raw_command)

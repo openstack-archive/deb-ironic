@@ -267,26 +267,27 @@ class BaseAgentVendor(base.VendorInterface):
             # with previous code, otherwise nodes in CLEANING when this
             # is deployed would fail. Should be removed once the Mitaka
             # release starts.
-            elif (node.provision_state in (states.CLEANWAIT, states.CLEANING)
-                  and not node.clean_step):
-                # Agent booted from prepare_cleaning
-                LOG.debug('Node %s just booted to start cleaning.', node.uuid)
-                manager.set_node_cleaning_steps(task)
-                self._notify_conductor_resume_clean(task)
-            # TODO(lucasagomes): CLEANING here for backwards compat
-            # with previous code, otherwise nodes in CLEANING when this
-            # is deployed would fail. Should be removed once the Mitaka
-            # release starts.
-            elif (node.provision_state in (states.CLEANWAIT, states.CLEANING)
-                  and node.clean_step):
-                self.continue_cleaning(task, **kwargs)
+            elif node.provision_state in (states.CLEANWAIT, states.CLEANING):
+                node.touch_provisioning()
+                if not node.clean_step:
+                    LOG.debug('Node %s just booted to start cleaning.',
+                              node.uuid)
+                    msg = _('Node failed to start the next cleaning step.')
+                    manager.set_node_cleaning_steps(task)
+                    self._notify_conductor_resume_clean(task)
+                else:
+                    msg = _('Node failed to check cleaning progress.')
+                    self.continue_cleaning(task, **kwargs)
 
         except Exception as e:
             err_info = {'node': node.uuid, 'msg': msg, 'e': e}
             last_error = _('Asynchronous exception for node %(node)s: '
                            '%(msg)s exception: %(e)s') % err_info
             LOG.exception(last_error)
-            deploy_utils.set_failed_state(task, last_error)
+            if node.provision_state in (states.CLEANING, states.CLEANWAIT):
+                manager.cleaning_error_handler(task, last_error)
+            else:
+                deploy_utils.set_failed_state(task, last_error)
 
     @base.driver_passthru(['POST'], async=False)
     def lookup(self, context, **kwargs):
