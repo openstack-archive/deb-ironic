@@ -1,4 +1,4 @@
-ironic (1:4.2.0-1) experimental; urgency=medium
+ironic (1:4.2.0-1) UNRELEASED; urgency=medium
 
   * New upstream release.
   * Bumped minimum python-pbr version to 1.8.
@@ -6,8 +6,10 @@ ironic (1:4.2.0-1) experimental; urgency=medium
     <joedalton2@yahoo.dk> (Closes: #800458).
   * Added Dutch translation of debconf messages thanks to Frans Spiesschaert
     <Frans.Spiesschaert@yucom.be> (Closes: #799458).
+  * New ironic-api depends on openstackclient.
+  * Ran wrap-and-sort -t -a.
 
- -- Thomas Goirand <zigo@debian.org>  Wed, 07 Oct 2015 15:57:53 +0200
+ -- Thomas Goirand <zigo@debian.org>  Mon, 21 Sep 2015 13:01:00 +0000
 
 ironic (1:4.1.0-1) experimental; urgency=medium
 

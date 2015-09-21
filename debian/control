@@ -2,7 +2,7 @@ Source: ironic
 Section: net
 Priority: extra
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
-Uploaders: Thomas Goirand <zigo@debian.org>
+Uploaders: Thomas Goirand <zigo@debian.org>,
 Build-Depends: debhelper (>= 9),
                dh-python,
                dh-systemd,
@@ -13,8 +13,8 @@ Build-Depends: debhelper (>= 9),
                python-setuptools,
                python-sphinx,
 Build-Depends-Indep: alembic (>= 0.8.0),
-                     python-automaton,
                      python-amqplib,
+                     python-automaton,
                      python-babel,
                      python-coverage,
                      python-eventlet (>= 0.17.4),
@@ -55,8 +55,8 @@ Build-Depends-Indep: alembic (>= 0.8.0),
                      python-proliantutils (>= 2.1.4),
                      python-psycopg2 (>= 2.5),
                      python-pyghmi,
-                     python-pysnmp4,
                      python-pymysql,
+                     python-pysnmp4,
                      python-requests (>= 2.5.2),
                      python-retrying,
                      python-scciclient (>= 0.2.0),
@@ -83,10 +83,10 @@ Homepage: http://github.com/openstack/ironic
 Package: python-ironic
 Architecture: all
 Section: python
-Pre-Depends: dpkg (>= 1.15.6~)
+Pre-Depends: dpkg (>= 1.15.6~),
 Depends: alembic (>= 0.8.0),
-         python-automaton,
          python-amqplib,
+         python-automaton,
          python-eventlet (>= 0.17.4),
          python-glanceclient (>= 1:0.18.0),
          python-greenlet,
@@ -119,8 +119,8 @@ Depends: alembic (>= 0.8.0),
          python-proliantutils (>= 2.1.4),
          python-psycopg2 (>= 2.5),
          python-pyghmi,
-         python-pysnmp4,
          python-pymysql,
+         python-pysnmp4,
          python-requests (>= 2.5.2),
          python-retrying,
          python-scciclient (>= 0.2.0),
@@ -136,7 +136,7 @@ Depends: alembic (>= 0.8.0),
          websockify (>= 0.6.1),
          ${misc:Depends},
          ${python:Depends},
-Conflicts: python-cjson
+Conflicts: python-cjson,
 Description: bare metal hypervisor API for OpenStack - Python lib
  Ironic provision bare metal machines instead of virtual machines. It is a fork
  of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
@@ -169,7 +169,11 @@ Description: bare metal hypervisor API for OpenStack - common files
 
 Package: ironic-api
 Architecture: all
-Depends: ironic-common, ${misc:Depends}, ${ostack-lsb-base}, ${python:Depends}
+Depends: ironic-common,
+         python-openstackclient,
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends},
 Description: bare metal hypervisor API for OpenStack - API server
  Ironic provision bare metal machines instead of virtual machines. It is a fork
  of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
@@ -183,7 +187,10 @@ Description: bare metal hypervisor API for OpenStack - API server
 
 Package: ironic-conductor
 Architecture: all
-Depends: ironic-common, ${misc:Depends}, ${ostack-lsb-base}, ${python:Depends}
+Depends: ironic-common,
+         ${misc:Depends},
+         ${ostack-lsb-base},
+         ${python:Depends},
 Description: bare metal hypervisor API for OpenStack - conductor
  Ironic provision bare metal machines instead of virtual machines. It is a fork
  of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
@@ -198,7 +205,8 @@ Description: bare metal hypervisor API for OpenStack - conductor
 Package: ironic-doc
 Section: doc
 Architecture: all
-Depends: ${misc:Depends}, ${sphinxdoc:Depends}
+Depends: ${misc:Depends},
+         ${sphinxdoc:Depends},
 Description: bare metal hypervisor API for OpenStack - doc
  Ironic provision bare metal machines instead of virtual machines. It is a fork
  of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
