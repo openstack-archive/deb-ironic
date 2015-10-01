@@ -77,6 +77,7 @@ from ironic.conductor import task_manager
 from ironic.conductor import utils
 from ironic.db import api as dbapi
 from ironic import objects
+from ironic.objects import base as objects_base
 
 MANAGER_TOPIC = 'ironic.conductor_manager'
 WORKER_SPAWN_lOCK = "conductor_worker_spawn"
@@ -199,9 +200,10 @@ CLEANING_INTERFACE_PRIORITY = {
     # by which interface is implementing the clean step. The clean step of the
     # interface with the highest value here, will be executed first in that
     # case.
-    'power': 3,
-    'management': 2,
-    'deploy': 1
+    'power': 4,
+    'management': 3,
+    'deploy': 2,
+    'raid': 1,
 }
 SYNC_EXCLUDED_STATES = (states.DEPLOYWAIT, states.CLEANWAIT, states.ENROLL)
 
@@ -210,7 +212,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
     """Ironic Conductor manager main class."""
 
     # NOTE(rloo): This must be in sync with rpcapi.ConductorAPI's.
-    RPC_API_VERSION = '1.30'
+    RPC_API_VERSION = '1.31'
 
     target = messaging.Target(version=RPC_API_VERSION)
 
@@ -829,6 +831,34 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 state=node.provision_state)
         self._do_node_clean(task)
 
+    def _get_node_next_clean_steps(self, task):
+        """Get the task's node's next clean steps.
+
+        :param task: A TaskManager object
+        :raises: NodeCleaningFailure if an internal error occurred when
+                 getting the next clean steps
+
+        """
+        node = task.node
+        if not node.clean_step:
+            return []
+
+        next_steps = node.driver_internal_info.get('clean_steps', [])
+        try:
+            # Trim off the last clean step (now finished) and
+            # all previous steps
+            next_steps = next_steps[next_steps.index(node.clean_step) + 1:]
+        except ValueError:
+            msg = (_('Node %(node)s got an invalid last step for '
+                     '%(state)s: %(step)s.') %
+                   {'node': node.uuid, 'step': node.clean_step,
+                    'state': node.provision_state})
+            LOG.exception(msg)
+            cleaning_error_handler(task, msg)
+            raise exception.NodeCleaningFailure(node=node.uuid,
+                                                reason=msg)
+        return next_steps
+
     def continue_node_clean(self, context, node_id):
         """RPC method to continue cleaning a node.
 
@@ -843,6 +873,8 @@ class ConductorManager(periodic_task.PeriodicTasks):
                  async task
         :raises: NodeLocked if node is locked by another conductor.
         :raises: NodeNotFound if the node no longer appears in the database
+        :raises: NodeCleaningFailure if an internal error occurred when
+                 getting the next clean steps
 
         """
         LOG.debug("RPC continue_node_clean called for node %s.", node_id)
@@ -861,8 +893,32 @@ class ConductorManager(periodic_task.PeriodicTasks):
                     {'node': task.node.uuid,
                      'state': task.node.provision_state,
                      'clean_state': states.CLEANWAIT})
-            task.set_spawn_error_hook(cleaning_error_handler, task.node,
-                                      'Failed to run next clean step')
+
+            next_steps = self._get_node_next_clean_steps(task)
+
+            # If this isn't the final clean step in the cleaning operation
+            # and it is flagged to abort after the clean step that just
+            # finished, we abort the cleaning operaation.
+            if task.node.clean_step.get('abort_after'):
+                step_name = task.node.clean_step['step']
+                if next_steps:
+                    LOG.debug('The cleaning operation for node %(node)s was '
+                              'marked to be aborted after step "%(step)s '
+                              'completed. Aborting now that it has completed.',
+                              {'node': task.node.uuid, 'step': step_name})
+                    task.process_event('abort',
+                                       callback=self._spawn_worker,
+                                       call_args=(self._do_node_clean_abort,
+                                                  task, step_name),
+                                       err_handler=provisioning_error_handler)
+                    return
+
+                LOG.debug('The cleaning operation for node %(node)s was '
+                          'marked to be aborted after step "%(step)s" '
+                          'completed. However, since there are no more '
+                          'clean steps after this, the abort is not going '
+                          'to be done.', {'node': task.node.uuid,
+                                          'step': step_name})
 
             # TODO(lucasagomes): This conditional is here for backwards
             # compat with previous code. Should be removed once the Mitaka
@@ -870,12 +926,12 @@ class ConductorManager(periodic_task.PeriodicTasks):
             if task.node.provision_state == states.CLEANWAIT:
                 task.process_event('resume')
 
+            task.set_spawn_error_hook(cleaning_error_handler, task.node,
+                                      _('Failed to run next clean step'))
             task.spawn_after(
                 self._spawn_worker,
                 self._do_next_clean_step,
-                task,
-                task.node.driver_internal_info.get('clean_steps', []),
-                task.node.clean_step)
+                task, next_steps)
 
     def _do_node_clean(self, task):
         """Internal RPC method to perform automated cleaning of a node."""
@@ -931,32 +987,16 @@ class ConductorManager(periodic_task.PeriodicTasks):
         set_node_cleaning_steps(task)
         self._do_next_clean_step(
             task,
-            node.driver_internal_info.get('clean_steps', []),
-            node.clean_step)
+            node.driver_internal_info.get('clean_steps', []))
 
-    def _do_next_clean_step(self, task, steps, last_step):
-        """Start executing cleaning/zapping steps from the last step (if any).
+    def _do_next_clean_step(self, task, steps):
+        """Start executing cleaning/zapping steps.
 
         :param task: a TaskManager instance with an exclusive lock
-        :param steps: The complete list of steps that need to be executed
-            on the node
-        :param last_step: The last step that was executed. {} will start
-            from the beginning
+        :param steps: The list of remaining steps that need to be executed
+                      on the node
         """
         node = task.node
-        # Trim already executed steps
-        if last_step:
-            try:
-                # Trim off last_step (now finished) and all previous steps.
-                steps = steps[steps.index(last_step) + 1:]
-            except ValueError:
-                msg = (_('Node %(node)s got an invalid last step for '
-                         '%(state)s: %(step)s.') %
-                       {'node': node.uuid, 'step': last_step,
-                        'state': node.provision_state})
-                LOG.exception(msg)
-                return cleaning_error_handler(task, msg)
-
         LOG.info(_LI('Executing %(state)s on node %(node)s, remaining steps: '
                      '%(steps)s'), {'node': node.uuid, 'steps': steps,
                                     'state': node.provision_state})
@@ -1055,6 +1095,36 @@ class ConductorManager(periodic_task.PeriodicTasks):
             node.target_provision_state = None
             node.save()
 
+    def _do_node_clean_abort(self, task, step_name=None):
+        """Internal method to abort an ongoing operation.
+
+        :param task: a TaskManager instance with an exclusive lock
+        :param step_name: The name of the clean step.
+        """
+        node = task.node
+        try:
+            task.driver.deploy.tear_down_cleaning(task)
+        except Exception as e:
+            LOG.exception(_LE('Failed to tear down cleaning for node %(node)s '
+                              'after aborting the operation. Error: %(err)s'),
+                          {'node': node.uuid, 'err': e})
+            error_msg = _('Failed to tear down cleaning after aborting '
+                          'the operation')
+            cleaning_error_handler(task, error_msg, tear_down_cleaning=False,
+                                   set_fail_state=False)
+            return
+
+        info_message = _('Clean operation aborted for node %s') % node.uuid
+        last_error = _('By request, the clean operation was aborted')
+        if step_name:
+            msg = _(' after the completion of step "%s"') % step_name
+            last_error += msg
+            info_message += msg
+
+        node.last_error = last_error
+        node.save()
+        LOG.info(info_message)
+
     @messaging.expected_exceptions(exception.NoFreeConductorWorker,
                                    exception.NodeLocked,
                                    exception.InvalidParameterValue,
@@ -1083,19 +1153,55 @@ class ConductorManager(periodic_task.PeriodicTasks):
                                    callback=self._spawn_worker,
                                    call_args=(self._do_node_clean, task),
                                    err_handler=provisioning_error_handler)
-            elif (action == states.VERBS['manage'] and
+                return
+
+            if (action == states.VERBS['manage'] and
                     task.node.provision_state == states.ENROLL):
                 task.process_event('manage',
                                    callback=self._spawn_worker,
                                    call_args=(self._do_node_verify, task),
                                    err_handler=provisioning_error_handler)
-            else:
-                try:
-                    task.process_event(action)
-                except exception.InvalidState:
-                    raise exception.InvalidStateRequested(
-                        action=action, node=task.node.uuid,
-                        state=task.node.provision_state)
+                return
+
+            if (action == states.VERBS['abort'] and
+                    task.node.provision_state == states.CLEANWAIT):
+
+                # Check if the clean step is abortable; if so abort it.
+                # Otherwise, indicate in that clean step, that cleaning
+                # should be aborted after that step is done.
+                if (task.node.clean_step and not
+                    task.node.clean_step.get('abortable')):
+                    LOG.info(_LI('The current clean step "%(clean_step)s" for '
+                                 'node %(node)s is not abortable. Adding a '
+                                 'flag to abort the cleaning after the clean '
+                                 'step is completed.'),
+                             {'clean_step': task.node.clean_step['step'],
+                              'node': task.node.uuid})
+                    clean_step = task.node.clean_step
+                    if not clean_step.get('abort_after'):
+                        clean_step['abort_after'] = True
+                        task.node.clean_step = clean_step
+                        task.node.save()
+                    return
+
+                LOG.debug('Aborting the cleaning operation during clean step '
+                          '"%(step)s" for node %(node)s in provision state '
+                          '"%(prov)s".',
+                          {'node': task.node.uuid,
+                           'prov': task.node.provision_state,
+                           'step': task.node.clean_step.get('step')})
+                task.process_event('abort',
+                                   callback=self._spawn_worker,
+                                   call_args=(self._do_node_clean_abort, task),
+                                   err_handler=provisioning_error_handler)
+                return
+
+            try:
+                task.process_event(action)
+            except exception.InvalidState:
+                raise exception.InvalidStateRequested(
+                    action=action, node=task.node.uuid,
+                    state=task.node.provision_state)
 
     @periodic_task.periodic_task(
         spacing=CONF.conductor.sync_power_state_interval)
@@ -1981,7 +2087,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
         :param context: request context.
         :param node_id: node id or uuid.
         :param target_raid_config: Dictionary containing the target RAID
-            configuration.
+            configuration. It may be an empty dictionary as well.
         :raises: UnsupportedDriverExtension, if the node's driver doesn't
             support RAID configuration.
         :raises: InvalidParameterValue, if validation of target raid config
@@ -2001,7 +2107,10 @@ class ConductorManager(periodic_task.PeriodicTasks):
             if not getattr(task.driver, 'raid', None):
                 raise exception.UnsupportedDriverExtension(
                     driver=task.driver, extension='raid')
-            task.driver.raid.validate_raid_config(task, target_raid_config)
+            # Operator may try to unset node.target_raid_config.  So, try to
+            # validate only if it is not empty.
+            if target_raid_config:
+                task.driver.raid.validate_raid_config(task, target_raid_config)
             node.target_raid_config = target_raid_config
             node.save()
 
@@ -2028,6 +2137,108 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 driver=driver_name, extension='raid')
 
         return driver.raid.get_logical_disk_properties()
+
+    def _object_dispatch(self, target, method, context, args, kwargs):
+        """Dispatch a call to an object method.
+
+        This ensures that object methods get called and any exception
+        that is raised gets wrapped in an ExpectedException for forwarding
+        back to the caller (without spamming the conductor logs).
+        """
+        try:
+            # NOTE(danms): Keep the getattr inside the try block since
+            # a missing method is really a client problem
+            return getattr(target, method)(context, *args, **kwargs)
+        except Exception:
+            # NOTE(danms): This is oslo.messaging fu. ExpectedException()
+            # grabs sys.exc_info here and forwards it along. This allows the
+            # caller to see the exception information, but causes us *not* to
+            # log it as such in this service. This is something that is quite
+            # critical so that things that conductor does on behalf of another
+            # node are not logged as exceptions in conductor logs. Otherwise,
+            # you'd have the same thing logged in both places, even though an
+            # exception here *always* means that the caller screwed up, so
+            # there's no reason to log it here.
+            raise messaging.ExpectedException()
+
+    def object_class_action_versions(self, context, objname, objmethod,
+                                     object_versions, args, kwargs):
+        """Perform an action on a VersionedObject class.
+
+        :param context: The context within which to perform the action
+        :param objname: The registry name of the object
+        :param objmethod: The name of the action method to call
+        :param object_versions: A dict of {objname: version} mappings
+        :param args: The positional arguments to the action method
+        :param kwargs: The keyword arguments to the action method
+        :returns: The result of the action method, which may (or may not)
+        be an instance of the implementing VersionedObject class.
+        """
+        objclass = objects_base.IronicObject.obj_class_from_name(
+            objname, object_versions[objname])
+        result = self._object_dispatch(objclass, objmethod, context,
+                                       args, kwargs)
+        # NOTE(danms): The RPC layer will convert to primitives for us,
+        # but in this case, we need to honor the version the client is
+        # asking for, so we do it before returning here.
+        if isinstance(result, objects_base.IronicObject):
+            result = result.obj_to_primitive(
+                target_version=object_versions[objname],
+                version_manifest=object_versions)
+        return result
+
+    def object_action(self, context, objinst, objmethod, args, kwargs):
+        """Perform an action on a VersionedObject instance.
+
+        :param context: The context within which to perform the action
+        :param objinst: The object instance on which to perform the action
+        :param objmethod: The name of the action method to call
+        :param args: The positional arguments to the action method
+        :param kwargs: The keyword arguments to the action method
+        :returns: A tuple with the updates made to the object and
+                  the result of the action method
+        """
+
+        oldobj = objinst.obj_clone()
+        result = self._object_dispatch(objinst, objmethod, context,
+                                       args, kwargs)
+        updates = dict()
+        # NOTE(danms): Diff the object with the one passed to us and
+        # generate a list of changes to forward back
+        for name, field in objinst.fields.items():
+            if not objinst.obj_attr_is_set(name):
+                # Avoid demand-loading anything
+                continue
+            if (not oldobj.obj_attr_is_set(name) or
+                    getattr(oldobj, name) != getattr(objinst, name)):
+                updates[name] = field.to_primitive(objinst, name,
+                                                   getattr(objinst, name))
+        # This is safe since a field named this would conflict with the
+        # method anyway
+        updates['obj_what_changed'] = objinst.obj_what_changed()
+        return updates, result
+
+    def object_backport_versions(self, context, objinst, object_versions):
+        """Perform a backport of an object instance.
+
+        The default behavior of the base VersionedObjectSerializer, upon
+        receiving an object with a version newer than what is in the local
+        registry, is to call this method to request a backport of the object.
+
+        :param context: The context within which to perform the backport
+        :param objinst: An instance of a VersionedObject to be backported
+        :param object_versions: A dict of {objname: version} mappings
+        :returns: The downgraded instance of objinst
+        """
+        target = object_versions[objinst.obj_name()]
+        LOG.debug('Backporting %(obj)s to %(ver)s with versions %(manifest)s',
+                  {'obj': objinst.obj_name(),
+                   'ver': target,
+                   'manifest': ','.join(
+                       ['%s=%s' % (name, ver)
+                        for name, ver in object_versions.items()])})
+        return objinst.obj_to_primitive(target_version=target,
+                                        version_manifest=object_versions)
 
 
 def get_vendor_passthru_metadata(route_dict):
@@ -2371,7 +2582,8 @@ def _do_inspect_hardware(task):
         raise exception.HardwareInspectionFailure(error=error)
 
 
-def cleaning_error_handler(task, msg, tear_down_cleaning=True):
+def cleaning_error_handler(task, msg, tear_down_cleaning=True,
+                           set_fail_state=True):
     """Put a failed node in CLEANFAIL or ZAPFAIL and maintenance."""
     # Reset clean step, msg should include current step
     if task.node.provision_state in (states.CLEANING, states.CLEANWAIT):
@@ -2388,7 +2600,8 @@ def cleaning_error_handler(task, msg, tear_down_cleaning=True):
                        'reason: %(err)s'), {'err': e, 'uuid': task.node.uuid})
             LOG.exception(msg)
 
-    task.process_event('fail')
+    if set_fail_state:
+        task.process_event('fail')
 
 
 def _step_key(step):

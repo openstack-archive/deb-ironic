@@ -12,6 +12,10 @@ The gate currently runs the unit tests under both
 Python 2.7 and Python 3.4.  It is strongly encouraged to run the unit tests
 locally under one, the other, or both prior to submitting a patch.
 
+.. Note:: The unit test environment setup should be done on a clean installed
+    VM or system. Sharing the environment with devstack testing is not
+    recommended due to conflicting configuration with system dependencies.
+
 .. seealso::
 
     http://docs.openstack.org/infra/manual/developers.html#development-workflow
@@ -22,9 +26,13 @@ Install prerequisites (for python 2.7):
 
     sudo apt-get install python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev gettext ipmitool psmisc graphviz
 
-- Fedora/RHEL7::
+- Fedora 21/RHEL7/CentOS7::
 
     sudo yum install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc graphviz gcc
+
+- Fedora 22 or higher::
+
+    sudo dnf install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc graphviz gcc
 
   If using RHEL and yum reports "No package python-pip available" and "No
   package git-review available", use the EPEL software repository.
@@ -43,9 +51,13 @@ Using Python 3.4:
 
   Follow the instructions above to install prerequisites and on:
 
-  - Fedora::
+  - Fedora 21/RHEL7/CentOS7::
 
     sudo yum install python3-devel
+
+  - Fedora 22 higher::
+
+    sudo dnf install python3-devel
 
 Install these on all distros::
 
@@ -133,8 +145,12 @@ Option 1: Manual Install
     # Ubuntu/Debian:
     sudo apt-get install rabbitmq-server
 
-    # Fedora/RHEL7:
+    # Fedora 21/RHEL7/CentOS7:
     sudo yum install rabbitmq-server
+    sudo systemctl start rabbitmq-server.service
+
+    # Fedora 22 or higher:
+    sudo dnf install rabbitmq-server
     sudo systemctl start rabbitmq-server.service
 
     # openSUSE/SLE 12:
@@ -146,8 +162,12 @@ Option 1: Manual Install
     # Ubuntu/Debian:
     # sudo apt-get install mysql-server
 
-    # Fedora/RHEL7:
+    # Fedora 21/RHEL7/CentOS7:
     # sudo yum install mariadb
+    # sudo systemctl start mariadb.service
+
+    # Fedora 22 or higher:
+    # sudo dnf install mariadb
     # sudo systemctl start mariadb.service
 
     # openSUSE/SLE 12:

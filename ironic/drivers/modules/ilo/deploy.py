@@ -15,11 +15,13 @@
 iLO Deploy Driver(s) and supporting methods.
 """
 
+import os
 import tempfile
 
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
+import six.moves.urllib.parse as urlparse
 
 from ironic.common import boot_devices
 from ironic.common import dhcp_factory
@@ -33,6 +35,7 @@ from ironic.common import image_service
 from ironic.common import images
 from ironic.common import states
 from ironic.common import swift
+from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
@@ -66,6 +69,50 @@ CONF.import_opt('pxe_append_params', 'ironic.drivers.modules.iscsi_deploy',
 CONF.import_opt('swift_ilo_container', 'ironic.drivers.modules.ilo.common',
                 group='ilo')
 CONF.register_opts(clean_opts, group='ilo')
+
+
+def _recreate_and_populate_ilo_boot_iso(task):
+    """Recreate the boot iso for the node.
+
+    Recreates the boot iso for the image and host it
+    on a valid image service and populates the new boot iso
+    in the instance_info of the node.
+
+    :param task: a TaskManager instance containing the node to act on.
+    """
+    instance_info = task.node.instance_info
+    root_uuid = task.node.driver_internal_info.get('root_uuid_or_disk_id')
+    boot_iso = None
+    if root_uuid:
+        try:
+            # Recreate the boot iso
+            boot_iso = _get_boot_iso(task, root_uuid)
+        except Exception as e:
+            LOG.warning(_LW("Boot iso recreation failed during take over. "
+                            "Reason: %(reason)s. The node %(node)s may not "
+                            "come up with current boot_iso %(boot_iso)s. "),
+                        {'boot_iso': instance_info['ilo_boot_iso'],
+                         'reason': e, 'node': task.node.uuid})
+        # populate the new ilo_boot_iso in node.instance_info.
+        if boot_iso:
+            instance_info['ilo_boot_iso'] = boot_iso
+            task.node.instance_info = instance_info
+            task.node.save()
+        else:
+            LOG.warning(_LW("Boot iso recreation failed during take over. "
+                            "The node %(node)s may not come up "
+                            "with current boot_iso %(boot_iso)s. "),
+                        {'boot_iso': instance_info['ilo_boot_iso'],
+                         'node': task.node.uuid})
+    else:
+        LOG.warning(_LW("There is not enough information to recreate "
+                        "boot iso. The UUID for the root partition "
+                        "could not be found. The boot-iso cannot be "
+                        "created without root_uuid. The node %(node)s may "
+                        "not come up with current boot_iso "
+                        "%(boot_iso)s "),
+                    {'boot_iso': instance_info['ilo_boot_iso'],
+                     'node': task.node.uuid})
 
 
 def _get_boot_iso_object_name(node):
@@ -122,6 +169,7 @@ def _get_boot_iso(task, root_uuid):
                                   "instance_info['ilo_boot_iso']. Either %s "
                                   "is not a valid HTTP(S) URL or is "
                                   "not reachable."), boot_iso)
+
         return task.node.instance_info['ilo_boot_iso']
 
     # Option 2 - Check if user has provided a boot_iso in Glance. If boot_iso
@@ -156,45 +204,62 @@ def _get_boot_iso(task, root_uuid):
     # ISO.  Such a synchronisation mechanism doesn't exist in ironic as of now.
 
     # Option 3 - Create boot_iso from kernel/ramdisk, upload to Swift
-    # and provide its name.
+    # or web server and provide its name.
     deploy_iso_uuid = deploy_info['ilo_deploy_iso']
     boot_mode = deploy_utils.get_boot_mode_for_deploy(task.node)
     boot_iso_object_name = _get_boot_iso_object_name(task.node)
     kernel_params = CONF.pxe.pxe_append_params
-    container = CONF.ilo.swift_ilo_container
-
     with tempfile.NamedTemporaryFile(dir=CONF.tempdir) as fileobj:
         boot_iso_tmp_file = fileobj.name
         images.create_boot_iso(task.context, boot_iso_tmp_file,
                                kernel_href, ramdisk_href,
                                deploy_iso_uuid, root_uuid,
                                kernel_params, boot_mode)
-        swift_api = swift.SwiftAPI()
-        swift_api.create_object(container, boot_iso_object_name,
-                                boot_iso_tmp_file)
+        if CONF.ilo.use_web_server_for_images:
+            boot_iso_url = (
+                ilo_common.copy_image_to_web_server(boot_iso_tmp_file,
+                                                    boot_iso_object_name))
+            driver_internal_info = task.node.driver_internal_info
+            driver_internal_info['boot_iso_created_in_web_server'] = True
+            task.node.driver_internal_info = driver_internal_info
+            task.node.save()
+            LOG.debug("Created boot_iso %(boot_iso)s for node %(node)s",
+                      {'boot_iso': boot_iso_url, 'node': task.node.uuid})
+            return boot_iso_url
+        else:
+            container = CONF.ilo.swift_ilo_container
+            swift_api = swift.SwiftAPI()
+            swift_api.create_object(container, boot_iso_object_name,
+                                    boot_iso_tmp_file)
 
-    LOG.debug("Created boot_iso %s in Swift", boot_iso_object_name)
-
-    return 'swift:%s' % boot_iso_object_name
+            LOG.debug("Created boot_iso %s in Swift", boot_iso_object_name)
+            return 'swift:%s' % boot_iso_object_name
 
 
 def _clean_up_boot_iso_for_instance(node):
-    """Deletes the boot ISO if it was created in Swift for the instance.
+    """Deletes the boot ISO if it was created for the instance.
 
     :param node: an ironic node object.
     """
     ilo_boot_iso = node.instance_info.get('ilo_boot_iso')
-    if not (ilo_boot_iso and ilo_boot_iso.startswith('swift')):
+    if not ilo_boot_iso:
         return
-    swift_api = swift.SwiftAPI()
-    container = CONF.ilo.swift_ilo_container
-    boot_iso_object_name = _get_boot_iso_object_name(node)
-    try:
-        swift_api.delete_object(container, boot_iso_object_name)
-    except exception.SwiftOperationError as e:
-        LOG.exception(_LE("Failed to clean up boot ISO for %(node)s."
-                          "Error: %(error)s."),
-                      {'node': node.uuid, 'error': e})
+    if ilo_boot_iso.startswith('swift'):
+        swift_api = swift.SwiftAPI()
+        container = CONF.ilo.swift_ilo_container
+        boot_iso_object_name = _get_boot_iso_object_name(node)
+        try:
+            swift_api.delete_object(container, boot_iso_object_name)
+        except exception.SwiftOperationError as e:
+            LOG.exception(_LE("Failed to clean up boot ISO for node "
+                              "%(node)s. Error: %(error)s."),
+                          {'node': node.uuid, 'error': e})
+    elif CONF.ilo.use_web_server_for_images:
+        result = urlparse.urlparse(ilo_boot_iso)
+        ilo_boot_iso_name = os.path.basename(result.path)
+        boot_iso_path = os.path.join(
+            CONF.deploy.http_root, ilo_boot_iso_name)
+        utils.unlink_without_raise(boot_iso_path)
 
 
 def _parse_driver_info(node):
@@ -278,7 +343,7 @@ def _prepare_agent_vmedia_boot(task):
     # during deploy.
     ilo_common.eject_vmedia_devices(task)
 
-    deploy_ramdisk_opts = agent.build_agent_options(task.node)
+    deploy_ramdisk_opts = deploy_utils.build_agent_options(task.node)
     deploy_iso = task.node.driver_info['ilo_deploy_iso']
     _reboot_into(task, deploy_iso, deploy_ramdisk_opts)
 
@@ -450,7 +515,7 @@ class IloVirtualMediaIscsiDeploy(base.DeployInterface):
         iscsi_deploy.check_image_size(task)
 
         deploy_ramdisk_opts = iscsi_deploy.build_deploy_ramdisk_options(node)
-        agent_opts = agent.build_agent_options(node)
+        agent_opts = deploy_utils.build_agent_options(node)
         deploy_ramdisk_opts.update(agent_opts)
         deploy_nic_mac = deploy_utils.get_single_nic_with_vif_port_id(task)
         deploy_ramdisk_opts['BOOTIF'] = deploy_nic_mac
@@ -472,6 +537,11 @@ class IloVirtualMediaIscsiDeploy(base.DeployInterface):
         """
         manager_utils.node_power_action(task, states.POWER_OFF)
         _disable_secure_boot_if_supported(task)
+        driver_internal_info = task.node.driver_internal_info
+        driver_internal_info.pop('boot_iso_created_in_web_server', None)
+        driver_internal_info.pop('root_uuid_or_disk_id', None)
+        task.node.driver_internal_info = driver_internal_info
+        task.node.save()
         return states.DELETED
 
     def prepare(self, task):
@@ -491,10 +561,25 @@ class IloVirtualMediaIscsiDeploy(base.DeployInterface):
         :param task: a TaskManager instance containing the node to act on.
         """
         _clean_up_boot_iso_for_instance(task.node)
-        iscsi_deploy.destroy_images(task.node.uuid)
+        if not CONF.ilo.use_web_server_for_images:
+            iscsi_deploy.destroy_images(task.node.uuid)
+        else:
+            ilo_common.destroy_floppy_image_from_web_server(task.node)
 
     def take_over(self, task):
-        pass
+        """Enables boot up of an ACTIVE node.
+
+        It ensures that the ACTIVE node can be booted up successfully
+        when node is taken over by another conductor.
+
+        :param: task: a TaskManager instance containing the node to act on.
+        """
+        driver_internal_info = task.node.driver_internal_info
+        boot_iso_created_in_web_server = (
+            driver_internal_info.get('boot_iso_created_in_web_server'))
+        if (CONF.ilo.use_web_server_for_images
+                and boot_iso_created_in_web_server):
+            _recreate_and_populate_ilo_boot_iso(task)
 
 
 class IloVirtualMediaAgentDeploy(base.DeployInterface):
@@ -915,6 +1000,10 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
         uuid_dict = iscsi_deploy.continue_deploy(task, **kwargs)
         root_uuid_or_disk_id = uuid_dict.get(
             'root uuid', uuid_dict.get('disk identifier'))
+        driver_internal_info = task.node.driver_internal_info
+        driver_internal_info['root_uuid_or_disk_id'] = root_uuid_or_disk_id
+        task.node.driver_internal_info = driver_internal_info
+        task.node.save()
 
         try:
             # Set boot mode
@@ -965,7 +1054,6 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
         task.process_event('resume')
         node = task.node
         LOG.debug('Continuing the deployment on node %s', node.uuid)
-
         ilo_common.cleanup_vmedia_boot(task)
 
         iwdi = node.driver_internal_info.get('is_whole_disk_image')

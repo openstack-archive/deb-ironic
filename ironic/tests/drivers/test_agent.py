@@ -19,12 +19,15 @@ from oslo_config import cfg
 
 from ironic.common import exception
 from ironic.common import image_service
-from ironic.common import keystone
+from ironic.common import images
+from ironic.common import raid
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import agent
+from ironic.drivers.modules import agent_base_vendor
 from ironic.drivers.modules import agent_client
+from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import fake
 from ironic.drivers.modules import pxe
 from ironic.tests.conductor import utils as mgr_utils
@@ -45,31 +48,6 @@ class TestAgentMethods(db_base.DbTestCase):
         super(TestAgentMethods, self).setUp()
         self.node = object_utils.create_test_node(self.context,
                                                   driver='fake_agent')
-
-    def test_build_agent_options_conf(self):
-        self.config(api_url='api-url', group='conductor')
-        options = agent.build_agent_options(self.node)
-        self.assertEqual('api-url', options['ipa-api-url'])
-        self.assertEqual('fake_agent', options['ipa-driver-name'])
-        self.assertEqual(0, options['coreos.configdrive'])
-
-    @mock.patch.object(keystone, 'get_service_url', autospec=True)
-    def test_build_agent_options_keystone(self, get_url_mock):
-
-        self.config(api_url=None, group='conductor')
-        get_url_mock.return_value = 'api-url'
-        options = agent.build_agent_options(self.node)
-        self.assertEqual('api-url', options['ipa-api-url'])
-        self.assertEqual('fake_agent', options['ipa-driver-name'])
-        self.assertEqual(0, options['coreos.configdrive'])
-
-    def test_build_agent_options_root_device_hints(self):
-        self.config(api_url='api-url', group='conductor')
-        self.node.properties['root_device'] = {'model': 'fake_model'}
-        options = agent.build_agent_options(self.node)
-        self.assertEqual('api-url', options['ipa-api-url'])
-        self.assertEqual('fake_agent', options['ipa-driver-name'])
-        self.assertEqual('model=fake_model', options['root_device'])
 
     @mock.patch.object(image_service, 'GlanceImageService', autospec=True)
     def test_build_instance_info_for_deploy_glance_image(self, glance_mock):
@@ -137,6 +115,51 @@ class TestAgentMethods(db_base.DbTestCase):
             self.assertRaises(exception.ImageRefValidationFailed,
                               agent.build_instance_info_for_deploy, task)
 
+    @mock.patch.object(images, 'download_size', autospec=True)
+    def test_check_image_size(self, size_mock):
+        size_mock.return_value = 10 * 1024 * 1024
+        mgr_utils.mock_the_extension_manager(driver='fake_agent')
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.properties['memory_mb'] = 10
+            agent.check_image_size(task, 'fake-image')
+            size_mock.assert_called_once_with(self.context, 'fake-image')
+
+    @mock.patch.object(images, 'download_size', autospec=True)
+    def test_check_image_size_without_memory_mb(self, size_mock):
+        mgr_utils.mock_the_extension_manager(driver='fake_agent')
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.properties.pop('memory_mb', None)
+            agent.check_image_size(task, 'fake-image')
+            self.assertFalse(size_mock.called)
+
+    @mock.patch.object(images, 'download_size', autospec=True)
+    def test_check_image_size_fail(self, size_mock):
+        size_mock.return_value = 11 * 1024 * 1024
+
+        mgr_utils.mock_the_extension_manager(driver='fake_agent')
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.properties['memory_mb'] = 10
+            self.assertRaises(exception.InvalidParameterValue,
+                              agent.check_image_size,
+                              task, 'fake-image')
+            size_mock.assert_called_once_with(self.context, 'fake-image')
+
+    @mock.patch.object(images, 'download_size', autospec=True)
+    def test_check_image_size_fail_by_agent_consumed_memory(self, size_mock):
+        self.config(memory_consumed_by_agent=2, group='agent')
+        size_mock.return_value = 9 * 1024 * 1024
+        mgr_utils.mock_the_extension_manager(driver='fake_agent')
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            task.node.properties['memory_mb'] = 10
+            self.assertRaises(exception.InvalidParameterValue,
+                              agent.check_image_size,
+                              task, 'fake-image')
+            size_mock.assert_called_once_with(self.context, 'fake-image')
+
 
 class TestAgentDeploy(db_base.DbTestCase):
     def setUp(self):
@@ -157,17 +180,20 @@ class TestAgentDeploy(db_base.DbTestCase):
         expected = agent.COMMON_PROPERTIES
         self.assertEqual(expected, self.driver.get_properties())
 
+    @mock.patch.object(images, 'download_size', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'validate', autospec=True)
-    def test_validate(self, pxe_boot_validate_mock):
+    def test_validate(self, pxe_boot_validate_mock, size_mock):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             self.driver.validate(task)
             pxe_boot_validate_mock.assert_called_once_with(
                 task.driver.boot, task)
+            size_mock.assert_called_once_with(self.context, 'fake-image')
 
+    @mock.patch.object(images, 'download_size', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'validate', autospec=True)
     def test_validate_driver_info_manage_agent_boot_false(
-            self, pxe_boot_validate_mock):
+            self, pxe_boot_validate_mock, size_mock):
         self.config(manage_agent_boot=False, group='agent')
         self.node.driver_info = {}
         self.node.save()
@@ -175,6 +201,7 @@ class TestAgentDeploy(db_base.DbTestCase):
                 self.context, self.node['uuid'], shared=False) as task:
             self.driver.validate(task)
         self.assertFalse(pxe_boot_validate_mock.called)
+        size_mock.assert_called_once_with(self.context, 'fake-image')
 
     @mock.patch.object(pxe.PXEBoot, 'validate', autospec=True)
     def test_validate_instance_info_missing_params(
@@ -206,9 +233,10 @@ class TestAgentDeploy(db_base.DbTestCase):
             pxe_boot_validate_mock.assert_called_once_with(
                 task.driver.boot, task)
 
+    @mock.patch.object(images, 'download_size', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'validate', autospec=True)
     def test_validate_agent_fail_partition_image(
-            self, pxe_boot_validate_mock):
+            self, pxe_boot_validate_mock, size_mock):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             task.node.driver_internal_info['is_whole_disk_image'] = False
@@ -216,10 +244,12 @@ class TestAgentDeploy(db_base.DbTestCase):
                               self.driver.validate, task)
             pxe_boot_validate_mock.assert_called_once_with(
                 task.driver.boot, task)
+            size_mock.assert_called_once_with(self.context, 'fake-image')
 
+    @mock.patch.object(images, 'download_size', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'validate', autospec=True)
     def test_validate_invalid_root_device_hints(
-            self, pxe_boot_validate_mock):
+            self, pxe_boot_validate_mock, size_mock):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             task.node.properties['root_device'] = {'size': 'not-int'}
@@ -227,6 +257,7 @@ class TestAgentDeploy(db_base.DbTestCase):
                               task.driver.deploy.validate, task)
             pxe_boot_validate_mock.assert_called_once_with(
                 task.driver.boot, task)
+            size_mock.assert_called_once_with(self.context, 'fake-image')
 
     @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
     def test_deploy(self, power_mock):
@@ -245,7 +276,7 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.assertEqual(driver_return, states.DELETED)
 
     @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk')
-    @mock.patch.object(agent, 'build_agent_options')
+    @mock.patch.object(deploy_utils, 'build_agent_options')
     @mock.patch.object(agent, 'build_instance_info_for_deploy')
     def test_prepare(self, build_instance_info_mock, build_options_mock,
                      pxe_prepare_ramdisk_mock):
@@ -266,7 +297,7 @@ class TestAgentDeploy(db_base.DbTestCase):
         self.assertEqual('bar', self.node.instance_info['foo'])
 
     @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk')
-    @mock.patch.object(agent, 'build_agent_options')
+    @mock.patch.object(deploy_utils, 'build_agent_options')
     @mock.patch.object(agent, 'build_instance_info_for_deploy')
     def test_prepare_manage_agent_boot_false(
             self, build_instance_info_mock, build_options_mock,
@@ -287,7 +318,7 @@ class TestAgentDeploy(db_base.DbTestCase):
         self.assertEqual('bar', self.node.instance_info['foo'])
 
     @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk')
-    @mock.patch.object(agent, 'build_agent_options')
+    @mock.patch.object(deploy_utils, 'build_agent_options')
     @mock.patch.object(agent, 'build_instance_info_for_deploy')
     def test_prepare_active(
             self, build_instance_info_mock, build_options_mock,
@@ -317,88 +348,6 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.driver.clean_up(task)
             self.assertFalse(pxe_clean_up_ramdisk_mock.called)
 
-    @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
-    @mock.patch.object(agent, 'build_agent_options', autospec=True)
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports',
-                autospec=True)
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.create_cleaning_ports',
-                autospec=True)
-    def _test_prepare_cleaning(self, create_mock, delete_mock,
-                               build_options_mock, power_mock,
-                               return_vif_port_id=True):
-        if return_vif_port_id:
-            create_mock.return_value = {self.ports[0].uuid: 'vif-port-id'}
-        else:
-            create_mock.return_value = {}
-        build_options_mock.return_value = {'a': 'b'}
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=False) as task:
-            self.assertEqual(states.CLEANWAIT,
-                             self.driver.prepare_cleaning(task))
-            create_mock.assert_called_once_with(mock.ANY, task)
-            delete_mock.assert_called_once_with(mock.ANY, task)
-            power_mock.assert_called_once_with(task, states.REBOOT)
-            self.assertEqual(task.node.driver_internal_info.get(
-                             'agent_erase_devices_iterations'), 1)
-
-        self.ports[0].refresh()
-        self.assertEqual('vif-port-id', self.ports[0].extra['vif_port_id'])
-
-    @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk', autospec=True)
-    def test_prepare_cleaning(self, prepare_ramdisk_mock):
-        self._test_prepare_cleaning()
-        prepare_ramdisk_mock.assert_called_once_with(
-            mock.ANY, mock.ANY, {'a': 'b'})
-
-    @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk', autospec=True)
-    def test_prepare_cleaning_no_vif_port_id(self, prepare_ramdisk_mock):
-        self.assertRaises(
-            exception.NodeCleaningFailure, self._test_prepare_cleaning,
-            return_vif_port_id=False)
-
-    @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk', autospec=True)
-    def test_prepare_cleaning_manage_agent_boot_false(
-            self, prepare_ramdisk_mock):
-        self.config(group='agent', manage_agent_boot=False)
-        self._test_prepare_cleaning()
-        self.assertFalse(prepare_ramdisk_mock.called)
-
-    @mock.patch.object(pxe.PXEBoot, 'clean_up_ramdisk', autospec=True)
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports',
-                autospec=True)
-    @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
-    def test_tear_down_cleaning(self, power_mock, neutron_mock,
-                                clean_up_ramdisk_mock):
-        extra_dict = self.ports[0].extra
-        extra_dict['vif_port_id'] = 'vif-port-id'
-        self.ports[0].extra = extra_dict
-        self.ports[0].save()
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=False) as task:
-            self.assertIsNone(self.driver.tear_down_cleaning(task))
-            power_mock.assert_called_once_with(task, states.POWER_OFF)
-            neutron_mock.assert_called_once_with(mock.ANY, task)
-            clean_up_ramdisk_mock.assert_called_once_with(
-                task.driver.boot, task)
-
-        self.ports[0].refresh()
-        self.assertNotIn('vif_port_id', self.ports[0].extra)
-
-    @mock.patch.object(pxe.PXEBoot, 'clean_up_ramdisk', autospec=True)
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports',
-                autospec=True)
-    @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
-    def test_tear_down_cleaning_manage_agent_boot_false(
-            self, power_mock, neutron_mock,
-            clean_up_ramdisk_mock):
-        self.config(group='agent', manage_agent_boot=False)
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=False) as task:
-            self.assertIsNone(self.driver.tear_down_cleaning(task))
-            power_mock.assert_called_once_with(task, states.POWER_OFF)
-            neutron_mock.assert_called_once_with(mock.ANY, task)
-            self.assertFalse(clean_up_ramdisk_mock.called)
-
     @mock.patch('ironic.drivers.modules.deploy_utils.agent_get_clean_steps',
                 autospec=True)
     def test_get_clean_steps(self, mock_get_clean_steps):
@@ -416,7 +365,7 @@ class TestAgentDeploy(db_base.DbTestCase):
     def test_get_clean_steps_config_priority(self, mock_get_clean_steps):
         # Test that we can override the priority of get clean steps
         # Use 0 because it is an edge case (false-y) and used in devstack
-        self.config(agent_erase_devices_priority=0, group='agent')
+        self.config(erase_devices_priority=0, group='deploy')
         mock_steps = [{'priority': 10, 'interface': 'deploy',
                        'step': 'erase_devices'}]
         expected_steps = [{'priority': 0, 'interface': 'deploy',
@@ -426,6 +375,44 @@ class TestAgentDeploy(db_base.DbTestCase):
             steps = self.driver.get_clean_steps(task)
             mock_get_clean_steps.assert_called_once_with(task)
         self.assertEqual(expected_steps, steps)
+
+    @mock.patch.object(deploy_utils, 'prepare_inband_cleaning', autospec=True)
+    def test_prepare_cleaning(self, prepare_inband_cleaning_mock):
+        prepare_inband_cleaning_mock.return_value = states.CLEANWAIT
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertEqual(
+                states.CLEANWAIT, self.driver.prepare_cleaning(task))
+            prepare_inband_cleaning_mock.assert_called_once_with(
+                task, manage_boot=True)
+
+    @mock.patch.object(deploy_utils, 'prepare_inband_cleaning', autospec=True)
+    def test_prepare_cleaning_manage_agent_boot_false(
+            self, prepare_inband_cleaning_mock):
+        prepare_inband_cleaning_mock.return_value = states.CLEANWAIT
+        self.config(group='agent', manage_agent_boot=False)
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertEqual(
+                states.CLEANWAIT, self.driver.prepare_cleaning(task))
+            prepare_inband_cleaning_mock.assert_called_once_with(
+                task, manage_boot=False)
+
+    @mock.patch.object(deploy_utils, 'tear_down_inband_cleaning',
+                       autospec=True)
+    def test_tear_down_cleaning(self, tear_down_cleaning_mock):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.driver.tear_down_cleaning(task)
+            tear_down_cleaning_mock.assert_called_once_with(
+                task, manage_boot=True)
+
+    @mock.patch.object(deploy_utils, 'tear_down_inband_cleaning',
+                       autospec=True)
+    def test_tear_down_cleaning_manage_agent_boot_false(
+            self, tear_down_cleaning_mock):
+        self.config(group='agent', manage_agent_boot=False)
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.driver.tear_down_cleaning(task)
+            tear_down_cleaning_mock.assert_called_once_with(
+                task, manage_boot=False)
 
 
 class TestAgentVendor(db_base.DbTestCase):
@@ -636,3 +623,183 @@ class TestAgentVendor(db_base.DbTestCase):
             mock_get_cmd.return_value = [{'command_name': 'prepare_image',
                                           'command_status': 'RUNNING'}]
             self.assertFalse(self.passthru.deploy_is_done(task))
+
+
+class AgentRAIDTestCase(db_base.DbTestCase):
+
+    def setUp(self):
+        super(AgentRAIDTestCase, self).setUp()
+        mgr_utils.mock_the_extension_manager(driver="fake_agent")
+        self.passthru = agent.AgentVendorInterface()
+        self.target_raid_config = {
+            "logical_disks": [
+                {'size_gb': 200, 'raid_level': 0, 'is_root_volume': True},
+                {'size_gb': 200, 'raid_level': 5}
+            ]}
+        self.clean_step = {'step': 'create_configuration',
+                           'interface': 'raid'}
+        n = {
+            'driver': 'fake_agent',
+            'instance_info': INSTANCE_INFO,
+            'driver_info': DRIVER_INFO,
+            'driver_internal_info': DRIVER_INTERNAL_INFO,
+            'target_raid_config': self.target_raid_config,
+            'clean_step': self.clean_step,
+        }
+        self.node = object_utils.create_test_node(self.context, **n)
+
+    @mock.patch.object(deploy_utils, 'agent_get_clean_steps', autospec=True)
+    def test_get_clean_steps(self, get_steps_mock):
+        get_steps_mock.return_value = [
+            {'step': 'create_configuration', 'interface': 'raid',
+             'priority': 1},
+            {'step': 'delete_configuration', 'interface': 'raid',
+             'priority': 2}]
+
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            ret = task.driver.raid.get_clean_steps(task)
+
+        self.assertEqual(0, ret[0]['priority'])
+        self.assertEqual(0, ret[1]['priority'])
+
+    @mock.patch.object(deploy_utils, 'agent_execute_clean_step',
+                       autospec=True)
+    def test_create_configuration(self, execute_mock):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            execute_mock.return_value = states.CLEANWAIT
+
+            return_value = task.driver.raid.create_configuration(task)
+
+            self.assertEqual(states.CLEANWAIT, return_value)
+            self.assertEqual(
+                self.target_raid_config,
+                task.node.driver_internal_info['target_raid_config'])
+            execute_mock.assert_called_once_with(task, self.clean_step)
+
+    @mock.patch.object(deploy_utils, 'agent_execute_clean_step',
+                       autospec=True)
+    def test_create_configuration_skip_root(self, execute_mock):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            execute_mock.return_value = states.CLEANWAIT
+
+            return_value = task.driver.raid.create_configuration(
+                task, create_root_volume=False)
+
+            self.assertEqual(states.CLEANWAIT, return_value)
+            execute_mock.assert_called_once_with(task, self.clean_step)
+            exp_target_raid_config = {
+                "logical_disks": [
+                    {'size_gb': 200, 'raid_level': 5}
+                ]}
+            self.assertEqual(
+                exp_target_raid_config,
+                task.node.driver_internal_info['target_raid_config'])
+
+    @mock.patch.object(deploy_utils, 'agent_execute_clean_step',
+                       autospec=True)
+    def test_create_configuration_skip_nonroot(self, execute_mock):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            execute_mock.return_value = states.CLEANWAIT
+
+            return_value = task.driver.raid.create_configuration(
+                task, create_nonroot_volumes=False)
+
+            self.assertEqual(states.CLEANWAIT, return_value)
+            execute_mock.assert_called_once_with(task, self.clean_step)
+            exp_target_raid_config = {
+                "logical_disks": [
+                    {'size_gb': 200, 'raid_level': 0, 'is_root_volume': True},
+                ]}
+            self.assertEqual(
+                exp_target_raid_config,
+                task.node.driver_internal_info['target_raid_config'])
+
+    @mock.patch.object(deploy_utils, 'agent_execute_clean_step',
+                       autospec=True)
+    def test_create_configuration_no_target_raid_config_after_skipping(
+            self, execute_mock):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(
+                exception.MissingParameterValue,
+                task.driver.raid.create_configuration,
+                task, create_root_volume=False,
+                create_nonroot_volumes=False)
+
+            self.assertFalse(execute_mock.called)
+
+    @mock.patch.object(deploy_utils, 'agent_execute_clean_step',
+                       autospec=True)
+    def test_create_configuration_empty_target_raid_config(
+            self, execute_mock):
+        execute_mock.return_value = states.CLEANING
+        self.node.target_raid_config = {}
+        self.node.save()
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.assertRaises(exception.MissingParameterValue,
+                              task.driver.raid.create_configuration,
+                              task)
+            self.assertFalse(execute_mock.called)
+
+    @mock.patch.object(raid, 'update_raid_info', autospec=True)
+    def test__create_configuration_final(
+            self, update_raid_info_mock):
+        command = {'command_result': {'clean_result': 'foo'}}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            raid_mgmt = agent.AgentRAID
+            raid_mgmt._create_configuration_final(task, command)
+            update_raid_info_mock.assert_called_once_with(task.node, 'foo')
+
+    @mock.patch.object(raid, 'update_raid_info', autospec=True)
+    def test__create_configuration_final_registered(
+            self, update_raid_info_mock):
+        self.node.clean_step = {'interface': 'raid',
+                                'step': 'create_configuration'}
+        command = {'command_result': {'clean_result': 'foo'}}
+        create_hook = agent_base_vendor._get_post_clean_step_hook(self.node)
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            create_hook(task, command)
+            update_raid_info_mock.assert_called_once_with(task.node, 'foo')
+
+    @mock.patch.object(raid, 'update_raid_info', autospec=True)
+    def test__create_configuration_final_bad_command_result(
+            self, update_raid_info_mock):
+        command = {}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            raid_mgmt = agent.AgentRAID
+            self.assertRaises(exception.IronicException,
+                              raid_mgmt._create_configuration_final,
+                              task, command)
+            self.assertFalse(update_raid_info_mock.called)
+
+    @mock.patch.object(deploy_utils, 'agent_execute_clean_step',
+                       autospec=True)
+    def test_delete_configuration(self, execute_mock):
+        execute_mock.return_value = states.CLEANING
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            return_value = task.driver.raid.delete_configuration(task)
+
+            execute_mock.assert_called_once_with(task, self.clean_step)
+            self.assertEqual(states.CLEANING, return_value)
+
+    def test__delete_configuration_final(self):
+        command = {'command_result': {'clean_result': 'foo'}}
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node.raid_config = {'foo': 'bar'}
+            raid_mgmt = agent.AgentRAID
+            raid_mgmt._delete_configuration_final(task, command)
+
+        self.node.refresh()
+        self.assertEqual({}, self.node.raid_config)
+
+    def test__delete_configuration_final_registered(
+            self):
+        self.node.clean_step = {'interface': 'raid',
+                                'step': 'delete_configuration'}
+        self.node.raid_config = {'foo': 'bar'}
+        command = {'command_result': {'clean_result': 'foo'}}
+        delete_hook = agent_base_vendor._get_post_clean_step_hook(self.node)
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            delete_hook(task, command)
+
+        self.node.refresh()
+        self.assertEqual({}, self.node.raid_config)

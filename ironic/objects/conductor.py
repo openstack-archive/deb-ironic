@@ -14,13 +14,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_versionedobjects import base as object_base
+
 from ironic.common.i18n import _
 from ironic.db import api as db_api
 from ironic.objects import base
 from ironic.objects import fields as object_fields
 
 
-class Conductor(base.IronicObject):
+@base.IronicObjectRegistry.register
+class Conductor(base.IronicObject, object_base.VersionedObjectDictCompat):
 
     dbapi = db_api.get_instance()
 
@@ -39,7 +42,11 @@ class Conductor(base.IronicObject):
         conductor.obj_reset_changes()
         return conductor
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get_by_hostname(cls, context, hostname):
         """Get a Conductor record by its hostname.
 
@@ -55,7 +62,10 @@ class Conductor(base.IronicObject):
         raise NotImplementedError(
             _('Cannot update a conductor record directly.'))
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def refresh(self, context=None):
         """Loads and applies updates for this Conductor.
 
@@ -74,7 +84,10 @@ class Conductor(base.IronicObject):
                                                  hostname=self.hostname)
         self.obj_refresh(current)
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def touch(self, context):
         """Touch this conductor's DB record, marking it as up-to-date."""
         self.dbapi.touch_conductor(self.hostname)

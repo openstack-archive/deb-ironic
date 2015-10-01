@@ -20,7 +20,6 @@ Abstract base classes for drivers.
 import abc
 import collections
 import copy
-import functools
 import inspect
 import json
 import os
@@ -166,6 +165,7 @@ class BaseInterface(object):
                 # Create a CleanStep to represent this method
                 step = {'step': method.__name__,
                         'priority': method._clean_step_priority,
+                        'abortable': method._clean_step_abortable,
                         'interface': instance.interface_type}
                 instance.clean_steps.append(step)
         LOG.debug('Found clean steps %(steps)s for interface %(interface)s',
@@ -624,7 +624,7 @@ def _passthru(http_methods, method=None, async=True, driver_passthru=False,
 
         passthru_logmessage = _LE('vendor_passthru failed with method %s')
 
-        @functools.wraps(func)
+        @six.wraps(func)
         def passthru_handler(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
@@ -979,7 +979,7 @@ class RAIDInterface(BaseInterface):
         return raid.get_logical_disk_properties(self.raid_schema)
 
 
-def clean_step(priority):
+def clean_step(priority, abortable=False):
     """Decorator for cleaning and zapping steps.
 
     If priority is greater than 0, the function will be executed as part
@@ -1014,10 +1014,13 @@ def clean_step(priority):
                 # do some cleaning
 
     :param priority: an integer priority, should be a CONF option
+    :param abortable: Boolean value. Whether the clean step is abortable
+                      or not; defaults to False.
     """
     def decorator(func):
         func._is_clean_step = True
         func._clean_step_priority = priority
+        func._clean_step_abortable = abortable
         return func
     return decorator
 
@@ -1043,7 +1046,7 @@ def driver_periodic_task(parallel=True, **other):
     semaphore = eventlet.semaphore.BoundedSemaphore()
 
     def decorator2(func):
-        @functools.wraps(func)
+        @six.wraps(func)
         def wrapper(*args, **kwargs):
             if parallel:
                 def _internal():

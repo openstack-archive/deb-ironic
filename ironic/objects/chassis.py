@@ -15,6 +15,7 @@
 
 from oslo_utils import strutils
 from oslo_utils import uuidutils
+from oslo_versionedobjects import base as object_base
 
 from ironic.common import exception
 from ironic.db import api as dbapi
@@ -22,7 +23,8 @@ from ironic.objects import base
 from ironic.objects import fields as object_fields
 
 
-class Chassis(base.IronicObject):
+@base.IronicObjectRegistry.register
+class Chassis(base.IronicObject, object_base.VersionedObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: Add get() and get_by_id() and make get_by_uuid()
     #              only work with a uuid
@@ -53,7 +55,11 @@ class Chassis(base.IronicObject):
         chassis.obj_reset_changes()
         return chassis
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get(cls, context, chassis_id):
         """Find a chassis based on its id or uuid and return a Chassis object.
 
@@ -67,7 +73,11 @@ class Chassis(base.IronicObject):
         else:
             raise exception.InvalidIdentity(identity=chassis_id)
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get_by_id(cls, context, chassis_id):
         """Find a chassis based on its integer id and return a Chassis object.
 
@@ -78,7 +88,11 @@ class Chassis(base.IronicObject):
         chassis = Chassis._from_db_object(cls(context), db_chassis)
         return chassis
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get_by_uuid(cls, context, uuid):
         """Find a chassis based on uuid and return a :class:`Chassis` object.
 
@@ -90,7 +104,11 @@ class Chassis(base.IronicObject):
         chassis = Chassis._from_db_object(cls(context), db_chassis)
         return chassis
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def list(cls, context, limit=None, marker=None,
              sort_key=None, sort_dir=None):
         """Return a list of Chassis objects.
@@ -110,7 +128,10 @@ class Chassis(base.IronicObject):
         return [Chassis._from_db_object(cls(context), obj)
                 for obj in db_chassis]
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def create(self, context=None):
         """Create a Chassis record in the DB.
 
@@ -131,7 +152,10 @@ class Chassis(base.IronicObject):
         db_chassis = self.dbapi.create_chassis(values)
         self._from_db_object(self, db_chassis)
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def destroy(self, context=None):
         """Delete the Chassis from the DB.
 
@@ -145,7 +169,10 @@ class Chassis(base.IronicObject):
         self.dbapi.destroy_chassis(self.uuid)
         self.obj_reset_changes()
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def save(self, context=None):
         """Save updates to this Chassis.
 
@@ -163,7 +190,10 @@ class Chassis(base.IronicObject):
         updated_chassis = self.dbapi.update_chassis(self.uuid, updates)
         self._from_db_object(self, updated_chassis)
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def refresh(self, context=None):
         """Loads and applies updates for this Chassis.
 

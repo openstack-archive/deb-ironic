@@ -1,108 +1,6 @@
 [DEFAULT]
 
 #
-# Options defined in oslo.service.periodic_task
-#
-
-# Some periodic tasks can be run in a separate process. Should
-# we run them here? (boolean value)
-#run_external_periodic_tasks=true
-
-
-#
-# Options defined in oslo.service.service
-#
-
-# Enable eventlet backdoor.  Acceptable values are 0, <port>,
-# and <start>:<end>, where 0 results in listening on a random
-# tcp port number; <port> results in listening on the
-# specified port number (and not enabling backdoor if that
-# port is in use); and <start>:<end> results in listening on
-# the smallest unused port number within the specified range
-# of port numbers.  The chosen port is displayed in the
-# service's log file. (string value)
-#backdoor_port=<None>
-
-# Enables or disables logging values of all registered options
-# when starting a service (at DEBUG level). (boolean value)
-#log_options=true
-
-
-#
-# Options defined in oslo.messaging
-#
-
-# Size of RPC connection pool. (integer value)
-#rpc_conn_pool_size=30
-
-# ZeroMQ bind address. Should be a wildcard (*), an ethernet
-# interface, or IP. The "host" option should point or resolve
-# to this address. (string value)
-#rpc_zmq_bind_address=*
-
-# MatchMaker driver. (string value)
-#rpc_zmq_matchmaker=local
-
-# ZeroMQ receiver listening port. (integer value)
-#rpc_zmq_port=9501
-
-# Number of ZeroMQ contexts, defaults to 1. (integer value)
-#rpc_zmq_contexts=1
-
-# Maximum number of ingress messages to locally buffer per
-# topic. Default is unlimited. (integer value)
-#rpc_zmq_topic_backlog=<None>
-
-# Directory for holding IPC sockets. (string value)
-#rpc_zmq_ipc_dir=/var/run/openstack
-
-# Name of this node. Must be a valid hostname, FQDN, or IP
-# address. Must match "host" option, if running Nova. (string
-# value)
-#rpc_zmq_host=ironic
-
-# Seconds to wait before a cast expires (TTL). Only supported
-# by impl_zmq. (integer value)
-#rpc_cast_timeout=30
-
-# Heartbeat frequency. (integer value)
-#matchmaker_heartbeat_freq=300
-
-# Heartbeat time-to-live. (integer value)
-#matchmaker_heartbeat_ttl=600
-
-# Size of executor thread pool. (integer value)
-# Deprecated group/name - [DEFAULT]/rpc_thread_pool_size
-#executor_thread_pool_size=64
-
-# The Drivers(s) to handle sending notifications. Possible
-# values are messaging, messagingv2, routing, log, test, noop
-# (multi valued)
-#notification_driver=
-
-# AMQP topic used for OpenStack notifications. (list value)
-# Deprecated group/name - [rpc_notifier2]/topics
-#notification_topics=notifications
-
-# Seconds to wait for a response from a call. (integer value)
-#rpc_response_timeout=60
-
-# A URL representing the messaging driver to use and its full
-# configuration. If not set, we fall back to the rpc_backend
-# option and driver specific configuration. (string value)
-#transport_url=<None>
-
-# The messaging driver to use, defaults to rabbit. Other
-# drivers include qpid and zmq. (string value)
-#rpc_backend=rabbit
-
-# The default exchange under which topics are scoped. May be
-# overridden by an exchange name specified in the
-# transport_url option. (string value)
-#control_exchange=openstack
-
-
-#
 # Options defined in oslo.log
 #
 
@@ -193,6 +91,108 @@
 # Enables or disables fatal status of deprecations. (boolean
 # value)
 #fatal_deprecations=false
+
+
+#
+# Options defined in oslo.service.service
+#
+
+# Enable eventlet backdoor.  Acceptable values are 0, <port>,
+# and <start>:<end>, where 0 results in listening on a random
+# tcp port number; <port> results in listening on the
+# specified port number (and not enabling backdoor if that
+# port is in use); and <start>:<end> results in listening on
+# the smallest unused port number within the specified range
+# of port numbers.  The chosen port is displayed in the
+# service's log file. (string value)
+#backdoor_port=<None>
+
+# Enables or disables logging values of all registered options
+# when starting a service (at DEBUG level). (boolean value)
+#log_options=true
+
+
+#
+# Options defined in oslo.service.periodic_task
+#
+
+# Some periodic tasks can be run in a separate process. Should
+# we run them here? (boolean value)
+#run_external_periodic_tasks=true
+
+
+#
+# Options defined in oslo.messaging
+#
+
+# Size of RPC connection pool. (integer value)
+#rpc_conn_pool_size=30
+
+# ZeroMQ bind address. Should be a wildcard (*), an ethernet
+# interface, or IP. The "host" option should point or resolve
+# to this address. (string value)
+#rpc_zmq_bind_address=*
+
+# MatchMaker driver. (string value)
+#rpc_zmq_matchmaker=local
+
+# ZeroMQ receiver listening port. (integer value)
+#rpc_zmq_port=9501
+
+# Number of ZeroMQ contexts, defaults to 1. (integer value)
+#rpc_zmq_contexts=1
+
+# Maximum number of ingress messages to locally buffer per
+# topic. Default is unlimited. (integer value)
+#rpc_zmq_topic_backlog=<None>
+
+# Directory for holding IPC sockets. (string value)
+#rpc_zmq_ipc_dir=/var/run/openstack
+
+# Name of this node. Must be a valid hostname, FQDN, or IP
+# address. Must match "host" option, if running Nova. (string
+# value)
+#rpc_zmq_host=ironic
+
+# Seconds to wait before a cast expires (TTL). Only supported
+# by impl_zmq. (integer value)
+#rpc_cast_timeout=30
+
+# Heartbeat frequency. (integer value)
+#matchmaker_heartbeat_freq=300
+
+# Heartbeat time-to-live. (integer value)
+#matchmaker_heartbeat_ttl=600
+
+# Size of executor thread pool. (integer value)
+# Deprecated group/name - [DEFAULT]/rpc_thread_pool_size
+#executor_thread_pool_size=64
+
+# The Drivers(s) to handle sending notifications. Possible
+# values are messaging, messagingv2, routing, log, test, noop
+# (multi valued)
+#notification_driver=
+
+# AMQP topic used for OpenStack notifications. (list value)
+# Deprecated group/name - [rpc_notifier2]/topics
+#notification_topics=notifications
+
+# Seconds to wait for a response from a call. (integer value)
+#rpc_response_timeout=60
+
+# A URL representing the messaging driver to use and its full
+# configuration. If not set, we fall back to the rpc_backend
+# option and driver specific configuration. (string value)
+#transport_url=<None>
+
+# The messaging driver to use, defaults to rabbit. Other
+# drivers include qpid and zmq. (string value)
+#rpc_backend=rabbit
+
+# The default exchange under which topics are scoped. May be
+# overridden by an exchange name specified in the
+# transport_url option. (string value)
+#control_exchange=openstack
 
 
 #
@@ -363,21 +363,18 @@
 # use [pxe]pxe_config_template instead. (string value)
 #agent_pxe_config_template=$pybasedir/drivers/modules/agent_config.template
 
-# Priority to run in-band erase devices via the Ironic Python
-# Agent ramdisk. If unset, will use the priority set in the
-# ramdisk (defaults to 10 for the GenericHardwareManager). If
-# set to 0, will not run during cleaning. (integer value)
-#agent_erase_devices_priority=<None>
-
-# Number of iterations to be run for erasing devices. (integer
-# value)
-#agent_erase_devices_iterations=1
-
 # Whether Ironic will manage booting of the agent ramdisk. If
 # set to False, you will need to configure your mechanism to
 # allow booting the agent ramdisk. (boolean value)
 # Deprecated group/name - [agent]/manage_tftp
 #manage_agent_boot=true
+
+# The memory size in MiB consumed by agent when it is booted on a
+# bare metal node. This is used for checking if the image can
+# be downloaded and deployed on the bare metal node after booting
+# agent ramdisk. This may be set according to the memory
+# consumed by the agent ramdisk image. (integer value)
+#memory_consumed_by_agent=0
 
 
 #
@@ -446,6 +443,29 @@
 # The maximum number of items returned in a single response
 # from a collection resource. (integer value)
 #max_limit=1000
+
+# Public URL to use when building the links to the API
+# resources (for example, "https://ironic.rocks:6384"). If
+# None the links will be built using the request's host URL.
+# If the API is operating behind a proxy, you will want to
+# change this to represent the proxy's URL. Defaults to None.
+# (string value)
+#public_endpoint=<None>
+
+
+[cimc]
+
+#
+# Options defined in ironic.drivers.modules.cimc.power
+#
+
+# Number of times a power operation needs to be retried
+# (integer value)
+#max_retry=6
+
+# Amount of time in seconds to wait in between power
+# operations (integer value)
+#action_interval=10
 
 
 [cisco_ucs]
@@ -803,6 +823,18 @@
 # ironic-conductor node's HTTP root path. (string value)
 #http_root=/httpboot
 
+# Priority to run in-band erase devices via the Ironic Python
+# Agent ramdisk. If unset, will use the priority set in the
+# ramdisk (defaults to 10 for the GenericHardwareManager). If
+# set to 0, will not run during cleaning. (integer value)
+# Deprecated group/name - [agent]/agent_erase_devices_priority
+#erase_devices_priority=<None>
+
+# Number of iterations to be run for erasing devices. (integer
+# value)
+# Deprecated group/name - [agent]/agent_erase_devices_iterations
+#erase_devices_iterations=1
+
 
 [dhcp]
 
@@ -946,6 +978,20 @@
 #auth_strategy=keystone
 
 
+[iboot]
+
+#
+# Options defined in ironic.drivers.modules.iboot
+#
+
+# Maximum retries for iBoot operations (integer value)
+#max_retry=3
+
+# Time between retry attempts for iBoot operations (integer
+# value)
+#retry_interval=1
+
+
 [ilo]
 
 #
@@ -964,6 +1010,14 @@
 # Amount of time in seconds for Swift objects to auto-expire.
 # (integer value)
 #swift_object_expiry_timeout=900
+
+# Set this to True to use http web server to host floppy
+# images and generated boot ISO. This requires http_root and
+# http_url to be configured in the [deploy] section of the
+# config file. If this is set to False, then Ironic will use
+# Swift to host the floppy images and generated boot_iso.
+# (boolean value)
+#use_web_server_for_images=false
 
 
 #
@@ -1161,6 +1215,10 @@
 
 # Verify HTTPS connections. (boolean value)
 #insecure=false
+
+# The region in which the identity server can be found.
+# (string value)
+#region_name=<None>
 
 # Directory used to cache files related to PKI tokens. (string
 # value)

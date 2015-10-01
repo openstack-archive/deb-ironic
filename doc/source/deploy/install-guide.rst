@@ -1,18 +1,17 @@
 .. _install-guide:
 
-=====================================
-Bare Metal service Installation Guide
-=====================================
+==================
+Installation Guide
+==================
 
-This document pertains to the current code (on master branch) of OpenStack
-Bare Metal service (ironic) and should be accurate for the Kilo (2015.1)
-release of the Bare Metal service.
-Users of earlier releases may encounter differences, and are encouraged
+This document is continually updated and reflects the latest
+available code of the Bare Metal service (ironic).
+Users of releases may encounter differences and are encouraged
 to look at earlier versions of this document for guidance.
 
 
 Service overview
-~~~~~~~~~~~~~~~~
+================
 
 The Bare Metal service is a collection of components that provides support to
 manage and provision physical machines.
@@ -139,13 +138,22 @@ MySQL database that is used by other OpenStack services.
 Install the Bare Metal service
 ------------------------------
 
-#. Install from packages::
+#. Install from packages and configure services::
 
     Ubuntu 14.04 (trusty) or higher:
-        apt-get install ironic-api ironic-conductor python-ironicclient
+        sudo apt-get install ironic-api ironic-conductor python-ironicclient
 
-    RHEL7/Fedora 21 or higher:
-        yum install openstack-ironic-api openstack-ironic-conductor python-ironicclient
+    Fedora 21/RHEL7/CentOS7:
+        sudo yum install openstack-ironic-api openstack-ironic-conductor \
+        python-ironicclient
+        sudo systemctl enable openstack-ironic-api openstack-ironic-conductor
+        sudo systemctl start openstack-ironic-api openstack-ironic-conductor
+
+    Fedora 22 or higher:
+        sudo dnf install openstack-ironic-api openstack-ironic-conductor \
+        python-ironicclient
+        sudo systemctl enable openstack-ironic-api openstack-ironic-conductor
+        sudo systemctl start openstack-ironic-api openstack-ironic-conductor
 
 
 Configure the Bare Metal service
@@ -282,8 +290,13 @@ so that the Bare Metal service is configured for your needs.
 
 #. Restart the Bare Metal service::
 
-    service ironic-api restart
-    service ironic-conductor restart
+    Fedora/RHEL7/CentOS7:
+      sudo systemctl restart openstack-ironic-api
+      sudo systemctl restart openstack-ironic-conductor
+
+    Ubuntu:
+      sudo service ironic-api restart
+      sudo service ironic-conductor restart
 
 
 Configuring ironic-api behind mod_wsgi
@@ -294,7 +307,7 @@ Bare Metal service comes with an example file  for configuring the
 
 1. Install the apache service::
 
-    RHEL7/CentOS/Fedora 21 (or lower):
+    Fedora 21/RHEL7/CentOS7:
       sudo yum install httpd
 
     Fedora 22 (or higher):
@@ -306,7 +319,7 @@ Bare Metal service comes with an example file  for configuring the
 
 2. Copy the ``etc/apache2/ironic`` file under the apache sites::
 
-    Fedora/RHEL7/CentOS:
+    Fedora/RHEL7/CentOS7:
       sudo cp etc/apache2/ironic /etc/httpd/conf.d/ironic.conf
 
     Debian/Ubuntu:
@@ -327,7 +340,7 @@ Bare Metal service comes with an example file  for configuring the
 
 4. Enable the apache ``ironic`` in site and reload::
 
-    Fedora/RHEL7/CentOS:
+    Fedora/RHEL7/CentOS7:
       sudo systemctl reload httpd
 
     Debian/Ubuntu:
@@ -424,11 +437,19 @@ Compute service's controller nodes and compute nodes.*
 
 3. On the Compute service's controller nodes, restart the ``nova-scheduler`` process::
 
-    service nova-scheduler restart
+    Fedora/RHEL7/CentOS7:
+      sudo systemctl restart openstack-nova-scheduler
+
+    Ubuntu:
+      sudo service nova-scheduler restart
 
 4. On the Compute service's compute nodes, restart the ``nova-compute`` process::
 
-    service nova-compute restart
+    Fedora/RHEL7/CentOS7:
+      sudo systemctl restart openstack-nova-compute
+
+    Ubuntu:
+      sudo service nova-compute restart
 
 .. _NeutronFlatNetworking:
 
@@ -558,7 +579,13 @@ Configure the Bare Metal service for cleaning
 
 #. Restart the Bare Metal service's ironic-conductor::
 
-    service ironic-conductor restart
+    Fedora/RHEL7/CentOS7:
+      sudo systemctl restart openstack-ironic-conductor
+
+    Ubuntu:
+      sudo service ironic-conductor restart
+
+.. _ImageRequirement:
 
 Image requirements
 ==================
@@ -611,16 +638,16 @@ them to the Image service:
 
    - Add the kernel and ramdisk images to the Image service::
 
-        glance image-create --name my-kernel --is-public True \
-        --disk-format aki  < my-image.vmlinuz
+        glance image-create --name my-kernel --visibility public \
+        --disk-format aki --container-format aki  < my-image.vmlinuz
 
      Store the image uuid obtained from the above step as
      *$MY_VMLINUZ_UUID*.
 
      ::
 
-        glance image-create --name my-image.initrd --is-public True \
-        --disk-format ari  < my-image.initrd
+        glance image-create --name my-image.initrd --visibility public \
+        --disk-format ari --container-format ari  < my-image.initrd
 
      Store the image UUID obtained from the above step as
      *$MY_INITRD_UUID*.
@@ -630,7 +657,7 @@ them to the Image service:
      images with this OS image. These two operations can be done by
      executing the following command::
 
-        glance image-create --name my-image --is-public True \
+        glance image-create --name my-image --visibility public \
         --disk-format qcow2 --container-format bare --property \
         kernel_id=$MY_VMLINUZ_UUID --property \
         ramdisk_id=$MY_INITRD_UUID < my-image.qcow2
@@ -638,7 +665,7 @@ them to the Image service:
    - *Note:* To deploy a whole disk image, a kernel_id and a ramdisk_id
      shouldn't be associated with the image. An example is as follows::
 
-         glance image-create --name my-whole-disk-image --is-public True \
+         glance image-create --name my-whole-disk-image --visibility public \
          --disk-format qcow2 \
          --container-format bare < my-whole-disk-image.qcow2
 
@@ -647,16 +674,16 @@ them to the Image service:
    Add the *my-deploy-ramdisk.kernel* and
    *my-deploy-ramdisk.initramfs* images to the Image service::
 
-        glance image-create --name deploy-vmlinuz --is-public True \
-        --disk-format aki < my-deploy-ramdisk.kernel
+        glance image-create --name deploy-vmlinuz --visibility public \
+        --disk-format aki --container-format aki < my-deploy-ramdisk.kernel
 
    Store the image UUID obtained from the above step as
    *$DEPLOY_VMLINUZ_UUID*.
 
    ::
 
-        glance image-create --name deploy-initrd --is-public True \
-        --disk-format ari < my-deploy-ramdisk.initramfs
+        glance image-create --name deploy-initrd --visibility public \
+        --disk-format ari --container-format ari < my-deploy-ramdisk.initramfs
 
    Store the image UUID obtained from the above step as
    *$DEPLOY_INITRD_UUID*.
@@ -740,8 +767,11 @@ node(s) where ``ironic-conductor`` is running.
     Ubuntu: (14.10 and after)
         sudo apt-get install tftpd-hpa syslinux-common pxelinux
 
-    Fedora/RHEL:
+    Fedora 21/RHEL7/CentOS7:
         sudo yum install tftp-server syslinux-tftpboot
+
+    Fedora 22 or higher:
+         sudo dnf install tftp-server syslinux-tftpboot
 
 #. Setup tftp server to serve ``/tftpboot``.
 
@@ -763,7 +793,7 @@ node(s) where ``ironic-conductor`` is running.
     Ubuntu (14.10 and after):
         sudo cp /usr/lib/syslinux/modules/bios/chain.c32 /tftpboot
 
-    Fedora:
+    Fedora/RHEL7/CentOS7:
         sudo cp /boot/extlinux/chain.c32 /tftpboot
 
 #. If the version of syslinux is **greater than** 4 we also need to make sure
@@ -813,9 +843,11 @@ steps on the ironic conductor node to configure the PXE UEFI environment.
     Ubuntu: (14.04LTS and later)
         sudo apt-get install grub-efi-amd64-signed shim-signed
 
-    Fedora: (21 and later)
-    CentOS: (7 and later)
+    Fedora 21/RHEL7/CentOS7:
         sudo yum install grub2-efi shim
+
+    Fedora 22 or higher:
+        sudo dnf install grub2-efi shim
 
 #. Copy grub and shim boot loader images to ``/tftpboot`` directory::
 
@@ -941,8 +973,11 @@ on the Bare Metal service node(s) where ``ironic-conductor`` is running.
     Ubuntu:
         apt-get install ipxe
 
-    Fedora/RHEL:
+    Fedora 21/RHEL7/CentOS7:
         yum install ipxe-bootimgs
+
+    Fedora 22 or higher:
+        dnf install ipxe-bootimgs
 
 #. Copy the iPXE boot image (undionly.kpxe) to ``/tftpboot``. The binary
    might be found at::
@@ -950,7 +985,7 @@ on the Bare Metal service node(s) where ``ironic-conductor`` is running.
     Ubuntu:
         cp /usr/lib/ipxe/undionly.kpxe /tftpboot
 
-    Fedora/RHEL:
+    Fedora/RHEL7/CentOS7:
         cp /usr/share/ipxe/undionly.kpxe /tftpboot
 
     *Note: If the packaged version of the iPXE boot image doesn't
@@ -973,7 +1008,11 @@ on the Bare Metal service node(s) where ``ironic-conductor`` is running.
 
 #. Restart the ``ironic-conductor`` process::
 
-    service ironic-conductor restart
+    Fedora/RHEL7/CentOS7:
+      sudo systemctl restart openstack-ironic-conductor
+
+    Ubuntu:
+      sudo service ironic-conductor restart
 
 
 Networking service configuration
@@ -1084,9 +1123,11 @@ The web console can be configured in Bare Metal service in the following way:
     Ubuntu:
         sudo apt-get install shellinabox
 
-    Fedora/RHEL:
-
+    Fedora 21/RHEL7/CentOS7:
         sudo yum install shellinabox
+
+    Fedora 22 or higher:
+         sudo dnf install shellinabox
 
   You can find more about shellinabox on the `shellinabox page`_.
 
@@ -1095,22 +1136,25 @@ The web console can be configured in Bare Metal service in the following way:
 
   1. Install openssl, for example::
 
-    Ubuntu:
-         sudo apt-get install openssl
+        Ubuntu:
+             sudo apt-get install openssl
 
-    Fedora/RHEL:
-         sudo yum install openssl
+        Fedora 21/RHEL7/CentOS7:
+             sudo yum install openssl
+
+        Fedora 22 or higher:
+             sudo dnf install openssl
 
   2. Generate the SSL certificate, here is an example, you can find more about openssl on
      the `openssl page`_::
 
-    cd /tmp/ca
-    openssl genrsa -des3 -out my.key 1024
-    openssl req -new -key my.key  -out my.csr
-    cp my.key my.key.org
-    openssl rsa -in my.key.org -out my.key
-    openssl x509 -req -days 3650 -in my.csr -signkey my.key -out my.crt
-    cat my.crt my.key > certificate.pem
+        cd /tmp/ca
+        openssl genrsa -des3 -out my.key 1024
+        openssl req -new -key my.key  -out my.csr
+        cp my.key my.key.org
+        openssl rsa -in my.key.org -out my.key
+        openssl x509 -req -days 3650 -in my.csr -signkey my.key -out my.crt
+        cat my.crt my.key > certificate.pem
 
 * Customize the console section in the Bare Metal service configuration
   file (/etc/ironic/ironic.conf), if you want to use SSL certificate in
@@ -1505,7 +1549,7 @@ API version for all commands, you can set the environment variable
 ``IRONIC_API_VERSION``.
 
 API version 1.10 and below
-..........................
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Below is an example of creating a node with API version 1.10. After creation,
 the node will be in the ``available`` provision state.
@@ -1537,7 +1581,7 @@ Other API versions below 1.10 may be substituted in place of 1.10.
     +--------------------------------------+-------+---------------+-------------+--------------------+-------------+
 
 API version 1.11 and above
-..........................
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Beginning with API version 1.11, the initial provision state for newly created
 nodes is ``enroll``. In the examples below, other API versions above 1.11 may be
@@ -2080,8 +2124,8 @@ service running on it for controlling and deploying bare metal nodes.
 You can download a pre-built version of the deploy ramdisk built with
 the `CoreOS tools`_ at:
 
-* `CoreOS deploy ramdisk <http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe.vmlinuz>`_
-* `CoreOS deploy kernel <http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe_image-oem.cpio.gz>`_
+* `CoreOS deploy kernel <http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe.vmlinuz>`_
+* `CoreOS deploy ramdisk <http://tarballs.openstack.org/ironic-python-agent/coreos/files/coreos_production_pxe_image-oem.cpio.gz>`_
 
 Building from source
 --------------------
@@ -2100,7 +2144,7 @@ CoreOS tools
 
 #. Install the requirements::
 
-    Fedora 21 or lower/RHEL/CentOS:
+    Fedora 21/RHEL7/CentOS7:
         sudo yum install docker gzip util-linux cpio findutils grep gpg
 
     Fedora 22 or higher:
@@ -2115,7 +2159,7 @@ CoreOS tools
 
 #. Start the docker daemon::
 
-    Fedora/RHEL/CentOS:
+    Fedora/RHEL7/CentOS7:
         sudo systemctl start docker
 
     Ubuntu:
@@ -2165,6 +2209,77 @@ disk-image-builder
    operational systems.
 
 .. _`diskimage-builder documentation`: http://docs.openstack.org/developer/diskimage-builder
+
+
+Trusted boot with partition image
+=================================
+Starting with the Liberty release, Ironic supports trusted boot with partition
+image. This means at the end of the deployment process, when the node is
+rebooted with the new user image, ``trusted boot`` will be performed. It will
+measure the node's BIOS, boot loader, Option ROM and the Kernel/Ramdisk, to
+determine whether a bare metal node deployed by Ironic should be trusted.
+
+It's important to note that in order for this to work the node being deployed
+**must** have Intel `TXT`_ hardware support. The image being deployed with
+Ironic must have ``oat-client`` installed within it.
+
+The following will describe how to enable ``trusted boot`` and boot
+with PXE and Nova:
+
+#. Create a customized user image with ``oat-client`` installed::
+
+    disk-image-create -u fedora baremetal oat-client -o $TRUST_IMG
+
+   For more information on creating customized images, see `ImageRequirement`_.
+
+#. Enable VT-x, VT-d, TXT and TPM on the node. This can be done manually through
+   the BIOS. Depending on the platform, several reboots may be needed.
+
+#. Enroll the node and update the node capability value::
+
+    ironic node-create -d pxe_ipmitool
+
+    ironic node-update $NODE_UUID add properties/capabilities={'trusted_boot':true}
+
+#. Create a special flavor::
+
+    nova flavor-key $TRUST_FLAVOR_UUID set 'capabilities:trusted_boot'=true
+
+#. Prepare `tboot`_ and mboot.c32 and put them into tftp_root or http_root
+   directory on all nodes with the ironic-conductor processes::
+
+    Ubuntu:
+        cp /usr/lib/syslinux/mboot.c32 /tftpboot/
+
+    Fedora:
+        cp /usr/share/syslinux/mboot.c32 /tftpboot/
+
+   *Note: The actual location of mboot.c32 varies among different distribution versions.*
+
+   tboot can be downloaded from
+   https://sourceforge.net/projects/tboot/files/latest/download
+
+#. Install an OAT Server. An `OAT Server`_ should be running and configured correctly.
+
+#. Boot an instance with Nova::
+
+    nova boot --flavor $TRUST_FLAVOR_UUID --image $TRUST_IMG --user-data $TRUST_SCRIPT trusted_instance
+
+   *Note* that the node will be measured during ``trusted boot`` and the hash values saved
+   into `TPM`_. An example of TRUST_SCRIPT can be found in `trust script example`_.
+
+#. Verify the result via OAT Server.
+
+   This is outside the scope of Ironic. At the moment, users can manually verify the result
+   by following the `manual verify steps`_.
+
+.. _`TXT`: http://en.wikipedia.org/wiki/Trusted_Execution_Technology
+.. _`tboot`: https://sourceforge.net/projects/tboot
+.. _`TPM`: http://en.wikipedia.org/wiki/Trusted_Platform_Module
+.. _`OAT Server`: https://github.com/OpenAttestation/OpenAttestation/wiki
+.. _`trust script example`: https://wiki.openstack.org/wiki/Bare-metal-trust#Trust_Script_Example
+.. _`manual verify steps`: https://wiki.openstack.org/wiki/Bare-metal-trust#Manual_verify_result
+
 
 
 Troubleshooting

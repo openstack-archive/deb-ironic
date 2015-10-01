@@ -6,9 +6,9 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: ironic 2015.2.0.dev476\n"
+"Project-Id-Version: ironic 4.1.0.106.gecf6fc1\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-08-11 06:21+0000\n"
+"POT-Creation-Date: 2015-09-24 21:22+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -22,7 +22,7 @@ msgstr ""
 msgid "Error parsing HTTP response: %s"
 msgstr ""
 
-#: ironic/common/exception.py:82
+#: ironic/common/exception.py:81
 msgid "Exception in string format operation"
 msgstr ""
 
@@ -57,29 +57,29 @@ msgstr ""
 msgid "Service error occurred when cleaning up the RPC manager. Error: %s"
 msgstr ""
 
-#: ironic/common/utils.py:420
+#: ironic/common/utils.py:423
 #, python-format
 msgid "Could not remove tmpdir: %s"
 msgstr ""
 
-#: ironic/common/utils.py:451
+#: ironic/common/utils.py:454
 #, python-format
 msgid "Failed to make file system. File system %s is not supported."
 msgstr ""
 
-#: ironic/common/utils.py:455
+#: ironic/common/utils.py:458
 #, python-format
 msgid "Failed to create a file system in %(path)s. Error: %(error)s"
 msgstr ""
 
-#: ironic/common/glance_service/base_image_service.py:129
+#: ironic/common/glance_service/base_image_service.py:128
 #, python-format
 msgid ""
 "Error contacting glance server '%(host)s:%(port)s' for '%(method)s', "
 "attempt %(attempt)s of %(num_attempts)s failed."
 msgstr ""
 
-#: ironic/conductor/manager.py:256
+#: ironic/conductor/manager.py:264
 #, python-format
 msgid ""
 "Conductor %s cannot be started because no drivers were loaded.  This "
@@ -87,34 +87,56 @@ msgid ""
 "option."
 msgstr ""
 
-#: ironic/conductor/manager.py:794
+#: ironic/conductor/manager.py:802
 #, python-format
 msgid "Error in tear_down of node %(node)s: %(err)s"
 msgstr ""
 
-#: ironic/conductor/manager.py:1434
+#: ironic/conductor/manager.py:1108
+#, python-format
+msgid ""
+"Failed to tear down cleaning for node %(node)s after aborting the "
+"operation. Error: %(err)s"
+msgstr ""
+
+#: ironic/conductor/manager.py:1569
 #, python-format
 msgid "Failed to stop console while deleting the node %(node)s: %(err)s."
 msgstr ""
 
-#: ironic/conductor/manager.py:2092
+#: ironic/conductor/manager.py:2365
+#, python-format
+msgid "Error while uploading the configdrive for %(node)s to Swift"
+msgstr ""
+
+#: ironic/conductor/manager.py:2376
+#, python-format
+msgid "Error while preparing to deploy to node %(node)s: %(err)s"
+msgstr ""
+
+#: ironic/conductor/manager.py:2386
+#, python-format
+msgid "Error in deploy of node %(node)s: %(err)s"
+msgstr ""
+
+#: ironic/conductor/manager.py:2403
 #, python-format
 msgid "Unexpected state %(state)s returned while deploying node %(node)s."
 msgstr ""
 
-#: ironic/conductor/manager.py:2218
+#: ironic/conductor/manager.py:2529
 #, python-format
 msgid ""
 "Failed to change power state of node %(node)s to '%(state)s', attempt "
 "%(attempt)s of %(retries)s."
 msgstr ""
 
-#: ironic/conductor/manager.py:2252
+#: ironic/conductor/manager.py:2563
 #, python-format
 msgid "Failed to inspect node %(node)s: %(err)s"
 msgstr ""
 
-#: ironic/conductor/manager.py:2287
+#: ironic/conductor/manager.py:2599
 #, python-format
 msgid "Failed to tear down cleaning on node %(uuid)s, reason: %(err)s"
 msgstr ""
@@ -149,78 +171,78 @@ msgstr ""
 msgid "Failed to rollback cleaning port changes for node %s"
 msgstr ""
 
-#: ironic/drivers/base.py:611
+#: ironic/drivers/base.py:625
 #, python-format
 msgid "vendor_passthru failed with method %s"
 msgstr ""
 
-#: ironic/drivers/modules/agent.py:205
+#: ironic/drivers/modules/agent.py:131
 #, python-format
 msgid ""
 "Agent deploy supports only HTTP(S) URLs as instance_info['image_source']."
 " Either %s is not a valid HTTP(S) URL or is not reachable."
 msgstr ""
 
-#: ironic/drivers/modules/agent_base_vendor.py:430
+#: ironic/drivers/modules/agent_base_vendor.py:520
 #, python-format
 msgid "Could not find matching node for the provided MACs %s."
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:472
+#: ironic/drivers/modules/deploy_utils.py:489
 #, python-format
 msgid ""
 "Failed to erase beginning of disk for node %(node)s. Command: "
 "%(command)s. Error: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:484
+#: ironic/drivers/modules/deploy_utils.py:501
 #, python-format
 msgid ""
 "Failed to get disk block count for node %(node)s. Command: %(command)s. "
 "Error: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:497
+#: ironic/drivers/modules/deploy_utils.py:514
 #, python-format
 msgid ""
 "Failed to erase the end of the disk on node %(node)s. Command: "
 "%(command)s. Error: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:687
+#: ironic/drivers/modules/deploy_utils.py:704
 #, python-format
 msgid "Failed to detect %s"
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:785
-#: ironic/drivers/modules/deploy_utils.py:791
+#: ironic/drivers/modules/deploy_utils.py:802
+#: ironic/drivers/modules/deploy_utils.py:808
 #, python-format
 msgid "Deploy to address %s failed."
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:786
+#: ironic/drivers/modules/deploy_utils.py:803
 #, python-format
 msgid "Command: %s"
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:787
+#: ironic/drivers/modules/deploy_utils.py:804
 #, python-format
 msgid "StdOut: %r"
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:788
+#: ironic/drivers/modules/deploy_utils.py:805
 #, python-format
 msgid "StdErr: %r"
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:873
+#: ironic/drivers/modules/deploy_utils.py:890
 #, python-format
 msgid ""
 "Internal error. Node %(node)s in provision state \"%(state)s\" could not "
 "transition to a failed state."
 msgstr ""
 
-#: ironic/drivers/modules/deploy_utils.py:881
+#: ironic/drivers/modules/deploy_utils.py:898
 #, python-format
 msgid ""
 "Node %s failed to power off while handling deploy failure. This may be a "
@@ -228,143 +250,143 @@ msgid ""
 "maintenance mode until the problem is resolved."
 msgstr ""
 
-#: ironic/drivers/modules/inspector.py:157
+#: ironic/drivers/modules/inspector.py:156
 #, python-format
 msgid ""
 "Exception during contacting ironic-inspector for inspection of node "
 "%(node)s: %(err)s"
 msgstr ""
 
-#: ironic/drivers/modules/inspector.py:192
+#: ironic/drivers/modules/inspector.py:191
 #, python-format
 msgid ""
 "Unexpected exception while getting inspection status for node %s, will "
 "retry later"
 msgstr ""
 
-#: ironic/drivers/modules/inspector.py:198
+#: ironic/drivers/modules/inspector.py:207
 #, python-format
 msgid "Inspection failed for node %(uuid)s with error: %(err)s"
 msgstr ""
 
-#: ironic/drivers/modules/ipminative.py:267
+#: ironic/drivers/modules/ipminative.py:285
 #, python-format
 msgid ""
 "IPMI get sensor data failed for node %(node_id)s with the following "
 "error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/ipminative.py:419
+#: ironic/drivers/modules/ipminative.py:487
 #, python-format
 msgid ""
 "IPMI set boot device failed for node %(node_id)s with the following "
 "error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/ipminative.py:454
+#: ironic/drivers/modules/ipminative.py:533
 #, python-format
 msgid ""
 "IPMI get boot device failed for node %(node_id)s with the following "
 "error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/ipmitool.py:408
+#: ironic/drivers/modules/ipmitool.py:418
 #, python-format
 msgid "IPMI Error while attempting \"%(cmd)s\"for node %(node)s. Error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/ipmitool.py:483
+#: ironic/drivers/modules/ipmitool.py:493
 #, python-format
 msgid ""
 "IPMI power %(state)s timed out after %(tries)s retries on node "
 "%(node_id)s."
 msgstr ""
 
-#: ironic/drivers/modules/ipmitool.py:646
+#: ironic/drivers/modules/ipmitool.py:656
 #, python-format
 msgid "IPMI \"raw bytes\" failed for node %(node_id)s with error: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/ipmitool.py:978
+#: ironic/drivers/modules/ipmitool.py:1011
 #, python-format
 msgid "IPMI \"bmc reset\" failed for node %(node_id)s with error: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/iscsi_deploy.py:626
-#: ironic/drivers/modules/iscsi_deploy.py:850
-#: ironic/drivers/modules/iscsi_deploy.py:889
-#: ironic/drivers/modules/ilo/deploy.py:940
-#: ironic/drivers/modules/irmc/deploy.py:864
+#: ironic/drivers/modules/iscsi_deploy.py:624
+#: ironic/drivers/modules/iscsi_deploy.py:847
+#: ironic/drivers/modules/iscsi_deploy.py:886
+#: ironic/drivers/modules/ilo/deploy.py:1032
+#: ironic/drivers/modules/irmc/deploy.py:871
 #, python-format
 msgid "Deploy failed for instance %(instance)s. Error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/pxe.py:266
+#: ironic/drivers/modules/pxe.py:317
 msgid "Whole disk image with netboot is not supported in UEFI boot mode."
 msgstr ""
 
-#: ironic/drivers/modules/pxe.py:378
+#: ironic/drivers/modules/pxe.py:429
 msgid "UEFI boot mode is not supported with iPXE boot enabled."
 msgstr ""
 
-#: ironic/drivers/modules/seamicro.py:197
+#: ironic/drivers/modules/seamicro.py:198
 #, python-format
 msgid "SeaMicro client exception %(msg)s for node %(uuid)s"
 msgstr ""
 
-#: ironic/drivers/modules/seamicro.py:478
-#: ironic/drivers/modules/seamicro.py:517
+#: ironic/drivers/modules/seamicro.py:479
+#: ironic/drivers/modules/seamicro.py:518
 #, python-format
 msgid "SeaMicro client exception: %s"
 msgstr ""
 
-#: ironic/drivers/modules/seamicro.py:580
+#: ironic/drivers/modules/seamicro.py:582
 #, python-format
 msgid ""
 "Seamicro set boot device failed for node %(node)s with the following "
 "error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/ssh.py:279
+#: ironic/drivers/modules/ssh.py:294
 #, python-format
 msgid "Cannot execute SSH cmd %(cmd)s. Reason: %(err)s."
 msgstr ""
 
-#: ironic/drivers/modules/ssh.py:380
+#: ironic/drivers/modules/ssh.py:394
 #, python-format
 msgid "Node \"%(host)s\" with MAC address %(mac)s not found."
 msgstr ""
 
-#: ironic/drivers/modules/ssh.py:667
+#: ironic/drivers/modules/ssh.py:682
 #, python-format
 msgid ""
 "Failed to set boot device for node %(node)s, virt_type %(vtype)s does not"
 " support this operation"
 msgstr ""
 
-#: ironic/drivers/modules/virtualbox.py:160
+#: ironic/drivers/modules/virtualbox.py:161
 #, python-format
 msgid ""
 "Failed while creating a VirtualMachine object for node %(node_id)s. "
 "Error: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/virtualbox.py:176
+#: ironic/drivers/modules/virtualbox.py:177
 #, python-format
 msgid "'%(ironic_method)s' failed for node %(node_id)s with error: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/virtualbox.py:218
+#: ironic/drivers/modules/virtualbox.py:219
 #, python-format
 msgid "VirtualBox returned unknown state '%(state)s' for node %(node)s"
 msgstr ""
 
-#: ironic/drivers/modules/virtualbox.py:313
+#: ironic/drivers/modules/virtualbox.py:315
 #, python-format
 msgid "VirtualBox returned unknown boot device '%(device)s' for node %(node)s"
 msgstr ""
 
-#: ironic/drivers/modules/virtualbox.py:354
+#: ironic/drivers/modules/virtualbox.py:356
 #, python-format
 msgid "'set_boot_device' failed for node %(node_id)s with error: %(error)s"
 msgstr ""
@@ -455,7 +477,7 @@ msgid ""
 "%(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/drac/management.py:402
+#: ironic/drivers/modules/drac/management.py:403
 #, python-format
 msgid ""
 "DRAC driver failed to set the boot device for node %(node_uuid)s to "
@@ -469,19 +491,19 @@ msgid ""
 "%(target_power_state)s. Reason: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/ilo/common.py:432
+#: ironic/drivers/modules/ilo/common.py:491
 #, python-format
 msgid ""
 "Error while ejecting virtual media %(device)s from node %(uuid)s. Error: "
 "%(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/ilo/common.py:458
+#: ironic/drivers/modules/ilo/common.py:518
 #, python-format
 msgid "Error while deleting %(object_name)s from %(container)s. Error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/ilo/deploy.py:120
+#: ironic/drivers/modules/ilo/deploy.py:167
 #, python-format
 msgid ""
 "Virtual media deploy accepts only Glance images or HTTP(S) URLs as "
@@ -489,19 +511,19 @@ msgid ""
 " not reachable."
 msgstr ""
 
-#: ironic/drivers/modules/ilo/deploy.py:147
+#: ironic/drivers/modules/ilo/deploy.py:195
 #, python-format
 msgid ""
 "Unable to find kernel or ramdisk for image %(image)s to generate boot ISO"
 " for %(node)s"
 msgstr ""
 
-#: ironic/drivers/modules/ilo/deploy.py:195
+#: ironic/drivers/modules/ilo/deploy.py:254
 #, python-format
-msgid "Failed to clean up boot ISO for %(node)s.Error: %(error)s."
+msgid "Failed to clean up boot ISO for node %(node)s. Error: %(error)s."
 msgstr ""
 
-#: ironic/drivers/modules/ilo/deploy.py:838
+#: ironic/drivers/modules/ilo/deploy.py:926
 #, python-format
 msgid "Cannot get boot ISO for node %s"
 msgstr ""
@@ -523,43 +545,38 @@ msgstr ""
 msgid "iLO failed to change state to %(tstate)s within %(timeout)s sec"
 msgstr ""
 
-#: ironic/drivers/modules/irmc/deploy.py:430
+#: ironic/drivers/modules/irmc/deploy.py:437
 #, python-format
 msgid "Error while inserting virtual cdrom from node %(uuid)s. Error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/irmc/deploy.py:453
+#: ironic/drivers/modules/irmc/deploy.py:460
 #, python-format
 msgid "Error while ejecting virtual cdrom from node %(uuid)s. Error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/irmc/deploy.py:486
+#: ironic/drivers/modules/irmc/deploy.py:493
 #, python-format
 msgid "Error while inserting virtual floppy from node %(uuid)s. Error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/irmc/deploy.py:509
+#: ironic/drivers/modules/irmc/deploy.py:516
 #, python-format
 msgid "Error while ejecting virtual floppy from node %(uuid)s. Error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/irmc/management.py:60
+#: ironic/drivers/modules/irmc/management.py:64
 #, python-format
 msgid ""
 "SCCI get sensor data failed for node %(node_id)s with the following "
 "error: %(error)s"
 msgstr ""
 
-#: ironic/drivers/modules/irmc/power.py:93
+#: ironic/drivers/modules/irmc/power.py:94
 #, python-format
 msgid ""
 "iRMC set_power_state failed to set state to %(tstate)s  for node "
 "%(node_id)s with error: %(error)s"
-msgstr ""
-
-#: ironic/drivers/modules/msftocs/msftocsclient.py:72
-#, python-format
-msgid "HTTP call failed: %s"
 msgstr ""
 
 #: ironic/drivers/modules/msftocs/msftocsclient.py:85
@@ -577,7 +594,7 @@ msgstr ""
 msgid "Reboot failed. Error: %(err_msg)s"
 msgstr ""
 
-#: ironic/drivers/modules/ucs/helper.py:119
+#: ironic/drivers/modules/ucs/helper.py:118
 #, python-format
 msgid "Cisco client: service unavailable for node %(uuid)s."
 msgstr ""
@@ -623,16 +640,6 @@ msgstr ""
 msgid ""
 "%(driver)s: driver failed to reboot node %(uuid)s within %(timeout)s "
 "seconds."
-msgstr ""
-
-#: ironic/objects/base.py:69
-#, python-format
-msgid "Error setting %(attr)s"
-msgstr ""
-
-#: ironic/objects/base.py:221
-#, python-format
-msgid "Unable to instantiate unregistered object type %(objtype)s"
 msgstr ""
 
 #: ironic/tests/db/sqlalchemy/test_migrations.py:169

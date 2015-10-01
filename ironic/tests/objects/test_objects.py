@@ -17,30 +17,32 @@ import datetime
 import gettext
 import iso8601
 
+import mock
 from oslo_context import context
-from oslo_utils import timeutils
+from oslo_versionedobjects import base as object_base
+from oslo_versionedobjects import exception as object_exception
 import six
 
-from ironic.common import exception
 from ironic.objects import base
-from ironic.objects import utils
+from ironic.objects import fields
 from ironic.tests import base as test_base
 
 gettext.install('ironic')
 
 
-class MyObj(base.IronicObject):
+@base.IronicObjectRegistry.register
+class MyObj(base.IronicObject, object_base.VersionedObjectDictCompat):
     VERSION = '1.5'
 
-    fields = {'foo': int,
-              'bar': str,
-              'missing': str,
+    fields = {'foo': fields.IntegerField(),
+              'bar': fields.StringField(),
+              'missing': fields.StringField(),
               }
 
     def obj_load_attr(self, attrname):
         setattr(self, attrname, 'loaded!')
 
-    @base.remotable_classmethod
+    @object_base.remotable_classmethod
     def query(cls, context):
         obj = cls(context)
         obj.foo = 1
@@ -48,29 +50,29 @@ class MyObj(base.IronicObject):
         obj.obj_reset_changes()
         return obj
 
-    @base.remotable
-    def marco(self, context):
+    @object_base.remotable
+    def marco(self, context=None):
         return 'polo'
 
-    @base.remotable
-    def update_test(self, context):
-        if context.tenant == 'alternate':
+    @object_base.remotable
+    def update_test(self, context=None):
+        if context and context.tenant == 'alternate':
             self.bar = 'alternate-context'
         else:
             self.bar = 'updated'
 
-    @base.remotable
-    def save(self, context):
+    @object_base.remotable
+    def save(self, context=None):
         self.obj_reset_changes()
 
-    @base.remotable
-    def refresh(self, context):
+    @object_base.remotable
+    def refresh(self, context=None):
         self.foo = 321
         self.bar = 'refreshed'
         self.obj_reset_changes()
 
-    @base.remotable
-    def modify_save_modify(self, context):
+    @object_base.remotable
+    def modify_save_modify(self, context=None):
         self.bar = 'meow'
         self.save()
         self.foo = 42
@@ -81,73 +83,14 @@ class MyObj2(object):
     def obj_name(cls):
         return 'MyObj'
 
-    @base.remotable_classmethod
+    @object_base.remotable_classmethod
     def get(cls, *args, **kwargs):
         pass
 
 
+@base.IronicObjectRegistry.register_if(False)
 class TestSubclassedObject(MyObj):
-    fields = {'new_field': str}
-
-
-class TestMetaclass(test_base.TestCase):
-    def test_obj_tracking(self):
-
-        @six.add_metaclass(base.IronicObjectMetaclass)
-        class NewBaseClass(object):
-            fields = {}
-
-            @classmethod
-            def obj_name(cls):
-                return cls.__name__
-
-        class Test1(NewBaseClass):
-            @staticmethod
-            def obj_name():
-                return 'fake1'
-
-        class Test2(NewBaseClass):
-            pass
-
-        class Test2v2(NewBaseClass):
-            @staticmethod
-            def obj_name():
-                return 'Test2'
-
-        expected = {'fake1': [Test1], 'Test2': [Test2, Test2v2]}
-
-        self.assertEqual(expected, NewBaseClass._obj_classes)
-        # The following should work, also.
-        self.assertEqual(expected, Test1._obj_classes)
-        self.assertEqual(expected, Test2._obj_classes)
-
-
-class TestUtils(test_base.TestCase):
-
-    def test_dt_serializer(self):
-        class Obj(object):
-            foo = utils.dt_serializer('bar')
-
-        obj = Obj()
-        obj.bar = timeutils.parse_isotime('1955-11-05T00:00:00+00:00')
-        self.assertEqual('1955-11-05T00:00:00+00:00', obj.foo())
-        obj.bar = None
-        self.assertIsNone(obj.foo())
-        obj.bar = 'foo'
-        self.assertRaises(TypeError, obj.foo)
-
-    def test_dt_deserializer(self):
-        dt = timeutils.parse_isotime('1955-11-05T00:00:00Z')
-        self.assertEqual(utils.dt_deserializer(None, dt.isoformat()), dt)
-        self.assertIsNone(utils.dt_deserializer(None, None))
-        self.assertRaises(ValueError, utils.dt_deserializer, None, 'foo')
-
-    def test_obj_to_primitive_dict(self):
-        myobj = MyObj(self.context)
-        myobj.foo = 1
-        myobj.bar = 'foo'
-        self.assertEqual({'foo': 1, 'bar': 'foo'},
-                         base.obj_to_primitive(myobj))
+    fields = {'new_field': fields.StringField()}
 
 
 class _BaseTestCase(test_base.TestCase):
@@ -197,7 +140,7 @@ class _TestObject(object):
                      'ironic_object.namespace': 'foo',
                      'ironic_object.version': '1.5',
                      'ironic_object.data': {'foo': 1}}
-        self.assertRaises(exception.UnsupportedObjectError,
+        self.assertRaises(object_exception.UnsupportedObjectError,
                           MyObj.obj_from_primitive, primitive)
 
     def test_dehydration(self):
@@ -236,8 +179,9 @@ class _TestObject(object):
         self.assertEqual('loaded!', obj.bar)
 
     def test_load_in_base(self):
-        class Foo(base.IronicObject):
-            fields = {'foobar': int}
+        @base.IronicObjectRegistry.register_if(False)
+        class Foo(base.IronicObject, object_base.VersionedObjectDictCompat):
+            fields = {'foobar': fields.IntegerField()}
         obj = Foo(self.context)
 
         self.assertRaisesRegexp(
@@ -269,7 +213,7 @@ class _TestObject(object):
         self.assertEqual(set(), obj2.obj_what_changed())
 
     def test_unknown_objtype(self):
-        self.assertRaises(exception.UnsupportedObjectError,
+        self.assertRaises(object_exception.UnsupportedObjectError,
                           base.IronicObject.obj_class_from_name, 'foo', '1.0')
 
     def test_with_alternate_context(self):
@@ -283,7 +227,7 @@ class _TestObject(object):
     def test_orphaned_object(self):
         obj = MyObj.query(self.context)
         obj._context = None
-        self.assertRaises(exception.OrphanedObjectError,
+        self.assertRaises(object_exception.OrphanedObjectError,
                           obj.update_test)
         self.assertRemotes()
 
@@ -341,6 +285,7 @@ class _TestObject(object):
 
     def test_base_attributes(self):
         dt = datetime.datetime(1955, 11, 5, 0, 0, tzinfo=iso8601.iso8601.Utc())
+        datatime = fields.DateTimeField()
         obj = MyObj(self.context)
         obj.created_at = dt
         obj.updated_at = dt
@@ -350,8 +295,8 @@ class _TestObject(object):
                     'ironic_object.changes':
                         ['created_at', 'updated_at'],
                     'ironic_object.data':
-                        {'created_at': dt.isoformat(),
-                         'updated_at': dt.isoformat(),
+                        {'created_at': datatime.stringify(dt),
+                         'updated_at': datatime.stringify(dt),
                          }
                     }
         actual = obj.obj_to_primitive()
@@ -414,8 +359,10 @@ class _TestObject(object):
         self.assertEqual({}, obj.obj_get_changes())
 
     def test_obj_fields(self):
-        class TestObj(base.IronicObject):
-            fields = {'foo': int}
+        @base.IronicObjectRegistry.register_if(False)
+        class TestObj(base.IronicObject,
+                      object_base.VersionedObjectDictCompat):
+            fields = {'foo': fields.IntegerField()}
             obj_extra_fields = ['bar']
 
             @property
@@ -427,8 +374,11 @@ class _TestObject(object):
                          set(obj.obj_fields))
 
     def test_refresh_object(self):
-        class TestObj(base.IronicObject):
-            fields = {'foo': int, 'bar': str}
+        @base.IronicObjectRegistry.register_if(False)
+        class TestObj(base.IronicObject,
+                      object_base.VersionedObjectDictCompat):
+            fields = {'foo': fields.IntegerField(),
+                      'bar': fields.StringField()}
 
         obj = TestObj(self.context)
         current_obj = TestObj(self.context)
@@ -445,6 +395,21 @@ class _TestObject(object):
         self.assertEqual(123, obj.foo)
         self.assertEqual('abc', obj.bar)
         self.assertEqual(set(['foo', 'bar']), obj.obj_what_changed())
+
+    def test_assign_value_without_DictCompat(self):
+        class TestObj(base.IronicObject):
+            fields = {'foo': fields.IntegerField(),
+                      'bar': fields.StringField()}
+        obj = TestObj(self.context)
+        obj.foo = 10
+        err_message = ''
+        try:
+            obj['bar'] = 'value'
+        except TypeError as e:
+            err_message = six.text_type(e)
+        finally:
+            self.assertIn("'TestObj' object does not support item assignment",
+                          err_message)
 
 
 class TestObject(_LocalTest, _TestObject):
@@ -475,3 +440,48 @@ class TestObjectSerializer(test_base.TestCase):
             self.assertEqual(1, len(thing2))
             for item in thing2:
                 self.assertIsInstance(item, MyObj)
+
+    @mock.patch('ironic.objects.base.IronicObject.indirection_api')
+    def _test_deserialize_entity_newer(self, obj_version, backported_to,
+                                       mock_indirection_api,
+                                       my_version='1.6'):
+        ser = base.IronicObjectSerializer()
+        mock_indirection_api.object_backport_versions.return_value \
+            = 'backported'
+
+        @base.IronicObjectRegistry.register
+        class MyTestObj(MyObj):
+            VERSION = my_version
+
+        obj = MyTestObj(self.context)
+        obj.VERSION = obj_version
+        primitive = obj.obj_to_primitive()
+        result = ser.deserialize_entity(self.context, primitive)
+        if backported_to is None:
+            self.assertFalse(
+                mock_indirection_api.object_backport_versions.called)
+        else:
+            self.assertEqual('backported', result)
+            versions = object_base.obj_tree_get_versions('MyTestObj')
+            mock_indirection_api.object_backport_versions.assert_called_with(
+                self.context, primitive, versions)
+
+    def test_deserialize_entity_newer_version_backports(self):
+        "Test object with unsupported (newer) version"
+        self._test_deserialize_entity_newer('1.25', '1.6')
+
+    def test_deserialize_entity_same_revision_does_not_backport(self):
+        "Test object with supported revision"
+        self._test_deserialize_entity_newer('1.6', None)
+
+    def test_deserialize_entity_newer_revision_does_not_backport_zero(self):
+        "Test object with supported revision"
+        self._test_deserialize_entity_newer('1.6.0', None)
+
+    def test_deserialize_entity_newer_revision_does_not_backport(self):
+        "Test object with supported (newer) revision"
+        self._test_deserialize_entity_newer('1.6.1', None)
+
+    def test_deserialize_entity_newer_version_passes_revision(self):
+        "Test object with unsupported (newer) version and revision"
+        self._test_deserialize_entity_newer('1.7', '1.6.1', my_version='1.6.1')

@@ -15,6 +15,7 @@
 
 from oslo_utils import strutils
 from oslo_utils import uuidutils
+from oslo_versionedobjects import base as object_base
 
 from ironic.common import exception
 from ironic.db import api as db_api
@@ -22,7 +23,8 @@ from ironic.objects import base
 from ironic.objects import fields as object_fields
 
 
-class Node(base.IronicObject):
+@base.IronicObjectRegistry.register
+class Node(base.IronicObject, object_base.VersionedObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: Added instance_info
     # Version 1.2: Add get() and get_by_id() and make get_by_uuid()
@@ -104,7 +106,11 @@ class Node(base.IronicObject):
         node.obj_reset_changes()
         return node
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get(cls, context, node_id):
         """Find a node based on its id or uuid and return a Node object.
 
@@ -118,7 +124,11 @@ class Node(base.IronicObject):
         else:
             raise exception.InvalidIdentity(identity=node_id)
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get_by_id(cls, context, node_id):
         """Find a node based on its integer id and return a Node object.
 
@@ -129,7 +139,11 @@ class Node(base.IronicObject):
         node = Node._from_db_object(cls(context), db_node)
         return node
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get_by_uuid(cls, context, uuid):
         """Find a node based on uuid and return a Node object.
 
@@ -140,7 +154,11 @@ class Node(base.IronicObject):
         node = Node._from_db_object(cls(context), db_node)
         return node
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get_by_name(cls, context, name):
         """Find a node based on name and return a Node object.
 
@@ -151,7 +169,11 @@ class Node(base.IronicObject):
         node = Node._from_db_object(cls(context), db_node)
         return node
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def get_by_instance_uuid(cls, context, instance_uuid):
         """Find a node based on the instance uuid and return a Node object.
 
@@ -162,7 +184,11 @@ class Node(base.IronicObject):
         node = Node._from_db_object(cls(context), db_node)
         return node
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def list(cls, context, limit=None, marker=None, sort_key=None,
              sort_dir=None, filters=None):
         """Return a list of Node objects.
@@ -181,7 +207,11 @@ class Node(base.IronicObject):
                                            sort_dir=sort_dir)
         return [Node._from_db_object(cls(context), obj) for obj in db_nodes]
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def reserve(cls, context, tag, node_id):
         """Get and reserve a node.
 
@@ -199,7 +229,11 @@ class Node(base.IronicObject):
         node = Node._from_db_object(cls(context), db_node)
         return node
 
-    @base.remotable_classmethod
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
     def release(cls, context, tag, node_id):
         """Release the reservation on a node.
 
@@ -211,7 +245,10 @@ class Node(base.IronicObject):
         """
         cls.dbapi.release_node(tag, node_id)
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def create(self, context=None):
         """Create a Node record in the DB.
 
@@ -232,7 +269,10 @@ class Node(base.IronicObject):
         db_node = self.dbapi.create_node(values)
         self._from_db_object(self, db_node)
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def destroy(self, context=None):
         """Delete the Node from the DB.
 
@@ -246,7 +286,10 @@ class Node(base.IronicObject):
         self.dbapi.destroy_node(self.uuid)
         self.obj_reset_changes()
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def save(self, context=None):
         """Save updates to this Node.
 
@@ -270,7 +313,10 @@ class Node(base.IronicObject):
         self.dbapi.update_node(self.uuid, updates)
         self.obj_reset_changes()
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def refresh(self, context=None):
         """Refresh the object by re-fetching from the DB.
 
@@ -284,7 +330,10 @@ class Node(base.IronicObject):
         current = self.__class__.get_by_uuid(self._context, self.uuid)
         self.obj_refresh(current)
 
-    @base.remotable
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable
     def touch_provisioning(self, context=None):
         """Touch the database record to mark the provisioning as alive."""
         self.dbapi.touch_node_provisioning(self.id)

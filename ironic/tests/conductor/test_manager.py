@@ -27,6 +27,8 @@ from oslo_db import exception as db_exception
 import oslo_messaging as messaging
 from oslo_utils import strutils
 from oslo_utils import uuidutils
+from oslo_versionedobjects import base as ovo_base
+from oslo_versionedobjects import fields
 
 from ironic.common import boot_devices
 from ironic.common import driver_factory
@@ -41,6 +43,7 @@ from ironic.db import api as dbapi
 from ironic.drivers import base as drivers_base
 from ironic.drivers.modules import fake
 from ironic import objects
+from ironic.objects import base as obj_base
 from ironic.tests import base as tests_base
 from ironic.tests.conductor import utils as mgr_utils
 from ironic.tests.db import base as tests_db_base
@@ -1537,6 +1540,78 @@ class DoNodeDeployTearDownTestCase(_ServiceSetUpMixin,
         self.assertIsNone(node.last_error)
         mock_spawn.assert_called_with(self.service._do_node_verify, mock.ANY)
 
+    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    def test_do_provision_action_abort(self, mock_spawn):
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.CLEANWAIT,
+            target_provision_state=states.AVAILABLE)
+
+        self._start_service()
+        self.service.do_provisioning_action(self.context, node.uuid, 'abort')
+        node.refresh()
+        # Node will be moved to AVAILABLE after cleaning, not tested here
+        self.assertEqual(states.CLEANFAIL, node.provision_state)
+        self.assertEqual(states.AVAILABLE, node.target_provision_state)
+        self.assertIsNone(node.last_error)
+        mock_spawn.assert_called_with(self.service._do_node_clean_abort,
+                                      mock.ANY)
+
+    def test_do_provision_action_abort_clean_step_not_abortable(self):
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.CLEANWAIT,
+            target_provision_state=states.AVAILABLE,
+            clean_step={'step': 'foo', 'abortable': False})
+
+        self._start_service()
+        self.service.do_provisioning_action(self.context, node.uuid, 'abort')
+        node.refresh()
+        # Assert the current clean step was marked to be aborted later
+        self.assertIn('abort_after', node.clean_step)
+        self.assertTrue(node.clean_step['abort_after'])
+        # Make sure things stays as it was before
+        self.assertEqual(states.CLEANWAIT, node.provision_state)
+        self.assertEqual(states.AVAILABLE, node.target_provision_state)
+
+    @mock.patch.object(fake.FakeDeploy, 'tear_down_cleaning', autospec=True)
+    def _test__do_node_clean_abort(self, step_name, tear_mock):
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.CLEANFAIL,
+            target_provision_state=states.AVAILABLE,
+            clean_step={'step': 'foo', 'abortable': True})
+
+        with task_manager.acquire(self.context, node.uuid) as task:
+            self.service._do_node_clean_abort(task, step_name=step_name)
+            self.assertIsNotNone(task.node.last_error)
+            tear_mock.assert_called_once_with(task.driver.deploy, task)
+            if step_name:
+                self.assertIn(step_name, task.node.last_error)
+
+    def test__do_node_clean_abort(self):
+        self._test__do_node_clean_abort(None)
+
+    def test__do_node_clean_abort_with_step_name(self):
+        self._test__do_node_clean_abort('foo')
+
+    @mock.patch.object(fake.FakeDeploy, 'tear_down_cleaning', autospec=True)
+    def test__do_node_clean_abort_tear_down_fail(self, tear_mock):
+        tear_mock.side_effect = Exception('Surprise')
+
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.CLEANFAIL,
+            target_provision_state=states.AVAILABLE,
+            clean_step={'step': 'foo', 'abortable': True})
+
+        with task_manager.acquire(self.context, node.uuid) as task:
+            self.service._do_node_clean_abort(task)
+            tear_mock.assert_called_once_with(task.driver.deploy, task)
+            self.assertIsNotNone(task.node.last_error)
+            self.assertIsNotNone(task.node.maintenance_reason)
+            self.assertTrue(task.node.maintenance)
+
 
 @_mock_record_keepalive
 class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
@@ -1552,6 +1627,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         # Cleaning should be executed in this order
         self.clean_steps = [self.deploy_erase, self.power_update,
                             self.deploy_update]
+        self.next_clean_steps = self.clean_steps[1:]
         # Zap step
         self.deploy_raid = {
             'step': 'build_raid', 'priority': 0, 'interface': 'deploy'}
@@ -1654,20 +1730,57 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
                                           target_provision_state=tgt_prv_state,
                                           last_error=None,
                                           driver_internal_info=driver_info,
-                                          clean_step=self.clean_steps[1])
+                                          clean_step=self.clean_steps[0])
         self._start_service()
         self.service.continue_node_clean(self.context, node.uuid)
         self.service._worker_pool.waitall()
         node.refresh()
         mock_spawn.assert_called_with(self.service._do_next_clean_step,
-                                      mock.ANY, self.clean_steps,
-                                      self.clean_steps[1])
+                                      mock.ANY, self.next_clean_steps)
 
     def test_continue_node_clean(self):
         self._continue_node_clean(states.CLEANWAIT)
 
     def test_continue_node_clean_backward_compat(self):
         self._continue_node_clean(states.CLEANING)
+
+    def test_continue_node_clean_abort(self):
+        last_clean_step = self.clean_steps[0]
+        last_clean_step['abortable'] = False
+        last_clean_step['abort_after'] = True
+        driver_info = {'clean_steps': self.clean_steps}
+        node = obj_utils.create_test_node(
+            self.context, driver='fake', provision_state=states.CLEANWAIT,
+            target_provision_state=states.AVAILABLE, last_error=None,
+            driver_internal_info=driver_info, clean_step=self.clean_steps[0])
+
+        self._start_service()
+        self.service.continue_node_clean(self.context, node.uuid)
+        self.service._worker_pool.waitall()
+        node.refresh()
+        self.assertEqual(states.CLEANFAIL, node.provision_state)
+        self.assertEqual(states.AVAILABLE, node.target_provision_state)
+        self.assertIsNotNone(node.last_error)
+        # assert the clean step name is in the last error message
+        self.assertIn(self.clean_steps[0]['step'], node.last_error)
+
+    def test_continue_node_clean_abort_last_clean_step(self):
+        last_clean_step = self.clean_steps[0]
+        last_clean_step['abortable'] = False
+        last_clean_step['abort_after'] = True
+        driver_info = {'clean_steps': [self.clean_steps[0]]}
+        node = obj_utils.create_test_node(
+            self.context, driver='fake', provision_state=states.CLEANWAIT,
+            target_provision_state=states.AVAILABLE, last_error=None,
+            driver_internal_info=driver_info, clean_step=self.clean_steps[0])
+
+        self._start_service()
+        self.service.continue_node_clean(self.context, node.uuid)
+        self.service._worker_pool.waitall()
+        node.refresh()
+        self.assertEqual(states.AVAILABLE, node.provision_state)
+        self.assertIsNone(node.target_provision_state)
+        self.assertIsNone(node.last_error)
 
     @mock.patch('ironic.drivers.modules.fake.FakePower.validate')
     def test__do_node_clean_validate_fail(self, mock_validate):
@@ -1731,7 +1844,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         node.refresh()
 
         mock_validate.assert_called_once_with(task)
-        mock_next_step.assert_called_once_with(mock.ANY, [], {})
+        mock_next_step.assert_called_once_with(mock.ANY, [])
         mock_steps.assert_called_once_with(task)
 
         # Check that state didn't change
@@ -1753,8 +1866,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(task, self.clean_steps,
-                                             node.clean_step)
+            self.service._do_next_clean_step(task, self.clean_steps)
 
         self.service._worker_pool.waitall()
         node.refresh()
@@ -1785,8 +1897,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(task, self.clean_steps,
-                                             self.clean_steps[0])
+            self.service._do_next_clean_step(task, self.next_clean_steps)
 
         self.service._worker_pool.waitall()
         node.refresh()
@@ -1817,8 +1928,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(task, self.clean_steps,
-                                             self.clean_steps[0])
+            self.service._do_next_clean_step(task, self.next_clean_steps)
 
         self.service._worker_pool.waitall()
         node.refresh()
@@ -1847,8 +1957,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(
-                task, self.clean_steps, self.clean_steps[-1])
+            self.service._do_next_clean_step(task, [])
 
         self.service._worker_pool.waitall()
         node.refresh()
@@ -1876,8 +1985,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(
-                task, self.clean_steps, node.clean_step)
+            self.service._do_next_clean_step(task, self.clean_steps)
 
         self.service._worker_pool.waitall()
         node.refresh()
@@ -1891,35 +1999,6 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
             mock.call(self.clean_steps[0]),
             mock.call(self.clean_steps[2])
         ]
-
-    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.execute_clean_step')
-    def test__do_next_clean_step_bad_last_step(self, mock_execute):
-        # Make sure cleaning fails if last_step is incorrect
-        node = obj_utils.create_test_node(
-            self.context, driver='fake',
-            provision_state=states.CLEANING,
-            target_provision_state=states.AVAILABLE,
-            last_error=None,
-            clean_step={})
-
-        self._start_service()
-
-        with task_manager.acquire(
-                self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(
-                task, self.clean_steps, {'interface': 'deploy',
-                                         'step': 'not_a_clean_step',
-                                         'priority': 100})
-
-        self.service._worker_pool.waitall()
-        node.refresh()
-
-        # Node should have failed without executing anything
-        self.assertEqual(states.CLEANFAIL, node.provision_state)
-        self.assertEqual({}, node.clean_step)
-        self.assertIsNotNone(node.last_error)
-        self.assertTrue(node.maintenance)
-        self.assertFalse(mock_execute.called)
 
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.execute_clean_step')
     @mock.patch.object(fake.FakeDeploy, 'tear_down_cleaning', autospec=True)
@@ -1937,8 +2016,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(
-                task, self.clean_steps, node.clean_step)
+            self.service._do_next_clean_step(task, self.clean_steps)
             tear_mock.assert_called_once_with(task.driver.deploy, task)
 
         self.service._worker_pool.waitall()
@@ -1969,8 +2047,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(
-                task, self.clean_steps, node.clean_step)
+            self.service._do_next_clean_step(task, self.clean_steps)
 
         self.service._worker_pool.waitall()
         node.refresh()
@@ -1998,7 +2075,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
             self.service._do_next_clean_step(
-                task, [], node.clean_step)
+                task, [])
 
         self.service._worker_pool.waitall()
         node.refresh()
@@ -2025,8 +2102,7 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
 
         with task_manager.acquire(
                 self.context, node['id'], shared=False) as task:
-            self.service._do_next_clean_step(
-                task, self.clean_steps, node.clean_step)
+            self.service._do_next_clean_step(task, self.clean_steps)
 
         self.service._worker_pool.waitall()
         node.refresh()
@@ -2059,6 +2135,36 @@ class DoNodeCleanTestCase(_ServiceSetUpMixin, tests_db_base.DbTestCase):
             self.assertEqual(self.clean_steps,
                              task.node.driver_internal_info['clean_steps'])
             self.assertEqual({}, node.clean_step)
+
+    def test__get_node_next_clean_steps(self):
+        driver_internal_info = {'clean_steps': self.clean_steps}
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.CLEANWAIT,
+            target_provision_state=states.AVAILABLE,
+            driver_internal_info=driver_internal_info,
+            last_error=None,
+            clean_step=self.clean_steps[0])
+
+        with task_manager.acquire(self.context, node.uuid) as task:
+            steps = self.service._get_node_next_clean_steps(task)
+            self.assertEqual(self.next_clean_steps, steps)
+
+    def test__get_node_next_clean_steps_bad_clean_step(self):
+        driver_internal_info = {'clean_steps': self.clean_steps}
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.CLEANWAIT,
+            target_provision_state=states.AVAILABLE,
+            driver_internal_info=driver_internal_info,
+            last_error=None,
+            clean_step={'interface': 'deploy',
+                        'step': 'not_a_clean_step',
+                        'priority': 100})
+
+        with task_manager.acquire(self.context, node.uuid) as task:
+            self.assertRaises(exception.NodeCleaningFailure,
+                              self.service._get_node_next_clean_steps, task)
 
 
 @_mock_record_keepalive
@@ -2782,6 +2888,15 @@ class RaidTestCases(_ServiceSetUpMixin, tests_db_base.DbTestCase):
             self.context, self.node.uuid, raid_config)
         self.node.refresh()
         self.assertEqual(raid_config, self.node.target_raid_config)
+
+    def test_set_target_raid_config_empty(self):
+        self.node.target_raid_config = {'foo': 'bar'}
+        self.node.save()
+        raid_config = {}
+        self.service.set_target_raid_config(
+            self.context, self.node.uuid, raid_config)
+        self.node.refresh()
+        self.assertEqual({}, self.node.target_raid_config)
 
     def test_set_target_raid_config_iface_not_supported(self):
         raid_config = {'logical_disks': [{'size_gb': 100, 'raid_level': '1'}]}
@@ -3578,12 +3693,13 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
                     'ipmi_transit_channel', 'ipmi_transit_address',
                     'ipmi_target_channel', 'ipmi_target_address',
                     'ipmi_local_address', 'ipmi_protocol_version',
+                    'ipmi_force_boot_device'
                     ]
         self._check_driver_properties("fake_ipmitool", expected)
 
     def test_driver_properties_fake_ipminative(self):
         expected = ['ipmi_address', 'ipmi_password', 'ipmi_username',
-                    'ipmi_terminal_port']
+                    'ipmi_terminal_port', 'ipmi_force_boot_device']
         self._check_driver_properties("fake_ipminative", expected)
 
     def test_driver_properties_fake_ssh(self):
@@ -3614,13 +3730,14 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
                     'ipmi_transit_address', 'ipmi_target_channel',
                     'ipmi_target_address', 'ipmi_local_address',
                     'deploy_kernel', 'deploy_ramdisk', 'ipmi_protocol_version',
+                    'ipmi_force_boot_device'
                     ]
         self._check_driver_properties("pxe_ipmitool", expected)
 
     def test_driver_properties_pxe_ipminative(self):
         expected = ['ipmi_address', 'ipmi_password', 'ipmi_username',
                     'deploy_kernel', 'deploy_ramdisk',
-                    'ipmi_terminal_port']
+                    'ipmi_terminal_port', 'ipmi_force_boot_device']
         self._check_driver_properties("pxe_ipminative", expected)
 
     def test_driver_properties_pxe_ssh(self):
@@ -4352,3 +4469,105 @@ class ManagerCheckDeployingStatusTestCase(_ServiceSetUpMixin,
             'provision_updated_at',
             callback_method=conductor_utils.cleanup_after_timeout,
             err_handler=manager.provisioning_error_handler)
+
+
+class TestIndirectionApiConductor(tests_db_base.DbTestCase):
+
+    def setUp(self):
+        super(TestIndirectionApiConductor, self).setUp()
+        self.conductor = manager.ConductorManager('test-host', 'test-topic')
+
+    def _test_object_action(self, is_classmethod, raise_exception,
+                            return_object=False):
+        @obj_base.IronicObjectRegistry.register
+        class TestObject(obj_base.IronicObject):
+            context = self.context
+
+            def foo(self, context, raise_exception=False, return_object=False):
+                if raise_exception:
+                    raise Exception('test')
+                elif return_object:
+                    return obj
+                else:
+                    return 'test'
+
+            @classmethod
+            def bar(cls, context, raise_exception=False, return_object=False):
+                if raise_exception:
+                    raise Exception('test')
+                elif return_object:
+                    return obj
+                else:
+                    return 'test'
+
+        obj = TestObject(self.context)
+        if is_classmethod:
+            versions = ovo_base.obj_tree_get_versions(TestObject.obj_name())
+            result = self.conductor.object_class_action_versions(
+                self.context, TestObject.obj_name(), 'bar', versions,
+                tuple(), {'raise_exception': raise_exception,
+                          'return_object': return_object})
+        else:
+            updates, result = self.conductor.object_action(
+                self.context, obj, 'foo', tuple(),
+                {'raise_exception': raise_exception,
+                 'return_object': return_object})
+        if return_object:
+            self.assertEqual(obj, result)
+        else:
+            self.assertEqual('test', result)
+
+    def test_object_action(self):
+        self._test_object_action(False, False)
+
+    def test_object_action_on_raise(self):
+        self.assertRaises(messaging.ExpectedException,
+                          self._test_object_action, False, True)
+
+    def test_object_action_on_object(self):
+        self._test_object_action(False, False, True)
+
+    def test_object_class_action(self):
+        self._test_object_action(True, False)
+
+    def test_object_class_action_on_raise(self):
+        self.assertRaises(messaging.ExpectedException,
+                          self._test_object_action, True, True)
+
+    def test_object_class_action_on_object(self):
+        self._test_object_action(True, False, False)
+
+    def test_object_action_copies_object(self):
+        @obj_base.IronicObjectRegistry.register
+        class TestObject(obj_base.IronicObject):
+            fields = {'dict': fields.DictOfStringsField()}
+
+            def touch_dict(self, context):
+                self.dict['foo'] = 'bar'
+                self.obj_reset_changes()
+
+        obj = TestObject(self.context)
+        obj.dict = {}
+        obj.obj_reset_changes()
+        updates, result = self.conductor.object_action(
+            self.context, obj, 'touch_dict', tuple(), {})
+        # NOTE(danms): If conductor did not properly copy the object, then
+        # the new and reference copies of the nested dict object will be
+        # the same, and thus 'dict' will not be reported as changed
+        self.assertIn('dict', updates)
+        self.assertEqual({'foo': 'bar'}, updates['dict'])
+
+    def test_object_backport_versions(self):
+        fake_backported_obj = 'fake-backported-obj'
+        obj_name = 'fake-obj'
+        test_obj = mock.Mock()
+        test_obj.obj_name.return_value = obj_name
+        test_obj.obj_to_primitive.return_value = fake_backported_obj
+        fake_version_manifest = {obj_name: '1.0'}
+
+        result = self.conductor.object_backport_versions(
+            self.context, test_obj, fake_version_manifest)
+
+        self.assertEqual(result, fake_backported_obj)
+        test_obj.obj_to_primitive.assert_called_once_with(
+            target_version='1.0', version_manifest=fake_version_manifest)

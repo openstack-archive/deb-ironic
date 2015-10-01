@@ -32,6 +32,25 @@ always requests the newest supported API version.
 API Versions History
 --------------------
 
+**1.14**
+
+    Make the following endpoints discoverable via Ironic API:
+    * '/v1/nodes/<UUID or logical name>/states'
+    * '/v1/drivers/<driver name>/properties'
+
+**1.13**
+
+    Add a new verb ``abort`` to the API used to abort nodes in
+    ``CLEANWAIT`` state.
+
+**1.12**
+
+    This API version adds the following the following abilities:
+
+    * Get/set ``node.target_raid_config`` and to get
+      ``node.raid_config``.
+    * Retrieve the logical disk properties for the driver.
+
 **1.11** (breaking change)
 
     Newly registered nodes begin in the ``enroll`` provision state by default,
@@ -151,6 +170,9 @@ Drivers
 
 .. rest-controller:: ironic.api.controllers.v1.driver:DriversController
    :webprefix: /v1/drivers
+
+.. rest-controller:: ironic.api.controllers.v1.driver:DriverRaidController
+   :webprefix: /v1/drivers/(driver_name)/raid
 
 .. rest-controller:: ironic.api.controllers.v1.driver:DriverPassthruController
    :webprefix: /v1/drivers/(driver_name)/vendor_passthru

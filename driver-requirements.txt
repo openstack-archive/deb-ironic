@@ -4,8 +4,8 @@
 # python projects they should package as optional dependencies for Ironic.
 
 # These are available on pypi
-proliantutils>=2.1.1
-pyghmi
+proliantutils>=2.1.5
+pyghmi>=0.8.0
 pysnmp
 python-ironic-inspector-client
 python-scciclient>=0.2.0
@@ -26,3 +26,6 @@ UcsSdk==0.8.2.2
 # Refer documentation on how to install and configure this:
 # http://docs.openstack.org/developer/ironic/drivers/vbox.html
 pyremotevbox>=0.5.0
+
+# The CIMC drivers use the Cisco IMC SDK version 0.7.1, which is available from
+# https://communities.cisco.com/docs/DOC-37174

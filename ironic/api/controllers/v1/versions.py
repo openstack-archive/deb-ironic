@@ -18,8 +18,7 @@ BASE_VERSION = 1
 
 # Here goes a short log of changes in every version.
 # Refer to doc/source/webapi/v1.rst for a detailed explanation of what
-# each version contains, and don't forget to update it when introducing
-# a new version.
+# each version contains.
 #
 # v1.0: corresponds to Juno API, not supported since Kilo
 # v1.1: API at the point in time when versioning support was added,
@@ -40,6 +39,11 @@ BASE_VERSION = 1
 # v1.9: Add ability to filter nodes by provision state
 # v1.10: Logical node names support RFC 3986 unreserved characters
 # v1.11: Nodes appear in ENROLL state by default
+# v1.12: Add support for RAID
+# v1.13: Add 'abort' verb to CLEANWAIT
+# v1.14: Make the following endpoints discoverable via API:
+#        1. '/v1/nodes/<uuid>/states'
+#        2. '/v1/drivers/<driver-name>/properties'
 
 MINOR_0_JUNO = 0
 MINOR_1_INITIAL_VERSION = 1
@@ -53,9 +57,14 @@ MINOR_8_FETCHING_SUBSET_OF_FIELDS = 8
 MINOR_9_PROVISION_STATE_FILTER = 9
 MINOR_10_UNRESTRICTED_NODE_NAME = 10
 MINOR_11_ENROLL_STATE = 11
+MINOR_12_RAID_CONFIG = 12
+MINOR_13_ABORT_VERB = 13
+MINOR_14_LINKS_NODESTATES_DRIVERPROPERTIES = 14
 
-# When adding another version, update MINOR_MAX_VERSION
-MINOR_MAX_VERSION = MINOR_11_ENROLL_STATE
+# When adding another version, update MINOR_MAX_VERSION and also update
+# doc/source/webapi/v1.rst with a detailed explanation of what the version has
+# changed.
+MINOR_MAX_VERSION = MINOR_14_LINKS_NODESTATES_DRIVERPROPERTIES
 
 # String representations of the minor and maximum versions
 MIN_VERSION_STRING = '{}.{}'.format(BASE_VERSION, MINOR_1_INITIAL_VERSION)

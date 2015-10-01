@@ -17,16 +17,18 @@ import time
 from oslo_config import cfg
 from oslo_log import log
 from oslo_utils import excutils
+from oslo_utils import units
 
-from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
+from ironic.common.i18n import _LW
 from ironic.common import image_service
-from ironic.common import keystone
+from ironic.common import images
 from ironic.common import paths
+from ironic.common import raid
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
@@ -50,15 +52,6 @@ agent_opts = [
                       'This option is deprecated and will be removed '
                       'in Mitaka release. Please use [pxe]pxe_config_template '
                       'instead.')),
-    cfg.IntOpt('agent_erase_devices_priority',
-               help=_('Priority to run in-band erase devices via the Ironic '
-                      'Python Agent ramdisk. If unset, will use the priority '
-                      'set in the ramdisk (defaults to 10 for the '
-                      'GenericHardwareManager). If set to 0, will not run '
-                      'during cleaning.')),
-    cfg.IntOpt('agent_erase_devices_iterations',
-               default=1,
-               help=_('Number of iterations to be run for erasing devices.')),
     cfg.BoolOpt('manage_agent_boot',
                 default=True,
                 deprecated_name='manage_tftp',
@@ -67,10 +60,20 @@ agent_opts = [
                        'ramdisk. If set to False, you will need to configure '
                        'your mechanism to allow booting the agent '
                        'ramdisk.')),
+    cfg.IntOpt('memory_consumed_by_agent',
+               default=0,
+               help=_('The memory size in MiB consumed by agent when it is '
+                      'booted on a bare metal node. This is used for '
+                      'checking if the image can be downloaded and deployed '
+                      'on the bare metal node after booting agent ramdisk. '
+                      'This may be set according to the memory consumed by '
+                      'the agent ramdisk image.')),
 ]
 
 CONF = cfg.CONF
 CONF.import_opt('my_ip', 'ironic.netconf')
+CONF.import_opt('erase_devices_priority',
+                'ironic.drivers.modules.deploy_utils', group='deploy')
 CONF.register_opts(agent_opts, group='agent')
 
 LOG = log.getLogger(__name__)
@@ -93,28 +96,6 @@ def _time():
 def _get_client():
     client = agent_client.AgentClient()
     return client
-
-
-def build_agent_options(node):
-    """Build the options to be passed to the agent ramdisk.
-
-    :param node: an ironic node object
-    :returns: a dictionary containing the parameters to be passed to
-        agent ramdisk.
-    """
-    ironic_api = (CONF.conductor.api_url or
-                  keystone.get_service_url()).rstrip('/')
-    agent_config_opts = {
-        'ipa-api-url': ironic_api,
-        'ipa-driver-name': node.driver,
-        # NOTE: The below entry is a temporary workaround for bug/1433812
-        'coreos.configdrive': 0,
-    }
-    root_device = deploy_utils.parse_root_device_hints(node)
-    if root_device:
-        agent_config_opts['root_device'] = root_device
-
-    return agent_config_opts
 
 
 def build_instance_info_for_deploy(task):
@@ -156,6 +137,36 @@ def build_instance_info_for_deploy(task):
     return instance_info
 
 
+def check_image_size(task, image_source):
+    """Check if the requested image is larger than the ram size.
+
+    :param task: a TaskManager instance containing the node to act on.
+    :param image_source: href of the image.
+    :raises: InvalidParameterValue if size of the image is greater than
+        the available ram size.
+    """
+    properties = task.node.properties
+    # skip check if 'memory_mb' is not defined
+    if 'memory_mb' not in properties:
+        LOG.warning(_LW('Skip the image size check as memory_mb is not '
+                        'defined in properties on node %s.'), task.node.uuid)
+        return
+
+    memory_size = int(properties.get('memory_mb'))
+    image_size = int(images.download_size(task.context, image_source))
+    reserved_size = CONF.agent.memory_consumed_by_agent
+    if (image_size + (reserved_size * units.Mi)) > (memory_size * units.Mi):
+        msg = (_('Memory size is too small for requested image, if it is '
+                 'less than (image size + reserved RAM size), will break '
+                 'the IPA deployments. Image size: %(image_size)d MiB, '
+                 'Memory size: %(memory_size)d MiB, Reserved size: '
+                 '%(reserved_size)d MiB.')
+               % {'image_size': image_size / units.Mi,
+                  'memory_size': memory_size,
+                  'reserved_size': reserved_size})
+        raise exception.InvalidParameterValue(msg)
+
+
 class AgentDeploy(base.DeployInterface):
     """Interface for deploy-related actions."""
 
@@ -174,7 +185,10 @@ class AgentDeploy(base.DeployInterface):
         the node.
 
         :param task: a TaskManager instance
-        :raises: MissingParameterValue
+        :raises: MissingParameterValue, if any of the required parameters are
+            missing.
+        :raises: InvalidParameterValue, if any of the parameters have invalid
+            value.
         """
         if CONF.agent.manage_agent_boot:
             task.driver.boot.validate(task)
@@ -193,6 +207,7 @@ class AgentDeploy(base.DeployInterface):
                     "image_source's image_checksum must be provided in "
                     "instance_info for node %s") % node.uuid)
 
+        check_image_size(task, image_source)
         is_whole_disk_image = node.driver_internal_info.get(
             'is_whole_disk_image')
         # TODO(sirushtim): Remove once IPA has support for partition images.
@@ -243,7 +258,7 @@ class AgentDeploy(base.DeployInterface):
             node.instance_info = build_instance_info_for_deploy(task)
             node.save()
             if CONF.agent.manage_agent_boot:
-                deploy_opts = build_agent_options(node)
+                deploy_opts = deploy_utils.build_agent_options(node)
                 task.driver.boot.prepare_ramdisk(task, deploy_opts)
 
     def clean_up(self, task):
@@ -284,12 +299,12 @@ class AgentDeploy(base.DeployInterface):
         :returns: A list of clean step dictionaries
         """
         steps = deploy_utils.agent_get_clean_steps(task)
-        if CONF.agent.agent_erase_devices_priority is not None:
+        if CONF.deploy.erase_devices_priority is not None:
             for step in steps:
                 if (step.get('step') == 'erase_devices' and
                         step.get('interface') == 'deploy'):
                     # Override with operator set priority
-                    step['priority'] = CONF.agent.agent_erase_devices_priority
+                    step['priority'] = CONF.deploy.erase_devices_priority
         return steps
 
     def execute_clean_step(self, task, step):
@@ -311,47 +326,8 @@ class AgentDeploy(base.DeployInterface):
             be removed or if new cleaning ports cannot be created
         :returns: states.CLEANWAIT to signify an asynchronous prepare
         """
-        provider = dhcp_factory.DHCPFactory()
-        # If we have left over ports from a previous cleaning, remove them
-        if getattr(provider.provider, 'delete_cleaning_ports', None):
-            # Allow to raise if it fails, is caught and handled in conductor
-            provider.provider.delete_cleaning_ports(task)
-
-        # Create cleaning ports if necessary
-        if getattr(provider.provider, 'create_cleaning_ports', None):
-            # Allow to raise if it fails, is caught and handled in conductor
-            ports = provider.provider.create_cleaning_ports(task)
-
-            # Add vif_port_id for each of the ports because some boot
-            # interfaces expects these to prepare for booting ramdisk.
-            for port in task.ports:
-                extra_dict = port.extra
-                try:
-                    extra_dict['vif_port_id'] = ports[port.uuid]
-                except KeyError:
-                    # This is an internal error in Ironic.  All DHCP providers
-                    # implementing create_cleaning_ports are supposed to
-                    # return a VIF port ID for all Ironic ports.  But
-                    # that doesn't seem to be true here.
-                    error = (_("When creating cleaning ports, DHCP provider "
-                               "didn't return VIF port ID for %s") % port.uuid)
-                    raise exception.NodeCleaningFailure(
-                        node=task.node.uuid, reason=error)
-                else:
-                    port.extra = extra_dict
-                    port.save()
-
-        # Append required config parameters to node's driver_internal_info
-        # to pass to IPA.
-        deploy_utils.agent_add_clean_params(task)
-
-        if CONF.agent.manage_agent_boot:
-            ramdisk_opts = build_agent_options(task.node)
-            task.driver.boot.prepare_ramdisk(task, ramdisk_opts)
-        manager_utils.node_power_action(task, states.REBOOT)
-
-        # Tell the conductor we are waiting for the agent to boot.
-        return states.CLEANWAIT
+        return deploy_utils.prepare_inband_cleaning(
+            task, manage_boot=CONF.agent.manage_agent_boot)
 
     def tear_down_cleaning(self, task):
         """Clean up the PXE and DHCP files after cleaning.
@@ -360,22 +336,8 @@ class AgentDeploy(base.DeployInterface):
         :raises NodeCleaningFailure: if the cleaning ports cannot be
             removed
         """
-        manager_utils.node_power_action(task, states.POWER_OFF)
-        if CONF.agent.manage_agent_boot:
-            task.driver.boot.clean_up_ramdisk(task)
-
-        # If we created cleaning ports, delete them
-        provider = dhcp_factory.DHCPFactory()
-        if getattr(provider.provider, 'delete_cleaning_ports', None):
-            # Allow to raise if it fails, is caught and handled in conductor
-            provider.provider.delete_cleaning_ports(task)
-
-            for port in task.ports:
-                if 'vif_port_id' in port.extra:
-                    extra_dict = port.extra
-                    extra_dict.pop('vif_port_id', None)
-                    port.extra = extra_dict
-                    port.save()
+        deploy_utils.tear_down_inband_cleaning(
+            task, manage_boot=CONF.agent.manage_agent_boot)
 
 
 class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
@@ -466,3 +428,137 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
         # check once all in-tree drivers have a boot interface.
         if task.driver.boot:
             task.driver.boot.clean_up_ramdisk(task)
+
+
+class AgentRAID(base.RAIDInterface):
+    """Implementation of RAIDInterface which uses agent ramdisk."""
+
+    def get_properties(self):
+        """Return the properties of the interface."""
+        return {}
+
+    @base.clean_step(priority=0)
+    def create_configuration(self, task,
+                             create_root_volume=True,
+                             create_nonroot_volumes=True):
+        """Create a RAID configuration on a bare metal using agent ramdisk.
+
+        This method creates a RAID configuration on the given node.
+
+        :param task: a TaskManager instance.
+        :param create_root_volume: If True, a root volume is created
+            during RAID configuration. Otherwise, no root volume is
+            created. Default is True.
+        :param create_nonroot_volumes: If True, non-root volumes are
+            created. If False, no non-root volumes are created. Default
+            is True.
+        :returns: states.CLEANWAIT if operation was successfully invoked.
+        :raises: MissingParameterValue, if node.target_raid_config is missing
+            or was found to be empty after skipping root volume and/or non-root
+            volumes.
+        """
+        node = task.node
+        LOG.debug("Agent RAID create_configuration invoked for node %(node)s "
+                  "with create_root_volume=%(create_root_volume)s and "
+                  "create_nonroot_volumes=%(create_nonroot_volumes)s with the "
+                  "following target_raid_config: %(target_raid_config)s.",
+                  {'node': node.uuid,
+                   'create_root_volume': create_root_volume,
+                   'create_nonroot_volumes': create_nonroot_volumes,
+                   'target_raid_config': node.target_raid_config})
+
+        if not node.target_raid_config:
+            raise exception.MissingParameterValue(
+                _("Node %s has no target RAID configuration.") % node.uuid)
+
+        target_raid_config = node.target_raid_config.copy()
+
+        error_msg_list = []
+        if not create_root_volume:
+            target_raid_config['logical_disks'] = [
+                x for x in target_raid_config['logical_disks']
+                if not x.get('is_root_volume')]
+            error_msg_list.append(_("skipping root volume"))
+
+        if not create_nonroot_volumes:
+            error_msg_list.append(_("skipping non-root volumes"))
+
+            target_raid_config['logical_disks'] = [
+                x for x in target_raid_config['logical_disks']
+                if x.get('is_root_volume')]
+
+        if not target_raid_config['logical_disks']:
+            error_msg = _(' and ').join(error_msg_list)
+            raise exception.MissingParameterValue(
+                _("Node %(node)s has empty target RAID configuration "
+                  "after %(msg)s.") % {'node': node.uuid, 'msg': error_msg})
+
+        # Rewrite it back to the node object, but no need to save it as
+        # we need to just send this to the agent ramdisk.
+        node.driver_internal_info['target_raid_config'] = target_raid_config
+
+        LOG.debug("Calling agent RAID create_configuration for node %(node)s "
+                  "with the following target RAID configuration: %(target)s",
+                  {'node': node.uuid, 'target': target_raid_config})
+        step = node.clean_step
+        return deploy_utils.agent_execute_clean_step(task, step)
+
+    @staticmethod
+    @agent_base_vendor.post_clean_step_hook(
+        interface='raid', step='create_configuration')
+    def _create_configuration_final(task, command):
+        """Clean step hook after a RAID configuration was created.
+
+        This method is invoked as a post clean step hook by the Ironic
+        conductor once a create raid configuration is completed successfully.
+        The node (properties, capabilities, RAID information) will be updated
+        to reflect the actual RAID configuration that was created.
+
+        :param task: a TaskManager instance.
+        :param command: A command result structure of the RAID operation
+            returned from agent ramdisk on query of the status of command(s).
+        :raises: InvalidParameterValue, if 'current_raid_config' has more than
+            one root volume or if node.properties['capabilities'] is malformed.
+        :raises: IronicException, if clean_result couldn't be found within
+            the 'command' argument passed.
+        """
+        try:
+            clean_result = command['command_result']['clean_result']
+        except KeyError:
+            raise exception.IronicException(
+                _("Agent ramdisk didn't return a proper command result while "
+                  "cleaning %(node)s. It returned '%(result)s' after command "
+                  "execution.") % {'node': task.node.uuid,
+                                   'result': command})
+
+        raid.update_raid_info(task.node, clean_result)
+
+    @base.clean_step(priority=0)
+    def delete_configuration(self, task):
+        """Deletes RAID configuration on the given node.
+
+        :param task: a TaskManager instance.
+        :returns: states.CLEANWAIT if operation was successfully invoked
+        """
+        LOG.debug("Agent RAID delete_configuration invoked for node %s.",
+                  task.node.uuid)
+        step = task.node.clean_step
+        return deploy_utils.agent_execute_clean_step(task, step)
+
+    @staticmethod
+    @agent_base_vendor.post_clean_step_hook(
+        interface='raid', step='delete_configuration')
+    def _delete_configuration_final(task, command):
+        """Clean step hook after RAID configuration was deleted.
+
+        This method is invoked as a post clean step hook by the Ironic
+        conductor once a delete raid configuration is completed successfully.
+        It sets node.raid_config to empty dictionary.
+
+        :param task: a TaskManager instance.
+        :param command: A command result structure of the RAID operation
+            returned from agent ramdisk on query of the status of command(s).
+        :returns: None
+        """
+        task.node.raid_config = {}
+        task.node.save()

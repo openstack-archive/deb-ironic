@@ -16,8 +16,6 @@
 
 """Ironic base exception handling.
 
-Includes decorator for re-raising Ironic-type exceptions.
-
 SHOULD include dedicated exception logging.
 
 """
@@ -347,21 +345,9 @@ class SSHCommandFailed(IronicException):
     message = _("Failed to execute command via SSH: %(cmd)s.")
 
 
-class UnsupportedObjectError(IronicException):
-    message = _('Unsupported object type %(objtype)s')
-
-
-class OrphanedObjectError(IronicException):
-    message = _('Cannot call %(method)s on orphaned %(objtype)s object')
-
-
 class UnsupportedDriverExtension(Invalid):
     message = _('Driver %(driver)s does not support %(extension)s '
                 '(disabled or not implemented).')
-
-
-class IncompatibleObjectVersion(IronicException):
-    message = _('Version %(objver)s of %(objname)s is not supported')
 
 
 class GlanceConnectionFailed(IronicException):
@@ -595,3 +581,12 @@ class UcsConnectionError(IronicException):
 
 class WolOperationError(IronicException):
     pass
+
+
+class ImageUploadFailed(IronicException):
+    message = _("Failed to upload %(image_name)s image to web server "
+                "%(web_server)s, reason: %(reason)s")
+
+
+class CIMCException(IronicException):
+    message = _("Cisco IMC exception occurred for node %(node)s: %(error)s")

@@ -16,9 +16,11 @@
 import json
 
 import mock
+from oslo_config import cfg
 from six.moves import http_client
 from testtools.matchers import HasLength
 
+from ironic.api.controllers import base as api_base
 from ironic.api.controllers.v1 import driver
 from ironic.common import exception
 from ironic.conductor import rpcapi
@@ -62,17 +64,54 @@ class TestListDrivers(base.FunctionalTest):
         self.assertThat(data['drivers'], HasLength(0))
         self.assertEqual([], data['drivers'])
 
-    def test_drivers_get_one_ok(self):
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_driver_properties')
+    def test_drivers_get_one_ok(self, mock_driver_properties):
+        # get_driver_properties mock is required by validate_link()
         self.register_fake_conductors()
-        data = self.get_json('/drivers/%s' % self.d1)
+        data = self.get_json('/drivers/%s' % self.d1,
+                             headers={api_base.Version.string: '1.14'})
         self.assertEqual(self.d1, data['name'])
         self.assertEqual([self.h1], data['hosts'])
+        self.assertIn('properties', data.keys())
         self.validate_link(data['links'][0]['href'])
         self.validate_link(data['links'][1]['href'])
+        self.validate_link(data['properties'][0]['href'])
+        self.validate_link(data['properties'][1]['href'])
+
+    def test_driver_properties_hidden_in_lower_version(self):
+        self.register_fake_conductors()
+        data = self.get_json('/drivers/%s' % self.d1,
+                             headers={api_base.Version.string: '1.8'})
+        self.assertNotIn('properties', data.keys())
 
     def test_drivers_get_one_not_found(self):
         response = self.get_json('/drivers/%s' % self.d1, expect_errors=True)
         self.assertEqual(http_client.NOT_FOUND, response.status_int)
+
+    def _test_links(self, public_url=None):
+        cfg.CONF.set_override('public_endpoint', public_url, 'api')
+        self.register_fake_conductors()
+        data = self.get_json('/drivers/%s' % self.d1)
+        self.assertIn('links', data.keys())
+        self.assertEqual(2, len(data['links']))
+        self.assertIn(self.d1, data['links'][0]['href'])
+        for l in data['links']:
+            bookmark = l['rel'] == 'bookmark'
+            self.assertTrue(self.validate_link(l['href'], bookmark=bookmark))
+
+        if public_url is not None:
+            expected = [{'href': '%s/v1/drivers/%s' % (public_url, self.d1),
+                         'rel': 'self'},
+                        {'href': '%s/drivers/%s' % (public_url, self.d1),
+                         'rel': 'bookmark'}]
+            for i in expected:
+                self.assertIn(i, data['links'])
+
+    def test_links(self):
+        self._test_links()
+
+    def test_links_public_url(self):
+        self._test_links(public_url='http://foo')
 
     @mock.patch.object(rpcapi.ConductorAPI, 'driver_vendor_passthru')
     def test_driver_vendor_passthru_sync(self, mocked_driver_vendor_passthru):
@@ -172,6 +211,65 @@ class TestListDrivers(base.FunctionalTest):
         self.assertEqual(return_value, data)
         # Assert RPC method wasn't called this time
         self.assertFalse(get_methods_mock.called)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_raid_logical_disk_properties')
+    def test_raid_logical_disk_properties(self, disk_prop_mock):
+        driver._RAID_PROPERTIES = {}
+        self.register_fake_conductors()
+        properties = {'foo': 'description of foo'}
+        disk_prop_mock.return_value = properties
+        path = '/drivers/%s/raid/logical_disk_properties' % self.d1
+        data = self.get_json(path,
+                             headers={api_base.Version.string: "1.12"})
+        self.assertEqual(properties, data)
+        disk_prop_mock.assert_called_once_with(mock.ANY, self.d1,
+                                               topic=mock.ANY)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_raid_logical_disk_properties')
+    def test_raid_logical_disk_properties_older_version(self, disk_prop_mock):
+        driver._RAID_PROPERTIES = {}
+        self.register_fake_conductors()
+        properties = {'foo': 'description of foo'}
+        disk_prop_mock.return_value = properties
+        path = '/drivers/%s/raid/logical_disk_properties' % self.d1
+        ret = self.get_json(path,
+                            headers={api_base.Version.string: "1.4"},
+                            expect_errors=True)
+        self.assertEqual(406, ret.status_code)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_raid_logical_disk_properties')
+    def test_raid_logical_disk_properties_cached(self, disk_prop_mock):
+        # only one RPC-conductor call will be made and the info cached
+        # for subsequent requests
+        driver._RAID_PROPERTIES = {}
+        self.register_fake_conductors()
+        properties = {'foo': 'description of foo'}
+        disk_prop_mock.return_value = properties
+        path = '/drivers/%s/raid/logical_disk_properties' % self.d1
+        for i in range(3):
+            data = self.get_json(path,
+                                 headers={api_base.Version.string: "1.12"})
+            self.assertEqual(properties, data)
+        disk_prop_mock.assert_called_once_with(mock.ANY, self.d1,
+                                               topic=mock.ANY)
+        self.assertEqual(properties, driver._RAID_PROPERTIES[self.d1])
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'get_raid_logical_disk_properties')
+    def test_raid_logical_disk_properties_iface_not_supported(
+            self, disk_prop_mock):
+        driver._RAID_PROPERTIES = {}
+        self.register_fake_conductors()
+        disk_prop_mock.side_effect = iter(
+            [exception.UnsupportedDriverExtension(
+                extension='raid', driver='fake')])
+        path = '/drivers/%s/raid/logical_disk_properties' % self.d1
+        ret = self.get_json(path,
+                            headers={api_base.Version.string: "1.12"},
+                            expect_errors=True)
+        self.assertEqual(404, ret.status_code)
+        self.assertTrue(ret.json['error_message'])
+        disk_prop_mock.assert_called_once_with(mock.ANY, self.d1,
+                                               topic=mock.ANY)
 
 
 @mock.patch.object(rpcapi.ConductorAPI, 'get_driver_properties')
