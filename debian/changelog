@@ -1,3 +1,10 @@
+ironic (1:4.2.0-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Bumped minimum python-pbr version to 1.8.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 01 Oct 2015 10:07:07 +0200
+
 ironic (1:4.1.0-1) experimental; urgency=medium
 
   * New upstream release.
