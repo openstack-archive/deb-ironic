@@ -1,14 +1,14 @@
 # Dutch translation of ironic debconf templates.
 # Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the ironic package.
-# Frans Spiesschaert <Frans.Spiesschaert@yucom.be>, 2014.
+# Frans Spiesschaert <Frans.Spiesschaert@yucom.be>, 2014, 2015.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: ironic\n"
 "Report-Msgid-Bugs-To: ironic@packages.debian.org\n"
 "POT-Creation-Date: 2015-05-14 21:59+0000\n"
-"PO-Revision-Date: 2014-10-21 15:07+0200\n"
+"PO-Revision-Date: 2015-09-01 22:44+0200\n"
 "Last-Translator: Frans Spiesschaert <Frans.Spiesschaert@yucom.be>\n"
 "Language-Team: Debian Dutch l10n Team <debian-l10n-dutch@lists.debian.org>\n"
 "Language: nl\n"
@@ -16,6 +16,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Gtranslator 2.91.6\n"
 
 #. Type: boolean
 #. Description
@@ -72,7 +73,7 @@ msgstr ""
 #. Description
 #: ../ironic-common.templates:3001
 msgid "IP address of your RabbitMQ host:"
-msgstr ""
+msgstr "IP-adres van uw RabbitMQ-computer:"
 
 #. Type: string
 #. Description
@@ -86,42 +87,48 @@ msgid ""
 "In order to interoperate with other components of OpenStack, this package "
 "needs to connect to a central RabbitMQ server."
 msgstr ""
+"Om met andere componenten van OpenStack te kunnen samenwerken, moet dit "
+"pakket een verbinding maken met een centrale RabbitMQ-server."
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:3001
 msgid "Please specify the IP address of that server."
-msgstr ""
+msgstr "Gelieve het IP-adres van die server op te geven."
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:4001
 msgid "Username for connection to the RabbitMQ server:"
-msgstr ""
+msgstr "Gebruikersnaam voor de verbinding met de RabbitMQ-server:"
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:4001
 msgid "Please specify the username used to connect to the RabbitMQ server."
 msgstr ""
+"Vermeld de gebruikersnaam waarmee verbinding gemaakt wordt met de RabbitMQ-"
+"server."
 
 #. Type: password
 #. Description
 #: ../ironic-common.templates:5001
 msgid "Password for connection to the RabbitMQ server:"
-msgstr ""
+msgstr "Wachtwoord voor de verbinding met de RabbitMQ-server:"
 
 #. Type: password
 #. Description
 #: ../ironic-common.templates:5001
 msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr ""
+"Geef op welk wachtwoord gebruikt moet worden om verbinding te maken met de "
+"RabbitMQ-server."
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:6001
 msgid "Authentication server hostname:"
-msgstr ""
+msgstr "Computernaam van de authenticatieserver:"
 
 #. Type: string
 #. Description
@@ -130,6 +137,8 @@ msgid ""
 "Please specify the hostname of the authentication server. Typically this is "
 "also the hostname of the OpenStack Identity Service (Keystone)."
 msgstr ""
+"Vermeld de computernaam van uw authenticatieserver. Meestal is dit ook de "
+"computernaam van de OpenStack identiteitsdienst (Keystone)."
 
 #. Type: string
 #. Description
@@ -142,7 +151,7 @@ msgstr ""
 #. proprietaire ("tenant")
 #: ../ironic-common.templates:7001
 msgid "Authentication server tenant name:"
-msgstr ""
+msgstr "Naam van de clientruimte (tenant) op de authenticatieserver:"
 
 #. Type: string
 #. Description
@@ -156,36 +165,41 @@ msgstr ""
 #: ../ironic-common.templates:7001
 msgid "Please specify the authentication server tenant name."
 msgstr ""
+"Geef de naam op van de clientruimte (tenant) op de authenticatieserver."
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:8001
 msgid "Authentication server username:"
-msgstr ""
+msgstr "Gebruikersnaam op de authenticatieserver:"
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:8001
 msgid "Please specify the username to use with the authentication server."
 msgstr ""
+"Vermeld de gebruikersnaam die op de authenticatieserver gebruikt zal worden."
 
 #. Type: password
 #. Description
 #: ../ironic-common.templates:9001
 msgid "Authentication server password:"
-msgstr ""
+msgstr "Wachtwoord op de authenticatieserver:"
 
 #. Type: password
 #. Description
 #: ../ironic-common.templates:9001
 msgid "Please specify the password to use with the authentication server."
 msgstr ""
+"Vermeld het wachtwoord dat op de authenticatieserver gebruikt zal worden."
 
 #. Type: multiselect
 #. Description
 #: ../ironic-common.templates:10001
 msgid "Please select a list of Ironic drivers for this conductor to enable:"
 msgstr ""
+"Selecteer een lijst stuurprogramma's van Ironic die deze conductor moet "
+"aanzetten:"
 
 #. Type: multiselect
 #. Description
@@ -195,3 +209,7 @@ msgid ""
 "manage deployment and power. It is not mandatory to use the same list of "
 "activated drivers across all of your ironic-conductor nodes."
 msgstr ""
+"Het is mogelijk om per conductor-netwerkknooppunt van Ironic meerdere "
+"stuurprogramma's te activeren voor middelen- en energiebeheer. Het is niet "
+"verplicht om voor al uw conductor-netwerkknooppunten van Ironic dezelfde "
+"lijst stuurprogramma's te activeren."
