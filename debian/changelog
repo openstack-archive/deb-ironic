@@ -1,6 +1,7 @@
-ironic (1:4.2.0-1) UNRELEASED; urgency=medium
+ironic (1:4.2.0-1) unstable; urgency=medium
 
   * New upstream release.
+  * Uploading to unstable.
   * Bumped minimum python-pbr version to 1.8.
   * Added Danish translation of the debconf templates, thanks to Joe Dalton
     <joedalton2@yahoo.dk> (Closes: #800458).
