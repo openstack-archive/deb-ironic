@@ -1,38 +1,30 @@
 # ironic po-debconf translation to Spanish
 # Copyright (C) 2014 Software in the Public Interest
 # This file is distributed under the same license as the ironic package.
-#
 # Changes:
 # - Initial translation
-# Camaleón <noelamac@gmail.com>, 2014
-#
+# Camaleón <noelamac@gmail.com>, 2014, 2015.
 # - Updates
-#
-#
 # Traductores, si no conocen el formato PO, merece la pena leer la
 # documentación de gettext, especialmente las secciones dedicadas a este
 # formato, por ejemplo ejecutando:
 # info -n '(gettext)PO Files'
 # info -n '(gettext)Header Entry'
-#
 # Equipo de traducción al español, por favor lean antes de traducir
 # los siguientes documentos:
-#
 # - El proyecto de traducción de Debian al español
 # http://www.debian.org/intl/spanish/
 # especialmente las notas y normas de traducción en
 # http://www.debian.org/intl/spanish/notas
-#
 # - La guía de traducción de po's de debconf:
 # /usr/share/doc/po-debconf/README-trans
 # o http://www.debian.org/intl/l10n/po-debconf/README-trans
-#
 msgid ""
 msgstr ""
 "Project-Id-Version: ironic\n"
 "Report-Msgid-Bugs-To: ironic@packages.debian.org\n"
 "POT-Creation-Date: 2015-05-14 21:59+0000\n"
-"PO-Revision-Date: 2014-05-03 17:39+0200\n"
+"PO-Revision-Date: 2015-06-30 17:18+0200\n"
 "Last-Translator: Camaleón <noelamac@gmail.com>\n"
 "Language-Team: Debian Spanish <debian-l10n-spanish@lists.debian.org>\n"
 "Language: es\n"
@@ -97,7 +89,7 @@ msgstr ""
 #. Description
 #: ../ironic-common.templates:3001
 msgid "IP address of your RabbitMQ host:"
-msgstr ""
+msgstr "Dirección IP del equipo RabbitMQ:"
 
 #. Type: string
 #. Description
@@ -111,42 +103,44 @@ msgid ""
 "In order to interoperate with other components of OpenStack, this package "
 "needs to connect to a central RabbitMQ server."
 msgstr ""
+"Para poder interoperar con otros componentes de OpenStack, este paquete "
+"necesita conectarse a un servidor central de RabbitMQ."
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:3001
 msgid "Please specify the IP address of that server."
-msgstr ""
+msgstr "Indique la dirección IP de ese servidor."
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:4001
 msgid "Username for connection to the RabbitMQ server:"
-msgstr ""
+msgstr "Nombre de usuario para la conexión del servidor RabbitMQ:"
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:4001
 msgid "Please specify the username used to connect to the RabbitMQ server."
-msgstr ""
+msgstr "Indique el nombre de usuario para conectarse al servidor RabbitMQ."
 
 #. Type: password
 #. Description
 #: ../ironic-common.templates:5001
 msgid "Password for connection to the RabbitMQ server:"
-msgstr ""
+msgstr "Contraseña para la conexión del servidor RabbitMQ:"
 
 #. Type: password
 #. Description
 #: ../ironic-common.templates:5001
 msgid "Please specify the password used to connect to the RabbitMQ server."
-msgstr ""
+msgstr "Indique la contraseña para conectarse al servidor RabbitMQ."
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:6001
 msgid "Authentication server hostname:"
-msgstr ""
+msgstr "Nombre del equipo del servidor de autenticación:"
 
 #. Type: string
 #. Description
@@ -155,6 +149,8 @@ msgid ""
 "Please specify the hostname of the authentication server. Typically this is "
 "also the hostname of the OpenStack Identity Service (Keystone)."
 msgstr ""
+"Indique el nombre del equipo del servidor de autenticación. Suele ser el "
+"nombre del equipo del Servicio de Identidad de OpenStack (Keystone)."
 
 #. Type: string
 #. Description
@@ -167,7 +163,7 @@ msgstr ""
 #. proprietaire ("tenant")
 #: ../ironic-common.templates:7001
 msgid "Authentication server tenant name:"
-msgstr ""
+msgstr "Nombre del inquilino («tenant») del servidor de autenticación:"
 
 #. Type: string
 #. Description
@@ -181,36 +177,40 @@ msgstr ""
 #: ../ironic-common.templates:7001
 msgid "Please specify the authentication server tenant name."
 msgstr ""
+"Indique el nombre del inquilino («tenant») del servidor de autenticación."
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:8001
 msgid "Authentication server username:"
-msgstr ""
+msgstr "Nombre de usuario del servidor de autenticación:"
 
 #. Type: string
 #. Description
 #: ../ironic-common.templates:8001
 msgid "Please specify the username to use with the authentication server."
 msgstr ""
+"Indique el nombre de usuario para usar con el servidor de autenticación."
 
 #. Type: password
 #. Description
 #: ../ironic-common.templates:9001
 msgid "Authentication server password:"
-msgstr ""
+msgstr "Contraseña del servidor de autenticación:"
 
 #. Type: password
 #. Description
 #: ../ironic-common.templates:9001
 msgid "Please specify the password to use with the authentication server."
-msgstr ""
+msgstr "Indique la contraseña para usar con el servidor de autenticación."
 
 #. Type: multiselect
 #. Description
 #: ../ironic-common.templates:10001
 msgid "Please select a list of Ironic drivers for this conductor to enable:"
 msgstr ""
+"Seleccione una lista de controladores de Ironic para activar en este "
+"conductor:"
 
 #. Type: multiselect
 #. Description
@@ -220,3 +220,6 @@ msgid ""
 "manage deployment and power. It is not mandatory to use the same list of "
 "activated drivers across all of your ironic-conductor nodes."
 msgstr ""
+"Puede activar varios controladores por cada nodo conductor de Ironic para "
+"gestionar el despliegue y la capacidad. No es obligatorio utilizar la misma "
+"lista de controladores activados entre todos los nodos ironic-conductor."
