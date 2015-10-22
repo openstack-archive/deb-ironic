@@ -1,6 +1,7 @@
 ironic (1:4.2.0-2) unstable; urgency=medium
 
   * Fixed minimal version of drivers.
+  * Fixed the unit test runner.
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 20 Oct 2015 20:58:58 +0000
 
