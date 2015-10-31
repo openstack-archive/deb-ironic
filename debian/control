@@ -124,7 +124,6 @@ Depends: alembic (>= 0.8.0),
          python-pysnmp4,
          python-requests (>= 2.5.2),
          python-retrying,
-         python-scciclient (>= 0.2.0),
          python-seamicroclient (>= 0.4.0),
          python-sendfile,
          python-six (>= 1.9.0),
@@ -138,6 +137,7 @@ Depends: alembic (>= 0.8.0),
          ${misc:Depends},
          ${python:Depends},
 Conflicts: python-cjson,
+Recommends: python-scciclient (>= 0.2.0),
 Description: bare metal hypervisor API for OpenStack - Python lib
  Ironic provision bare metal machines instead of virtual machines. It is a fork
  of the Nova Baremetal driver. It is best thought of as a bare metal hypervisor
