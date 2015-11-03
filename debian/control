@@ -172,6 +172,7 @@ Package: ironic-api
 Architecture: all
 Depends: ironic-common,
          python-openstackclient,
+         q-text-as-data,
          ${misc:Depends},
          ${ostack-lsb-base},
          ${python:Depends},

@@ -1,3 +1,9 @@
+ironic (1:4.2.1-4) unstable; urgency=medium
+
+  * Added missing q-text-as-data depends in ironic-api.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 03 Nov 2015 11:43:31 +0000
+
 ironic (1:4.2.1-3) unstable; urgency=medium
 
   * Rebuilt with openstack-pkg-tools to use Keystone API v3.
