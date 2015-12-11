@@ -1,3 +1,9 @@
+ironic (1:4.3.0-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 11 Dec 2015 09:25:18 +0100
+
 ironic (1:4.2.1-4) unstable; urgency=medium
 
   * Added missing q-text-as-data depends in ironic-api.
