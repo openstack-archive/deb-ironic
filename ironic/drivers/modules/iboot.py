@@ -19,6 +19,8 @@
 Ironic iBoot PDU power manager.
 """
 
+import time
+
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_service import loopingcall
@@ -28,6 +30,7 @@ from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LW
 from ironic.common import states
+from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.drivers import base
 
@@ -39,7 +42,13 @@ opts = [
                help=_('Maximum retries for iBoot operations')),
     cfg.IntOpt('retry_interval',
                default=1,
-               help=_('Time between retry attempts for iBoot operations')),
+               help=_('Time (in seconds) between retry attempts for iBoot '
+                      'operations')),
+    cfg.IntOpt('reboot_delay',
+               default=5,
+               min=0,
+               help=_('Time (in seconds) to sleep between when rebooting '
+                      '(powering off and on again).'))
 ]
 
 CONF = cfg.CONF
@@ -83,11 +92,7 @@ def _parse_driver_info(node):
             _("iBoot PDU relay id must be an integer."))
 
     port = info.get('iboot_port', 9100)
-    try:
-        port = int(port)
-    except ValueError:
-        raise exception.InvalidParameterValue(
-            _("iBoot PDU port must be an integer."))
+    port = utils.validate_network_port(port, 'iboot_port')
 
     return {
         'address': address,
@@ -115,7 +120,7 @@ def _switch(driver_info, enabled):
     def _wait_for_switch(mutable):
         if mutable['retries'] > CONF.iboot.max_retry:
             LOG.warning(_LW(
-                'Reached maximum number of attempts ( %(attempts)d ) to set '
+                'Reached maximum number of attempts (%(attempts)d) to set '
                 'power state for node %(node)s to "%(op)s"'),
                 {'attempts': mutable['retries'], 'node': driver_info['uuid'],
                  'op': states.POWER_ON if enabled else states.POWER_OFF})
@@ -138,6 +143,23 @@ def _switch(driver_info, enabled):
     return mutable['response']
 
 
+def _sleep_switch(seconds):
+    """Function broken out for testing purpose."""
+    time.sleep(seconds)
+
+
+def _check_power_state(driver_info, pstate):
+    """Function to check power state is correct. Up to max retries."""
+    # always try once + number of retries
+    for num in range(0, 1 + CONF.iboot.max_retry):
+        state = _power_status(driver_info)
+        if state == pstate:
+            return
+        if num < CONF.iboot.max_retry:
+            time.sleep(CONF.iboot.retry_interval)
+    raise exception.PowerStateFailure(pstate=pstate)
+
+
 def _power_status(driver_info):
     conn = _get_connection(driver_info)
     relay_id = driver_info['relay_id']
@@ -146,7 +168,7 @@ def _power_status(driver_info):
 
         if mutable['retries'] > CONF.iboot.max_retry:
             LOG.warning(_LW(
-                'Reached maximum number of attempts ( %(attempts)d ) to get '
+                'Reached maximum number of attempts (%(attempts)d) to get '
                 'power state for node %(node)s'),
                 {'attempts': mutable['retries'], 'node': driver_info['uuid']})
             raise loopingcall.LoopingCallDone()
@@ -238,9 +260,7 @@ class IBootPower(base.PowerInterface):
                 _("set_power_state called with invalid "
                   "power state %s.") % pstate)
 
-        state = _power_status(driver_info)
-        if state != pstate:
-            raise exception.PowerStateFailure(pstate=pstate)
+        _check_power_state(driver_info, pstate)
 
     @task_manager.require_exclusive_lock
     def reboot(self, task):
@@ -257,8 +277,6 @@ class IBootPower(base.PowerInterface):
         """
         driver_info = _parse_driver_info(task.node)
         _switch(driver_info, False)
+        _sleep_switch(CONF.iboot.reboot_delay)
         _switch(driver_info, True)
-
-        state = _power_status(driver_info)
-        if state != states.POWER_ON:
-            raise exception.PowerStateFailure(pstate=states.POWER_ON)
+        _check_power_state(driver_info, states.POWER_ON)

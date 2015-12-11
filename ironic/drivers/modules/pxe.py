@@ -54,14 +54,17 @@ pxe_opts = [
                       'configuration for UEFI boot loader.')),
     cfg.StrOpt('tftp_server',
                default='$my_ip',
-               help=_('IP address of ironic-conductor node\'s TFTP server.')),
+               help=_("IP address of ironic-conductor node's TFTP server.")),
     cfg.StrOpt('tftp_root',
                default='/tftpboot',
-               help=_('ironic-conductor node\'s TFTP root path.')),
+               help=_("ironic-conductor node's TFTP root path. The "
+                      "ironic-conductor must have read/write access to this "
+                      "path.")),
     cfg.StrOpt('tftp_master_path',
                default='/tftpboot/master_images',
                help=_('On ironic-conductor node, directory where master TFTP '
-                      'images are stored on disk.')),
+                      'images are stored on disk. '
+                      'Setting to <None> disables image caching.')),
     # NOTE(dekehn): Additional boot files options may be created in the event
     #  other architectures require different boot files.
     cfg.StrOpt('pxe_bootfile_name',
@@ -78,6 +81,11 @@ pxe_opts = [
                    'drivers/modules/boot.ipxe'),
                help=_('On ironic-conductor node, the path to the main iPXE '
                       'script file.')),
+    cfg.StrOpt('ip_version',
+               default='4',
+               choices=['4', '6'],
+               help=_('The IP version that will be used for PXE booting. '
+                      'Can be either 4 or 6. Defaults to 4. EXPERIMENTAL')),
 ]
 
 LOG = logging.getLogger(__name__)
@@ -127,10 +135,11 @@ def _get_pxe_conf_option(task, opt_name):
                                               CONF.pybasedir)
 
         if current_value != default_value:
-            LOG.warn(_LW("The CONF option [agent]agent_%(opt_name)s is "
-                         "deprecated and will be removed in Mitaka release of "
-                         "Ironic. Please use [pxe]%(opt_name)s instead."),
-                     {'opt_name': opt_name})
+            LOG.warning(
+                _LW("The CONF option [agent]agent_%(opt_name)s is "
+                    "deprecated and will be removed in Mitaka release of "
+                    "Ironic. Please use [pxe]%(opt_name)s instead."),
+                {'opt_name': opt_name})
             return current_value
 
     # Either task.driver.deploy is ISCSIDeploy() or the default value hasn't
@@ -158,35 +167,6 @@ def _parse_driver_info(node):
     return d_info
 
 
-def _parse_instance_info(node):
-    """Gets the instance and driver specific Node deployment info.
-
-    This method validates whether the 'instance_info' and 'driver_info'
-    property of the supplied node contains the required information for
-    this driver to deploy images to the node.
-
-    :param node: a single Node.
-    :returns: A dict with the instance_info and driver_info values.
-    :raises: MissingParameterValue, image_source is missing in node's
-        instance_info. Also raises same exception if kernel/ramdisk is
-        missing in instance_info for non-glance images.
-    """
-    info = {}
-    info['image_source'] = node.instance_info.get('image_source')
-
-    is_whole_disk_image = node.driver_internal_info.get('is_whole_disk_image')
-    if not is_whole_disk_image:
-        if not service_utils.is_glance_image(info['image_source']):
-            info['kernel'] = node.instance_info.get('kernel')
-            info['ramdisk'] = node.instance_info.get('ramdisk')
-
-    error_msg = _("Cannot validate PXE bootloader. Some parameters were "
-                  "missing in node's instance_info.")
-    deploy_utils.check_for_missing_params(info, error_msg)
-
-    return info
-
-
 def _get_instance_image_info(node, ctx):
     """Generate the paths for TFTP files for instance related images.
 
@@ -207,7 +187,7 @@ def _get_instance_image_info(node, ctx):
     root_dir = pxe_utils.get_root_dir()
     i_info = node.instance_info
     labels = ('kernel', 'ramdisk')
-    d_info = _parse_instance_info(node)
+    d_info = deploy_utils.get_image_instance_info(node)
     if not (i_info.get('kernel') and i_info.get('ramdisk')):
         glance_service = service.GlanceImageService(version=1, context=ctx)
         iproperties = glance_service.show(d_info['image_source'])['properties']
@@ -444,7 +424,7 @@ class PXEBoot(base.BootInterface):
             validate_boot_parameters_for_trusted_boot(node)
 
         _parse_driver_info(node)
-        d_info = _parse_instance_info(node)
+        d_info = deploy_utils.get_image_instance_info(node)
         if node.driver_internal_info.get('is_whole_disk_image'):
             props = []
         elif service_utils.is_glance_image(d_info['image_source']):
@@ -563,16 +543,18 @@ class PXEBoot(base.BootInterface):
                 ]
             except KeyError:
                 if not iwdi:
-                    LOG.warn(_LW("The UUID for the root partition can't be "
-                                 "found, unable to switch the pxe config from "
-                                 "deployment mode to service (boot) mode for "
-                                 "node %(node)s"), {"node": task.node.uuid})
+                    LOG.warning(
+                        _LW("The UUID for the root partition can't be "
+                            "found, unable to switch the pxe config from "
+                            "deployment mode to service (boot) mode for "
+                            "node %(node)s"), {"node": task.node.uuid})
                 else:
-                    LOG.warn(_LW("The disk id for the whole disk image can't "
-                                 "be found, unable to switch the pxe config "
-                                 "from deployment mode to service (boot) mode "
-                                 "for node %(node)s"),
-                             {"node": task.node.uuid})
+                    LOG.warning(
+                        _LW("The disk id for the whole disk image can't "
+                            "be found, unable to switch the pxe config "
+                            "from deployment mode to service (boot) mode "
+                            "for node %(node)s"),
+                        {"node": task.node.uuid})
             else:
                 pxe_config_path = pxe_utils.get_pxe_config_file_path(
                     task.node.uuid)
@@ -590,9 +572,6 @@ class PXEBoot(base.BootInterface):
             # of the prepare() because the deployment does PXE boot the
             # deploy ramdisk
             pxe_utils.clean_up_pxe_config(task)
-
-            # In case boot mode changes from bios to uefi, boot device order
-            # may get lost in some platforms. Better to re-apply boot device.
             deploy_utils.try_set_boot_device(task, boot_devices.DISK)
 
     def clean_up_instance(self, task):

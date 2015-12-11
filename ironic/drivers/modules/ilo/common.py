@@ -26,14 +26,17 @@ from oslo_utils import importutils
 import six.moves.urllib.parse as urlparse
 from six.moves.urllib.parse import urljoin
 
+from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
+from ironic.common.i18n import _LW
 from ironic.common import images
 from ironic.common import swift
 from ironic.common import utils
+from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import deploy_utils
 
 ilo_client = importutils.try_import('proliantutils.ilo.client')
@@ -47,10 +50,9 @@ opts = [
     cfg.IntOpt('client_timeout',
                default=60,
                help=_('Timeout (in seconds) for iLO operations')),
-    cfg.IntOpt('client_port',
-               default=443,
-               min=1, max=65535,
-               help=_('Port to be used for iLO operations')),
+    cfg.PortOpt('client_port',
+                default=443,
+                help=_('Port to be used for iLO operations')),
     cfg.StrOpt('swift_ilo_container',
                default='ironic_ilo_container',
                help=_('The Swift iLO container to store data.')),
@@ -162,18 +164,21 @@ def parse_driver_info(node):
     not_integers = []
     for param in OPTIONAL_PROPERTIES:
         value = info.get(param, CONF.ilo.get(param))
-        try:
-            d_info[param] = int(value)
-        except ValueError:
-            not_integers.append(param)
-
-    for param in CONSOLE_PROPERTIES:
-        value = info.get(param)
-        if value:
+        if param == "client_port":
+            d_info[param] = utils.validate_network_port(value, param)
+        else:
             try:
                 d_info[param] = int(value)
             except ValueError:
                 not_integers.append(param)
+
+    for param in CONSOLE_PROPERTIES:
+        value = info.get(param)
+        if value:
+            # Currently there's only "console_port" parameter
+            # in CONSOLE_PROPERTIES
+            if param == "console_port":
+                d_info[param] = utils.validate_network_port(value, param)
 
     if not_integers:
         raise exception.InvalidParameterValue(_(
@@ -431,6 +436,37 @@ def update_boot_mode(task):
     node.save()
 
 
+def setup_vmedia(task, iso, ramdisk_options):
+    """Attaches virtual media and sets it as boot device.
+
+    This method attaches the given bootable ISO as virtual media, prepares the
+    arguments for ramdisk in virtual media floppy.
+
+    :param task: a TaskManager instance containing the node to act on.
+    :param iso: a bootable ISO image href to attach to. Should be either
+        of below:
+        * A Swift object - It should be of format 'swift:<object-name>'.
+          It is assumed that the image object is present in
+          CONF.ilo.swift_ilo_container;
+        * A Glance image - It should be format 'glance://<glance-image-uuid>'
+          or just <glance-image-uuid>;
+        * An HTTP URL.
+    :param ramdisk_options: the options to be passed to the ramdisk in virtual
+        media floppy.
+    :raises: ImageCreationFailed, if it failed while creating the floppy image.
+    :raises: IloOperationError, if some operation on iLO failed.
+    """
+    setup_vmedia_for_boot(task, iso, ramdisk_options)
+
+    # In UEFI boot mode, upon inserting virtual CDROM, one has to reset the
+    # system to see it as a valid boot device in persistent boot devices.
+    # But virtual CDROM device is always available for one-time boot.
+    # During enable/disable of secure boot settings, iLO internally resets
+    # the server twice. But it retains one time boot settings across internal
+    # resets. Hence no impact of this change for secure boot deploy.
+    manager_utils.node_set_boot_device(task, boot_devices.CDROM)
+
+
 def setup_vmedia_for_boot(task, boot_iso, parameters=None):
     """Sets up the node to boot from the given ISO image.
 
@@ -514,9 +550,13 @@ def cleanup_vmedia_boot(task):
         try:
             swift_api = swift.SwiftAPI()
             swift_api.delete_object(container, object_name)
+        except exception.SwiftObjectNotFoundError as e:
+            LOG.warning(_LW("Temporary object associated with virtual floppy "
+                            "was already deleted from Swift. Error: %s"), e)
         except exception.SwiftOperationError as e:
-            LOG.exception(_LE("Error while deleting %(object_name)s from "
-                              "%(container)s. Error: %(error)s"),
+            LOG.exception(_LE("Error while deleting temporary swift object "
+                              "%(object_name)s from %(container)s associated "
+                              "with virtual floppy. Error: %(error)s"),
                           {'object_name': object_name, 'container': container,
                            'error': e})
     else:
@@ -585,3 +625,25 @@ def set_secure_boot_mode(task, flag):
     except ilo_error.IloError as ilo_exception:
         raise exception.IloOperationError(operation=operation,
                                           error=ilo_exception)
+
+
+def update_secure_boot_mode(task, mode):
+    """Changes secure boot mode for next boot on the node.
+
+    This method changes secure boot mode on the node for next boot. It changes
+    the secure boot mode setting on node only if the deploy has requested for
+    the secure boot.
+    During deploy, this method is used to enable secure boot on the node by
+    passing 'mode' as 'True'.
+    During teardown, this method is used to disable secure boot on the node by
+    passing 'mode' as 'False'.
+
+    :param task: a TaskManager instance containing the node to act on.
+    :param mode: Boolean value requesting the next state for secure boot
+    :raises: IloOperationNotSupported, if operation is not supported on iLO
+    :raises: IloOperationError, if some operation on iLO failed.
+    """
+    if deploy_utils.is_secure_boot_requested(task.node):
+        set_secure_boot_mode(task, mode)
+        LOG.info(_LI('Changed secure boot to %(mode)s for node %(node)s'),
+                 {'mode': mode, 'node': task.node.uuid})

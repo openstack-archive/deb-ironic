@@ -61,6 +61,9 @@ LOG = logging.getLogger(__name__)
 
 
 def _get_root_helper():
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please
+    # also do the same modification in ironic-lib
     return 'sudo ironic-rootwrap %s' % CONF.rootwrap_config
 
 
@@ -431,6 +434,9 @@ def mkfs(fs, path, label=None):
     :param path: Path to file or block device to format
     :param label: Volume label to use
     """
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     if fs == 'swap':
         args = ['mkswap']
     else:
@@ -461,14 +467,17 @@ def mkfs(fs, path, label=None):
 
 
 def unlink_without_raise(path):
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     try:
         os.unlink(path)
     except OSError as e:
         if e.errno == errno.ENOENT:
             return
         else:
-            LOG.warn(_LW("Failed to unlink %(path)s, error: %(e)s"),
-                     {'path': path, 'e': e})
+            LOG.warning(_LW("Failed to unlink %(path)s, error: %(e)s"),
+                        {'path': path, 'e': e})
 
 
 def rmtree_without_raise(path):
@@ -476,8 +485,8 @@ def rmtree_without_raise(path):
         if os.path.isdir(path):
             shutil.rmtree(path)
     except OSError as e:
-        LOG.warn(_LW("Failed to remove dir %(path)s, error: %(e)s"),
-                 {'path': path, 'e': e})
+        LOG.warning(_LW("Failed to remove dir %(path)s, error: %(e)s"),
+                    {'path': path, 'e': e})
 
 
 def write_to_file(path, contents):
@@ -492,9 +501,10 @@ def create_link_without_raise(source, link):
         if e.errno == errno.EEXIST:
             return
         else:
-            LOG.warn(_LW("Failed to create symlink from %(source)s to %(link)s"
-                         ", error: %(e)s"),
-                     {'source': source, 'link': link, 'e': e})
+            LOG.warning(
+                _LW("Failed to create symlink from %(source)s to %(link)s"
+                    ", error: %(e)s"),
+                {'source': source, 'link': link, 'e': e})
 
 
 def safe_rstrip(value, chars=None):
@@ -506,8 +516,9 @@ def safe_rstrip(value, chars=None):
 
     """
     if not isinstance(value, six.string_types):
-        LOG.warn(_LW("Failed to remove trailing character. Returning original "
-                     "object. Supplied object is not a string: %s,"), value)
+        LOG.warning(_LW("Failed to remove trailing character. Returning "
+                        "original object. Supplied object is not a string: "
+                        "%s,"), value)
         return value
 
     return value.rstrip(chars) or value
@@ -550,12 +561,18 @@ def dd(src, dst, *args):
     :raises: processutils.ProcessExecutionError if it failed
         to run the process.
     """
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     LOG.debug("Starting dd process.")
     execute('dd', 'if=%s' % src, 'of=%s' % dst, *args,
             use_standard_locale=True, run_as_root=True, check_exit_code=[0])
 
 
 def is_http_url(url):
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     url = url.lower()
     return url.startswith('http://') or url.startswith('https://')
 
@@ -655,7 +672,7 @@ def get_updated_capabilities(current_capabilities, new_capabilities):
 
     cap_dict.update(new_capabilities)
     return ','.join('%(key)s:%(value)s' % {'key': key, 'value': value}
-                    for key, value in six.iteritems(cap_dict))
+                    for key, value in cap_dict.items())
 
 
 def is_regex_string_in_file(path, string):
@@ -671,3 +688,25 @@ def unix_file_modification_datetime(file_name):
             os.path.getmtime(file_name), tz=pytz.utc
         )
     )
+
+
+def validate_network_port(port, port_name="Port"):
+    """Validates the given port.
+
+    :param port: TCP/UDP port.
+    :param port_name: Name of the port.
+    :returns: An integer port number.
+    :raises: InvalidParameterValue, if the port is invalid.
+    """
+    try:
+        port = int(port)
+    except ValueError:
+        raise exception.InvalidParameterValue(_(
+            '%(port_name)s "%(port)s" is not a valid integer.') %
+            {'port_name': port_name, 'port': port})
+    if port < 1 or port > 65535:
+        raise exception.InvalidParameterValue(_(
+            '%(port_name)s "%(port)s" is out of range. Valid port '
+            'numbers must be between 1 and 65535.') %
+            {'port_name': port_name, 'port': port})
+    return port

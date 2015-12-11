@@ -58,11 +58,11 @@ class SwiftAPI(object):
     """API for communicating with Swift."""
 
     def __init__(self,
-                 user=CONF.keystone_authtoken.admin_user,
-                 tenant_name=CONF.keystone_authtoken.admin_tenant_name,
-                 key=CONF.keystone_authtoken.admin_password,
-                 auth_url=CONF.keystone_authtoken.auth_uri,
-                 auth_version=CONF.keystone_authtoken.auth_version):
+                 user=None,
+                 tenant_name=None,
+                 key=None,
+                 auth_url=None,
+                 auth_version=None):
         """Constructor for creating a SwiftAPI object.
 
         :param user: the name of the user for Swift account
@@ -71,6 +71,11 @@ class SwiftAPI(object):
         :param auth_url: the url for authentication
         :param auth_version: the version of api to use for authentication
         """
+        user = user or CONF.keystone_authtoken.admin_user
+        tenant_name = tenant_name or CONF.keystone_authtoken.admin_tenant_name
+        key = key or CONF.keystone_authtoken.admin_password
+        auth_url = auth_url or CONF.keystone_authtoken.auth_uri
+        auth_version = auth_version or CONF.keystone_authtoken.auth_version
         auth_url = keystone.get_keystone_url(auth_url, auth_version)
         params = {'retries': CONF.swift.swift_max_retries,
                   'insecure': CONF.keystone_authtoken.insecure,
@@ -151,12 +156,18 @@ class SwiftAPI(object):
         :param container: The name of the container in which Swift object
             is placed.
         :param object: The name of the object in Swift to be deleted.
+        :raises: SwiftObjectNotFoundError, if object is not found in Swift.
         :raises: SwiftOperationError, if operation with Swift fails.
         """
         try:
             self.connection.delete_object(container, object)
         except swift_exceptions.ClientException as e:
             operation = _("delete object")
+            if e.http_status == 404:
+                raise exception.SwiftObjectNotFoundError(object=object,
+                                                         container=container,
+                                                         operation=operation)
+
             raise exception.SwiftOperationError(operation=operation, error=e)
 
     def head_object(self, container, object):

@@ -12,9 +12,9 @@ The gate currently runs the unit tests under both
 Python 2.7 and Python 3.4.  It is strongly encouraged to run the unit tests
 locally under one, the other, or both prior to submitting a patch.
 
-.. Note:: The unit test environment setup should be done on a clean installed
-    VM or system. Sharing the environment with devstack testing is not
-    recommended due to conflicting configuration with system dependencies.
+.. note::
+    Do not run unit tests on the same environment as devstack due to
+    conflicting configuration with system dependencies.
 
 .. seealso::
 
@@ -24,15 +24,15 @@ Install prerequisites (for python 2.7):
 
 - Ubuntu/Debian::
 
-    sudo apt-get install python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev gettext ipmitool psmisc graphviz
+    sudo apt-get install python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev gettext ipmitool psmisc graphviz libjpeg-dev
 
 - Fedora 21/RHEL7/CentOS7::
 
-    sudo yum install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc graphviz gcc
+    sudo yum install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc graphviz gcc libjpeg-turbo-devel
 
 - Fedora 22 or higher::
 
-    sudo dnf install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc graphviz gcc
+    sudo dnf install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc graphviz gcc libjpeg-turbo-devel
 
   If using RHEL and yum reports "No package python-pip available" and "No
   package git-review available", use the EPEL software repository.
@@ -59,10 +59,10 @@ Using Python 3.4:
 
     sudo dnf install python3-devel
 
-Install these on all distros::
+If your distro has at least tox 1.8, use similar command to install
+``python-tox`` package. Otherwise install this on all distros::
 
-    sudo easy_install nose
-    sudo pip install virtualenv setuptools-git flake8 tox testrepository
+    sudo pip install -U tox
 
 
 You may need to explicitly upgrade virtualenv if you've installed the one
@@ -78,15 +78,11 @@ Ironic source code should be pulled directly from git::
     git clone https://git.openstack.org/openstack/ironic
     cd ironic
 
-Set up a local environment for development and testing should be done with tox::
+Set up a local environment for development and testing should be done with tox,
+for example::
 
     # create a virtualenv for development
     tox -evenv --notest
-
-Activate the virtual environment whenever you want to work in it.
-All further commands in this section should be run with the venv active::
-
-    source .tox/venv/bin/activate
 
 All unit tests should be run using tox. To run Ironic's entire test suite::
 
@@ -103,23 +99,16 @@ To run the unit tests under py34 and also run the pep8 tests::
     # run all tests (unit under py34 and pep8)
     tox -epy34 -epep8
 
-To run a specific test, use a positional argument for the unit tests::
+You may pass options to the test programs using positional arguments.
+To run a specific unit test, this passes the -r option and desired test
+(regex string) to `os-testr <https://pypi.python.org/pypi/os-testr>`_::
 
     # run a specific test for Python 2.7
-    tox -epy27 -- test_conductor
-
-You may pass options to the test programs using positional arguments::
-
-    # run all the Python 2.7 unit tests (in parallel!)
-    tox -epy27 -- --parallel
+    tox -epy27 -- -r test_conductor
 
 To run only the pep8/flake8 syntax and style checks::
 
     tox -epep8
-
-When you're done, deactivate the virtualenv::
-
-    deactivate
 
 ===============================
 Exercising the Services Locally
@@ -163,11 +152,11 @@ Option 1: Manual Install
     # sudo apt-get install mysql-server
 
     # Fedora 21/RHEL7/CentOS7:
-    # sudo yum install mariadb
+    # sudo yum install mariadb mariadb-server
     # sudo systemctl start mariadb.service
 
     # Fedora 22 or higher:
-    # sudo dnf install mariadb
+    # sudo dnf install mariadb mariadb-server
     # sudo systemctl start mariadb.service
 
     # openSUSE/SLE 12:
@@ -208,10 +197,10 @@ Option 1: Manual Install
     # ironic defaults to storing data in ./ironic/ironic.sqlite
 
     # If using MySQL, you need to create the initial database
-    mysql -u root -e "create schema ironic"
+    mysql -u root -pMYSQL_ROOT_PWD -e "create schema ironic"
 
     # and switch the DB connection from sqlite to something else, eg. mysql
-    sed -i "s/#connection=.*/connection=mysql:\/\/root@localhost\/ironic/" etc/ironic/ironic.conf.local
+    sed -i "s/#connection=.*/connection=mysql\+pymysql:\/\/root:MYSQL_ROOT_PWD@localhost\/ironic/" etc/ironic/ironic.conf.local
 
 At this point, you can continue to Step 2.
 
@@ -358,13 +347,13 @@ permissions, but does provide a script to perform the task::
 
 Switch to the stack user and clone DevStack::
 
-    sudo su stack
-    cd ~
+    sudo su - stack
     git clone https://github.com/openstack-dev/devstack.git devstack
 
 Create devstack/local.conf with minimal settings required to enable Ironic.
-Note that Ironic under devstack can only support running *either* the PXE
-or the agent driver, not both. The default is the PXE driver.::
+You can use either of two drivers for deploy: pxe_* or agent_*, see :ref:`IPA`
+for explanation. An example local.conf that enables both types of drivers
+and uses the ``pxe_ssh`` driver by default::
 
     cd devstack
     cat >local.conf <<END
@@ -375,6 +364,8 @@ or the agent driver, not both. The default is the PXE driver.::
     RABBIT_PASSWORD=password
     SERVICE_PASSWORD=password
     SERVICE_TOKEN=password
+    SWIFT_HASH=password
+    SWIFT_TEMPURL_KEY=password
 
     # Enable Ironic API and Ironic Conductor
     enable_service ironic
@@ -391,6 +382,12 @@ or the agent driver, not both. The default is the PXE driver.::
     enable_service q-meta
     enable_service neutron
 
+    # Enable Swift for agent_* drivers
+    enable_service s-proxy
+    enable_service s-object
+    enable_service s-container
+    enable_service s-account
+
     # Disable Horizon
     disable_service horizon
 
@@ -400,10 +397,21 @@ or the agent driver, not both. The default is the PXE driver.::
     # Disable Cinder
     disable_service cinder c-sch c-api c-vol
 
+    # Swift temp URL's are required for agent_* drivers.
+    SWIFT_ENABLE_TEMPURLS=True
+
     # Create 3 virtual machines to pose as Ironic's baremetal nodes.
     IRONIC_VM_COUNT=3
     IRONIC_VM_SSH_PORT=22
     IRONIC_BAREMETAL_BASIC_OPS=True
+    IRONIC_DEPLOY_DRIVER_ISCSI_WITH_IPA=True
+
+    # Enable Ironic drivers.
+    IRONIC_ENABLED_DRIVERS=fake,agent_ssh,agent_ipmitool,pxe_ssh,pxe_ipmitool
+
+    # Change this to alter the default driver for nodes created by devstack.
+    # This driver should be in the enabled list above.
+    IRONIC_DEPLOY_DRIVER=pxe_ssh
 
     # The parameters below represent the minimum possible values to create
     # functional nodes.
@@ -412,6 +420,9 @@ or the agent driver, not both. The default is the PXE driver.::
 
     # Size of the ephemeral partition in GB. Use 0 for no ephemeral partition.
     IRONIC_VM_EPHEMERAL_DISK=0
+
+    # To build your own IPA ramdisk from source, set this to True
+    IRONIC_BUILD_DEPLOY_RAMDISK=False
 
     VIRT_DRIVER=ironic
 
@@ -426,31 +437,6 @@ or the agent driver, not both. The default is the PXE driver.::
     LOGFILE=$HOME/devstack.log
     LOGDIR=$HOME/logs
     IRONIC_VM_LOG_DIR=$HOME/ironic-bm-logs
-
-    END
-
-If running with the agent driver (instead of PXE driver), add these additional
-settings to local.conf::
-
-    cat >>local.conf <<END
-    # Agent driver requires swift with tempurls
-    # Enable swift services
-    enable_service s-proxy
-    enable_service s-object
-    enable_service s-container
-    enable_service s-account
-
-    # Enable tempurls and set credentials
-    SWIFT_HASH=password
-    SWIFT_TEMPURL_KEY=password
-    SWIFT_ENABLE_TEMPURLS=True
-
-    # Enable agent driver
-    IRONIC_ENABLED_DRIVERS=fake,agent_ssh,agent_ipmitool
-    IRONIC_DEPLOY_DRIVER=agent_ssh
-
-    # To build your own IPA ramdisk from source, set this to True
-    IRONIC_BUILD_DEPLOY_RAMDISK=False
 
     END
 

@@ -36,8 +36,8 @@ import testtools
 
 from ironic.common import hash_ring
 from ironic.objects import base as objects_base
-from ironic.tests import conf_fixture
-from ironic.tests import policy_fixture
+from ironic.tests.unit import conf_fixture
+from ironic.tests.unit import policy_fixture
 
 
 CONF = cfg.CONF

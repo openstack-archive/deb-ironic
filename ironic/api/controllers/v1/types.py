@@ -15,6 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import inspect
 import json
 
 from oslo_utils import strutils
@@ -34,11 +35,6 @@ class MacAddressType(wtypes.UserType):
 
     basetype = wtypes.text
     name = 'macaddress'
-    # FIXME(lucasagomes): When used with wsexpose decorator WSME will try
-    # to get the name of the type by accessing it's __name__ attribute.
-    # Remove this __name__ attribute once it's fixed in WSME.
-    # https://bugs.launchpad.net/wsme/+bug/1265590
-    __name__ = name
 
     @staticmethod
     def validate(value):
@@ -56,11 +52,6 @@ class UuidOrNameType(wtypes.UserType):
 
     basetype = wtypes.text
     name = 'uuid_or_name'
-    # FIXME(lucasagomes): When used with wsexpose decorator WSME will try
-    # to get the name of the type by accessing it's __name__ attribute.
-    # Remove this __name__ attribute once it's fixed in WSME.
-    # https://bugs.launchpad.net/wsme/+bug/1265590
-    __name__ = name
 
     @staticmethod
     def validate(value):
@@ -81,11 +72,6 @@ class NameType(wtypes.UserType):
 
     basetype = wtypes.text
     name = 'name'
-    # FIXME(lucasagomes): When used with wsexpose decorator WSME will try
-    # to get the name of the type by accessing it's __name__ attribute.
-    # Remove this __name__ attribute once it's fixed in WSME.
-    # https://bugs.launchpad.net/wsme/+bug/1265590
-    __name__ = name
 
     @staticmethod
     def validate(value):
@@ -105,11 +91,6 @@ class UuidType(wtypes.UserType):
 
     basetype = wtypes.text
     name = 'uuid'
-    # FIXME(lucasagomes): When used with wsexpose decorator WSME will try
-    # to get the name of the type by accessing it's __name__ attribute.
-    # Remove this __name__ attribute once it's fixed in WSME.
-    # https://bugs.launchpad.net/wsme/+bug/1265590
-    __name__ = name
 
     @staticmethod
     def validate(value):
@@ -129,11 +110,6 @@ class BooleanType(wtypes.UserType):
 
     basetype = wtypes.text
     name = 'boolean'
-    # FIXME(lucasagomes): When used with wsexpose decorator WSME will try
-    # to get the name of the type by accessing it's __name__ attribute.
-    # Remove this __name__ attribute once it's fixed in WSME.
-    # https://bugs.launchpad.net/wsme/+bug/1265590
-    __name__ = name
 
     @staticmethod
     def validate(value):
@@ -155,11 +131,6 @@ class JsonType(wtypes.UserType):
 
     basetype = wtypes.text
     name = 'json'
-    # FIXME(lucasagomes): When used with wsexpose decorator WSME will try
-    # to get the name of the type by accessing it's __name__ attribute.
-    # Remove this __name__ attribute once it's fixed in WSME.
-    # https://bugs.launchpad.net/wsme/+bug/1265590
-    __name__ = name
 
     def __str__(self):
         # These are the json serializable native types
@@ -185,23 +156,18 @@ class ListType(wtypes.UserType):
 
     basetype = wtypes.text
     name = 'list'
-    # FIXME(lucasagomes): When used with wsexpose decorator WSME will try
-    # to get the name of the type by accessing it's __name__ attribute.
-    # Remove this __name__ attribute once it's fixed in WSME.
-    # https://bugs.launchpad.net/wsme/+bug/1265590
-    __name__ = name
 
     @staticmethod
     def validate(value):
         """Validate and convert the input to a ListType.
 
         :param value: A comma separated string of values
-        :returns: A list of values.
+        :returns: A list of unique values, whose order is not guaranteed.
         """
         items = [v.strip().lower() for v in six.text_type(value).split(',')]
         # filter() to remove empty items
         # set() to remove duplicated items
-        return set(filter(None, items))
+        return list(set(filter(None, items)))
 
     @staticmethod
     def frombasetype(value):
@@ -229,6 +195,17 @@ class JsonPatchType(wtypes.Base):
                        mandatory=True)
     value = wsme.wsattr(jsontype, default=wtypes.Unset)
 
+    # The class of the objects being patched. Override this in subclasses.
+    # Should probably be a subclass of ironic.api.controllers.base.APIBase.
+    _api_base = None
+
+    # Attributes that are not required for construction, but which may not be
+    # removed if set. Override in subclasses if needed.
+    _extra_non_removable_attrs = set()
+
+    # Set of non-removable attributes, calculated lazily.
+    _non_removable_attrs = None
+
     @staticmethod
     def internal_attrs():
         """Returns a list of internal attributes.
@@ -239,15 +216,24 @@ class JsonPatchType(wtypes.Base):
         """
         return ['/created_at', '/id', '/links', '/updated_at', '/uuid']
 
-    @staticmethod
-    def mandatory_attrs():
-        """Retruns a list of mandatory attributes.
+    @classmethod
+    def non_removable_attrs(cls):
+        """Returns a set of names of attributes that may not be removed.
 
-        Mandatory attributes can't be removed from the document. This
-        method should be overwritten by derived class.
-
+        Attributes whose 'mandatory' property is True are automatically added
+        to this set. To add additional attributes to the set, override the
+        field _extra_non_removable_attrs in subclasses, with a set of the form
+        {'/foo', '/bar'}.
         """
-        return []
+        if cls._non_removable_attrs is None:
+            cls._non_removable_attrs = cls._extra_non_removable_attrs.copy()
+            if cls._api_base:
+                fields = inspect.getmembers(cls._api_base,
+                                            lambda a: not inspect.isroutine(a))
+                for name, field in fields:
+                    if getattr(field, 'mandatory', False):
+                        cls._non_removable_attrs.add('/%s' % name)
+        return cls._non_removable_attrs
 
     @staticmethod
     def validate(patch):
@@ -256,7 +242,7 @@ class JsonPatchType(wtypes.Base):
             msg = _("'%s' is an internal attribute and can not be updated")
             raise wsme.exc.ClientSideError(msg % patch.path)
 
-        if patch.path in patch.mandatory_attrs() and patch.op == 'remove':
+        if patch.path in patch.non_removable_attrs() and patch.op == 'remove':
             msg = _("'%s' is a mandatory attribute and can not be removed")
             raise wsme.exc.ClientSideError(msg % patch.path)
 

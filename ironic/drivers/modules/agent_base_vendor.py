@@ -32,7 +32,6 @@ from ironic.common.i18n import _LI
 from ironic.common.i18n import _LW
 from ironic.common import states
 from ironic.common import utils
-from ironic.conductor import manager
 from ironic.conductor import rpcapi
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
@@ -80,11 +79,6 @@ LOG = log.getLogger(__name__)
 # raid interface. '<post-delete function>' is to be called after
 # completing 'delete_configuration' of raid interface.
 POST_CLEAN_STEP_HOOKS = {}
-
-
-def _time():
-    """Broken out for testing."""
-    return time.time()
 
 
 def _get_client():
@@ -211,7 +205,7 @@ class BaseAgentVendor(base.VendorInterface):
                                                     'payload version: %s')
                                                   % version)
 
-    def _notify_conductor_resume_clean(self, task):
+    def notify_conductor_resume_clean(self, task):
         LOG.debug('Sending RPC to conductor to resume cleaning for node %s',
                   task.node.uuid)
         uuid = task.node.uuid
@@ -249,14 +243,14 @@ class BaseAgentVendor(base.VendorInterface):
                     'err': command.get('command_error'),
                     'step': node.clean_step})
             LOG.error(msg)
-            return manager.cleaning_error_handler(task, msg)
+            return manager_utils.cleaning_error_handler(task, msg)
         elif command.get('command_status') == 'CLEAN_VERSION_MISMATCH':
             # Restart cleaning, agent must have rebooted to new version
             LOG.info(_LI('Node %s detected a clean version mismatch, '
                          'resetting clean steps and rebooting the node.'),
                      node.uuid)
             try:
-                manager.set_node_cleaning_steps(task)
+                manager_utils.set_node_cleaning_steps(task)
             except exception.NodeCleaningFailure:
                 msg = (_('Could not restart cleaning on node %(node)s: '
                          '%(err)s.') %
@@ -264,8 +258,8 @@ class BaseAgentVendor(base.VendorInterface):
                         'err': command.get('command_error'),
                         'step': node.clean_step})
                 LOG.exception(msg)
-                return manager.cleaning_error_handler(task, msg)
-            self._notify_conductor_resume_clean(task)
+                return manager_utils.cleaning_error_handler(task, msg)
+            self.notify_conductor_resume_clean(task)
 
         elif command.get('command_status') == 'SUCCEEDED':
             clean_step_hook = _get_post_clean_step_hook(node)
@@ -286,11 +280,11 @@ class BaseAgentVendor(base.VendorInterface):
                             'error': e,
                             'step': node.clean_step})
                     LOG.exception(msg)
-                    return manager.cleaning_error_handler(task, msg)
+                    return manager_utils.cleaning_error_handler(task, msg)
 
             LOG.info(_LI('Agent on node %s returned cleaning command success, '
                          'moving to next clean step'), node.uuid)
-            self._notify_conductor_resume_clean(task)
+            self.notify_conductor_resume_clean(task)
         else:
             msg = (_('Agent returned unknown status for clean step %(step)s '
                      'on node %(node)s : %(err)s.') %
@@ -298,7 +292,7 @@ class BaseAgentVendor(base.VendorInterface):
                     'err': command.get('command_status'),
                     'step': node.clean_step})
             LOG.error(msg)
-            return manager.cleaning_error_handler(task, msg)
+            return manager_utils.cleaning_error_handler(task, msg)
 
     @base.passthru(['POST'])
     def heartbeat(self, task, **kwargs):
@@ -319,7 +313,7 @@ class BaseAgentVendor(base.VendorInterface):
             'Heartbeat from %(node)s, last heartbeat at %(heartbeat)s.',
             {'node': node.uuid,
              'heartbeat': driver_internal_info.get('agent_last_heartbeat')})
-        driver_internal_info['agent_last_heartbeat'] = int(_time())
+        driver_internal_info['agent_last_heartbeat'] = int(time.time())
         try:
             driver_internal_info['agent_url'] = kwargs['agent_url']
         except KeyError:
@@ -360,8 +354,8 @@ class BaseAgentVendor(base.VendorInterface):
                     LOG.debug('Node %s just booted to start cleaning.',
                               node.uuid)
                     msg = _('Node failed to start the next cleaning step.')
-                    manager.set_node_cleaning_steps(task)
-                    self._notify_conductor_resume_clean(task)
+                    manager_utils.set_node_cleaning_steps(task)
+                    self.notify_conductor_resume_clean(task)
                 else:
                     msg = _('Node failed to check cleaning progress.')
                     self.continue_cleaning(task, **kwargs)
@@ -372,8 +366,8 @@ class BaseAgentVendor(base.VendorInterface):
                            '%(msg)s exception: %(e)s') % err_info
             LOG.exception(last_error)
             if node.provision_state in (states.CLEANING, states.CLEANWAIT):
-                manager.cleaning_error_handler(task, last_error)
-            else:
+                manager_utils.cleaning_error_handler(task, last_error)
+            elif node.provision_state in (states.DEPLOYING, states.DEPLOYWAIT):
                 deploy_utils.set_failed_state(task, last_error)
 
     @base.driver_passthru(['POST'], async=False)
@@ -510,7 +504,7 @@ class BaseAgentVendor(base.VendorInterface):
         ports = self._find_ports_by_macs(context, mac_addresses)
         if not ports:
             raise exception.NodeNotFound(_(
-                'No ports matching the given MAC addresses %sexist in the '
+                'No ports matching the given MAC addresses %s exist in the '
                 'database.') % mac_addresses)
         node_id = self._get_node_id(ports)
         try:
@@ -607,9 +601,7 @@ class BaseAgentVendor(base.VendorInterface):
                     {'node_uuid': node.uuid,
                      'timeout': (wait * (attempts - 1)) / 1000,
                      'error': e})
-                manager_utils.node_power_action(task, states.REBOOT)
-            else:
-                manager_utils.node_power_action(task, states.POWER_ON)
+            manager_utils.node_power_action(task, states.REBOOT)
         except Exception as e:
             msg = (_('Error rebooting node %(node)s after deploy. '
                      'Error: %(error)s') %
@@ -641,7 +633,7 @@ class BaseAgentVendor(base.VendorInterface):
         LOG.debug('Configuring local boot for node %s', node.uuid)
         if not node.driver_internal_info.get(
                 'is_whole_disk_image') and root_uuid:
-            LOG.debug('Installing the bootloader for node %(node)s on ',
+            LOG.debug('Installing the bootloader for node %(node)s on '
                       'partition %(part)s, EFI system partition %(efi)s',
                       {'node': node.uuid, 'part': root_uuid,
                        'efi': efi_system_part_uuid})

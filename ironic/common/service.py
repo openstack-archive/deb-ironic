@@ -17,14 +17,18 @@
 import signal
 import socket
 
+from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_context import context
 from oslo_log import log
 import oslo_messaging as messaging
 from oslo_service import service
+from oslo_service import wsgi
 from oslo_utils import importutils
 
+from ironic.api import app
 from ironic.common import config
+from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
@@ -45,9 +49,10 @@ service_opts = [
                       'hostname, FQDN, or IP address.')),
 ]
 
-cfg.CONF.register_opts(service_opts)
-
+CONF = cfg.CONF
 LOG = log.getLogger(__name__)
+
+CONF.register_opts(service_opts)
 
 
 class RPCService(service.Service):
@@ -76,7 +81,7 @@ class RPCService(service.Service):
         self.manager.init_host()
         self.tg.add_dynamic_timer(
             self.manager.periodic_tasks,
-            periodic_interval_max=cfg.CONF.periodic_interval,
+            periodic_interval_max=CONF.periodic_interval,
             context=admin_context)
 
         LOG.info(_LI('Created RPC server for service %(service)s on host '
@@ -117,22 +122,78 @@ class RPCService(service.Service):
 
 
 def prepare_service(argv=[]):
-    log.register_options(cfg.CONF)
-    log.set_defaults(default_log_levels=['amqp=WARN',
-                                         'amqplib=WARN',
+    log.register_options(CONF)
+    log.set_defaults(default_log_levels=['amqp=WARNING',
+                                         'amqplib=WARNING',
                                          'qpid.messaging=INFO',
-                                         'oslo.messaging=INFO',
-                                         'sqlalchemy=WARN',
+                                         'oslo_messaging=INFO',
+                                         'sqlalchemy=WARNING',
                                          'keystoneclient=INFO',
                                          'stevedore=INFO',
-                                         'eventlet.wsgi.server=WARN',
-                                         'iso8601=WARN',
-                                         'paramiko=WARN',
-                                         'requests=WARN',
-                                         'neutronclient=WARN',
-                                         'glanceclient=WARN',
-                                         'ironic.openstack.common=WARN',
-                                         'urllib3.connectionpool=WARN',
+                                         'eventlet.wsgi.server=WARNING',
+                                         'paramiko=WARNING',
+                                         'requests=WARNING',
+                                         'neutronclient=WARNING',
+                                         'glanceclient=WARNING',
+                                         'ironic.openstack.common=WARNING',
+                                         'urllib3.connectionpool=WARNING',
                                          ])
     config.parse_args(argv)
-    log.setup(cfg.CONF, 'ironic')
+    log.setup(CONF, 'ironic')
+
+
+def process_launcher():
+    return service.ProcessLauncher(CONF)
+
+
+class WSGIService(service.ServiceBase):
+    """Provides ability to launch ironic API from wsgi app."""
+
+    def __init__(self, name, use_ssl=False):
+        """Initialize, but do not start the WSGI server.
+
+        :param name: The name of the WSGI server given to the loader.
+        :param use_ssl: Wraps the socket in an SSL context if True.
+        :returns: None
+        """
+        self.name = name
+        self.app = app.VersionSelectorApplication()
+        self.workers = (CONF.api.api_workers or
+                        processutils.get_worker_count())
+        if self.workers and self.workers < 1:
+            raise exception.ConfigInvalid(
+                _("api_workers value of %d is invalid, "
+                  "must be greater than 0.") % self.workers)
+
+        self.server = wsgi.Server(CONF, name, self.app,
+                                  host=CONF.api.host_ip,
+                                  port=CONF.api.port,
+                                  use_ssl=use_ssl)
+
+    def start(self):
+        """Start serving this service using loaded configuration.
+
+        :returns: None
+        """
+        self.server.start()
+
+    def stop(self):
+        """Stop serving this API.
+
+        :returns: None
+        """
+        self.server.stop()
+
+    def wait(self):
+        """Wait for the service to stop serving this API.
+
+        :returns: None
+        """
+        self.server.wait()
+
+    def reset(self):
+        """Reset server greenpool size to default.
+
+        :returns: None
+        """
+        self.server.reset()

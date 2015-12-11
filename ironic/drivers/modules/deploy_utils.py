@@ -39,6 +39,7 @@ from six.moves.urllib import parse
 from ironic.common import dhcp_factory
 from ironic.common import disk_partitioner
 from ironic.common import exception
+from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
@@ -96,7 +97,8 @@ CONF.register_opts(deploy_opts, group='deploy')
 
 LOG = logging.getLogger(__name__)
 
-VALID_ROOT_DEVICE_HINTS = set(('size', 'model', 'wwn', 'serial', 'vendor'))
+VALID_ROOT_DEVICE_HINTS = set(('size', 'model', 'wwn', 'serial', 'vendor',
+                               'wwn_with_extension', 'wwn_vendor_extension'))
 
 SUPPORTED_CAPABILITIES = {
     'boot_option': ('local', 'netboot'),
@@ -241,6 +243,9 @@ def get_disk_identifier(dev):
     :param dev: Path for the already populated disk device.
     :returns The Disk Identifier.
     """
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     disk_identifier = utils.execute('hexdump', '-s', '440', '-n', '4',
                                     '-e', '''\"0x%08x\"''',
                                     dev,
@@ -275,6 +280,9 @@ def make_partitions(dev, root_mb, swap_mb, ephemeral_mb,
         path as Value for the partitions created by this method.
 
     """
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     LOG.debug("Starting to partition the disk device: %(dev)s "
               "for node %(node)s",
               {'dev': dev, 'node': node_uuid})
@@ -329,6 +337,9 @@ def make_partitions(dev, root_mb, swap_mb, ephemeral_mb,
 
 def is_block_device(dev):
     """Check whether a device is block or not."""
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     attempts = CONF.deploy.iscsi_verify_attempts
     for attempt in range(attempts):
         try:
@@ -349,10 +360,16 @@ def is_block_device(dev):
 
 def dd(src, dst):
     """Execute dd from src to dst."""
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     utils.dd(src, dst, 'bs=%s' % CONF.deploy.dd_block_size, 'oflag=direct')
 
 
 def populate_image(src, dst):
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     data = images.qemu_img_info(src)
     if data.file_format == 'raw':
         dd(src, dst)
@@ -362,6 +379,9 @@ def populate_image(src, dst):
 
 def block_uuid(dev):
     """Get UUID of a block device."""
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     out, _err = utils.execute('blkid', '-s', 'UUID', '-o', 'value', dev,
                               run_as_root=True,
                               check_exit_code=[0])
@@ -450,6 +470,9 @@ def get_dev(address, port, iqn, lun):
 
 def get_image_mb(image_path, virtual_size=True):
     """Get size of an image in Megabyte."""
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     mb = 1024 * 1024
     if not virtual_size:
         image_byte = os.path.getsize(image_path)
@@ -462,6 +485,9 @@ def get_image_mb(image_path, virtual_size=True):
 
 def get_dev_block_size(dev):
     """Get the device size in 512 byte sectors."""
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     block_sz, cmderr = utils.execute('blockdev', '--getsz', dev,
                                      run_as_root=True, check_exit_code=[0])
     return int(block_sz)
@@ -476,6 +502,10 @@ def destroy_disk_metadata(dev, node_uuid):
        - the last 18KiB to clear GPT and other metadata like: LVM, veritas,
          MDADM, DMRAID, ...
     """
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
+
     # NOTE(NobodyCam): This is needed to work around bug:
     # https://bugs.launchpad.net/ironic/+bug/1317647
     LOG.debug("Start destroy disk metadata for node %(node)s.",
@@ -530,6 +560,9 @@ def _get_configdrive(configdrive, node_uuid):
         configdrive file.
 
     """
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
     # Check if the configdrive option is a HTTP URL or the content directly
     is_url = utils.is_http_url(configdrive)
     if is_url:
@@ -606,6 +639,10 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
         NOTE: If key exists but value is None, it means partition doesn't
               exist.
     """
+    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
+    # planned to be deleted here. If need to modify this function, please also
+    # do the same modification in ironic-lib
+
     # the only way for preserve_ephemeral to be set to true is if we are
     # rebuilding an instance with --preserve_ephemeral.
     commit = not preserve_ephemeral
@@ -692,7 +729,7 @@ def work_on_disk(dev, root_mb, swap_mb, ephemeral_mb, ephemeral_format,
     }
 
     try:
-        for part, part_dev in six.iteritems(uuids_to_return):
+        for part, part_dev in uuids_to_return.items():
             if part_dev:
                 uuids_to_return[part] = block_uuid(part_dev)
 
@@ -953,15 +990,22 @@ def parse_instance_info_capabilities(node):
     return capabilities
 
 
-def agent_get_clean_steps(task):
+def agent_get_clean_steps(task, interface=None, override_priorities=None):
     """Get the list of clean steps from the agent.
 
     #TODO(JoshNang) move to BootInterface
 
     :param task: a TaskManager object containing the node
+    :param interface: The interface for which clean steps
+        are to be returned. If this is not provided, it returns the
+        clean steps for all interfaces.
+    :param override_priorities: a dictionary with keys being step names and
+        values being new priorities for them. If a step isn't in this
+        dictionary, the step's original priority is used.
     :raises: NodeCleaningFailure if the agent returns invalid results
     :returns: A list of clean step dictionaries
     """
+    override_priorities = override_priorities or {}
     client = agent_client.AgentClient()
     ports = objects.Port.list_by_node_id(
         task.context, task.node.id)
@@ -984,10 +1028,16 @@ def agent_get_clean_steps(task):
     steps_list = [step for step_list in
                   result['clean_steps'].values()
                   for step in step_list]
-    # Filter steps to only return deploy steps
-    steps = [step for step in steps_list
-             if step.get('interface') == 'deploy']
-    return steps
+    result = []
+    for step in steps_list:
+        if interface and step.get('interface') != interface:
+            continue
+        new_priority = override_priorities.get(step.get('step'))
+        if new_priority is not None:
+            step['priority'] = new_priority
+        result.append(step)
+
+    return result
 
 
 def agent_execute_clean_step(task, step):
@@ -1090,7 +1140,7 @@ def parse_root_device_hints(node):
                 _('Root device hint "size" is not an integer value.'))
 
     hints = []
-    for key, value in root_device.items():
+    for key, value in sorted(root_device.items()):
         # NOTE(lucasagomes): We can't have spaces in the PXE config
         # file, so we are going to url/percent encode the value here
         # and decode on the other end.
@@ -1395,7 +1445,17 @@ def prepare_inband_cleaning(task, manage_boot=True):
 
     if manage_boot:
         ramdisk_opts = build_agent_options(task.node)
+
+        # TODO(rameshg87): Below code is to make sure that bash ramdisk
+        # invokes pass_deploy_info vendor passthru when it is booted
+        # for cleaning. Remove the below code once we stop supporting
+        # bash ramdisk in Ironic. Do a late import to avoid circular
+        # import.
+        from ironic.drivers.modules import iscsi_deploy
+        ramdisk_opts.update(
+            iscsi_deploy.build_deploy_ramdisk_options(task.node))
         task.driver.boot.prepare_ramdisk(task, ramdisk_opts)
+
     manager_utils.node_power_action(task, states.REBOOT)
 
     # Tell the conductor we are waiting for the agent to boot.
@@ -1425,3 +1485,33 @@ def tear_down_inband_cleaning(task, manage_boot=True):
         task.driver.boot.clean_up_ramdisk(task)
 
     tear_down_cleaning_ports(task)
+
+
+def get_image_instance_info(node):
+    """Gets the image information from the node.
+
+    Get image information for the given node instance from its
+    'instance_info' property.
+
+    :param node: a single Node.
+    :returns: A dict with required image properties retrieved from
+        node's 'instance_info'.
+    :raises: MissingParameterValue, if image_source is missing in node's
+        instance_info. Also raises same exception if kernel/ramdisk is
+        missing in instance_info for non-glance images.
+    """
+    info = {}
+    info['image_source'] = node.instance_info.get('image_source')
+
+    is_whole_disk_image = node.driver_internal_info.get('is_whole_disk_image')
+    if not is_whole_disk_image:
+        if not service_utils.is_glance_image(info['image_source']):
+            info['kernel'] = node.instance_info.get('kernel')
+            info['ramdisk'] = node.instance_info.get('ramdisk')
+
+    error_msg = (_("Cannot validate image information for node %s because one "
+                   "or more parameters are missing from its instance_info.")
+                 % node.uuid)
+    check_for_missing_params(info, error_msg)
+
+    return info

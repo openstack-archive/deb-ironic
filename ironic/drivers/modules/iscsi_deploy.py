@@ -21,6 +21,7 @@ from oslo_utils import fileutils
 from oslo_utils import strutils
 from six.moves.urllib import parse
 
+from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common.glance_service import service_utils as glance_service_utils
 from ironic.common.i18n import _
@@ -59,7 +60,8 @@ pxe_opts = [
     cfg.StrOpt('instance_master_path',
                default='/var/lib/ironic/master_images',
                help=_('On the ironic-conductor node, directory where master '
-                      'instance images are stored on disk.')),
+                      'instance images are stored on disk. '
+                      'Setting to <None> disables image caching.')),
     cfg.IntOpt('image_cache_size',
                default=20480,
                help=_('Maximum size (in MiB) of cache for master images, '
@@ -737,9 +739,64 @@ class ISCSIDeploy(base.DeployInterface):
         destroy_images(task.node.uuid)
         task.driver.boot.clean_up_ramdisk(task)
         task.driver.boot.clean_up_instance(task)
+        provider = dhcp_factory.DHCPFactory()
+        provider.clean_dhcp(task)
 
     def take_over(self, task):
         pass
+
+    def get_clean_steps(self, task):
+        """Get the list of clean steps from the agent.
+
+        :param task: a TaskManager object containing the node
+
+        :returns: A list of clean step dictionaries. If bash ramdisk is
+            used for this node, it returns an empty list.
+        """
+        # TODO(rameshg87): Remove the below code once we stop supporting
+        # bash ramdisk in Ironic. No need to log warning because we have
+        # already logged it in pass_deploy_info.
+        if 'agent_url' not in task.node.driver_internal_info:
+            return []
+
+        steps = deploy_utils.agent_get_clean_steps(
+            task, interface='deploy',
+            override_priorities={
+                'erase_devices': CONF.deploy.erase_devices_priority})
+        return steps
+
+    def execute_clean_step(self, task, step):
+        """Execute a clean step asynchronously on the agent.
+
+        :param task: a TaskManager object containing the node
+        :param step: a clean step dictionary to execute
+        :raises: NodeCleaningFailure if the agent does not return a command
+            status
+        :returns: states.CLEANWAIT to signify the step will be completed
+            asynchronously.
+        """
+        return deploy_utils.agent_execute_clean_step(task, step)
+
+    def prepare_cleaning(self, task):
+        """Boot into the agent to prepare for cleaning.
+
+        :param task: a TaskManager object containing the node
+        :raises NodeCleaningFailure: if the previous cleaning ports cannot
+            be removed or if new cleaning ports cannot be created
+        :returns: states.CLEANWAIT to signify an asynchronous prepare.
+        """
+        return deploy_utils.prepare_inband_cleaning(
+            task, manage_boot=True)
+
+    def tear_down_cleaning(self, task):
+        """Clean up the PXE and DHCP files after cleaning.
+
+        :param task: a TaskManager object containing the node
+        :raises NodeCleaningFailure: if the cleaning ports cannot be
+            removed
+        """
+        deploy_utils.tear_down_inband_cleaning(
+            task, manage_boot=True)
 
 
 class VendorPassthru(agent_base_vendor.BaseAgentVendor):
@@ -763,8 +820,13 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
         :raises: InvalidParameterValue if any parameters is invalid.
         """
         if method == 'pass_deploy_info':
-            deploy_utils.validate_capabilities(task.node)
-            get_deploy_info(task.node, **kwargs)
+            # TODO(rameshg87): Don't validate deploy info if bash ramdisk
+            # booted during cleaning. It will be handled in pass_deploy_info
+            # method. Remove the below code once we stop supporting bash
+            # ramdisk in Ironic.
+            if task.node.provision_state != states.CLEANWAIT:
+                deploy_utils.validate_capabilities(task.node)
+                get_deploy_info(task.node, **kwargs)
         elif method == 'pass_bootloader_install_info':
             validate_pass_bootloader_info_input(task, kwargs)
 
@@ -798,6 +860,30 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
         validate_bootloader_install_status(task, kwargs)
         finish_deploy(task, kwargs['address'])
 
+    def _initiate_cleaning(self, task):
+        """Initiates the steps required to start cleaning for the node.
+
+        This method polls each interface of the driver for getting the
+        clean steps and notifies Ironic conductor to resume cleaning.
+        On error, it sets the node to CLEANFAIL state and populates
+        node.last_error with the error message.
+
+        :param task: a TaskManager instance containing the node to act on.
+        """
+        LOG.warning(
+            _LW("Bash deploy ramdisk doesn't support in-band cleaning. "
+                "Please use the ironic-python-agent (IPA) ramdisk "
+                "instead for node %s. "), task.node.uuid)
+        try:
+            manager_utils.set_node_cleaning_steps(task)
+            self.notify_conductor_resume_clean(task)
+        except Exception as e:
+            last_error = (
+                _('Encountered exception for node %(node)s '
+                  'while initiating cleaning. Error:  %(error)s') %
+                {'node': task.node.uuid, 'error': e})
+            return manager_utils.cleaning_error_handler(task, last_error)
+
     @base.passthru(['POST'])
     @task_manager.require_exclusive_lock
     def pass_deploy_info(self, task, **kwargs):
@@ -815,6 +901,12 @@ class VendorPassthru(agent_base_vendor.BaseAgentVendor):
                         "its deployment. This deploy ramdisk has been "
                         "deprecated. Please use the ironic-python-agent "
                         "(IPA) ramdisk instead."), node.uuid)
+
+        # TODO(rameshg87): Remove the below code once we stop supporting
+        # bash ramdisk in Ironic.
+        if node.provision_state == states.CLEANWAIT:
+            return self._initiate_cleaning(task)
+
         task.process_event('resume')
         LOG.debug('Continuing the deployment on node %s', node.uuid)
 

@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
-
 from oslo_config import cfg
 from oslo_log import log
 from oslo_utils import excutils
 from oslo_utils import units
 
+from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
@@ -34,7 +33,6 @@ from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
 from ironic.drivers.modules import agent_base_vendor
-from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils
 
 
@@ -68,6 +66,16 @@ agent_opts = [
                       'on the bare metal node after booting agent ramdisk. '
                       'This may be set according to the memory consumed by '
                       'the agent ramdisk image.')),
+    cfg.BoolOpt('stream_raw_images',
+                default=True,
+                help=_('Whether the agent ramdisk should stream raw images '
+                       'directly onto the disk or not. By streaming raw '
+                       'images directly onto the disk the agent ramdisk will '
+                       'not spend time copying the image to a tmpfs partition '
+                       '(therefore consuming less memory) prior to writing it '
+                       'to the disk. Unless the disk where the image will be '
+                       'copied to is really slow, this option should be set '
+                       'to True. Defaults to True.')),
 ]
 
 CONF = cfg.CONF
@@ -86,16 +94,6 @@ REQUIRED_PROPERTIES = {
                         'used at deploy time. Required.'),
 }
 COMMON_PROPERTIES = REQUIRED_PROPERTIES
-
-
-def _time():
-    """Broken out for testing."""
-    return time.time()
-
-
-def _get_client():
-    client = agent_client.AgentClient()
-    return client
 
 
 def build_instance_info_for_deploy(task):
@@ -145,15 +143,22 @@ def check_image_size(task, image_source):
     :raises: InvalidParameterValue if size of the image is greater than
         the available ram size.
     """
-    properties = task.node.properties
+    node = task.node
+    properties = node.properties
     # skip check if 'memory_mb' is not defined
     if 'memory_mb' not in properties:
         LOG.warning(_LW('Skip the image size check as memory_mb is not '
-                        'defined in properties on node %s.'), task.node.uuid)
+                        'defined in properties on node %s.'), node.uuid)
+        return
+
+    image_show = images.image_show(task.context, image_source)
+    if CONF.agent.stream_raw_images and image_show.get('disk_format') == 'raw':
+        LOG.debug('Skip the image size check since the image is going to be '
+                  'streamed directly onto the disk for node %s', node.uuid)
         return
 
     memory_size = int(properties.get('memory_mb'))
-    image_size = int(images.download_size(task.context, image_source))
+    image_size = int(image_show['size'])
     reserved_size = CONF.agent.memory_consumed_by_agent
     if (image_size + (reserved_size * units.Mi)) > (memory_size * units.Mi):
         msg = (_('Memory size is too small for requested image, if it is '
@@ -220,6 +225,9 @@ class AgentDeploy(base.DeployInterface):
         # Validate the root device hints
         deploy_utils.parse_root_device_hints(node)
 
+        # Validate node capabilities
+        deploy_utils.validate_capabilities(node)
+
     @task_manager.require_exclusive_lock
     def deploy(self, task):
         """Perform a deployment to a node.
@@ -279,6 +287,8 @@ class AgentDeploy(base.DeployInterface):
         """
         if CONF.agent.manage_agent_boot:
             task.driver.boot.clean_up_ramdisk(task)
+        provider = dhcp_factory.DHCPFactory()
+        provider.clean_dhcp(task)
 
     def take_over(self, task):
         """Take over management of this node from a dead conductor.
@@ -298,14 +308,12 @@ class AgentDeploy(base.DeployInterface):
 
         :returns: A list of clean step dictionaries
         """
-        steps = deploy_utils.agent_get_clean_steps(task)
-        if CONF.deploy.erase_devices_priority is not None:
-            for step in steps:
-                if (step.get('step') == 'erase_devices' and
-                        step.get('interface') == 'deploy'):
-                    # Override with operator set priority
-                    step['priority'] = CONF.deploy.erase_devices_priority
-        return steps
+        new_priorities = {
+            'erase_devices': CONF.deploy.erase_devices_priority,
+        }
+        return deploy_utils.agent_get_clean_steps(
+            task, interface='deploy',
+            override_priorities=new_priorities)
 
     def execute_clean_step(self, task, step):
         """Execute a clean step asynchronously on the agent.
@@ -386,7 +394,8 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
             # upgraded in the middle of a build request.
             'disk_format': node.instance_info.get('image_disk_format'),
             'container_format': node.instance_info.get(
-                'image_container_format')
+                'image_container_format'),
+            'stream_raw_images': CONF.agent.stream_raw_images,
         }
 
         # Tell the client to download and write the image with the given args

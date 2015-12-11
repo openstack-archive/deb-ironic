@@ -194,17 +194,6 @@ conductor_opts = [
 ]
 CONF = cfg.CONF
 CONF.register_opts(conductor_opts, 'conductor')
-
-CLEANING_INTERFACE_PRIORITY = {
-    # When two clean steps have the same priority, their order is determined
-    # by which interface is implementing the clean step. The clean step of the
-    # interface with the highest value here, will be executed first in that
-    # case.
-    'power': 4,
-    'management': 3,
-    'deploy': 2,
-    'raid': 1,
-}
 SYNC_EXCLUDED_STATES = (states.DEPLOYWAIT, states.CLEANWAIT, states.ENROLL)
 
 
@@ -286,9 +275,10 @@ class ConductorManager(periodic_task.PeriodicTasks):
         except exception.ConductorAlreadyRegistered:
             # This conductor was already registered and did not shut down
             # properly, so log a warning and update the record.
-            LOG.warn(_LW("A conductor with hostname %(hostname)s "
-                         "was previously registered. Updating registration"),
-                     {'hostname': self.host})
+            LOG.warning(
+                _LW("A conductor with hostname %(hostname)s "
+                    "was previously registered. Updating registration"),
+                {'hostname': self.host})
             cdr = self.dbapi.register_conductor({'hostname': self.host,
                                                  'drivers': self.drivers},
                                                 update_existing=True)
@@ -327,6 +317,10 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 self.add_periodic_task(method)
 
     def del_host(self, deregister=True):
+        # Conductor deregistration fails if called on non-initialized
+        # conductor (e.g. when rpc server is unreachable).
+        if not hasattr(self, 'conductor'):
+            return
         self._keepalive_evt.set()
         if deregister:
             try:
@@ -446,7 +440,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 task.node.target_power_state = new_state
             task.node.last_error = None
             task.node.save()
-            task.set_spawn_error_hook(power_state_error_handler,
+            task.set_spawn_error_hook(utils.power_state_error_handler,
                                       task.node, task.node.power_state)
             task.spawn_after(self._spawn_worker, utils.node_power_action,
                              task, new_state)
@@ -736,12 +730,12 @@ class ConductorManager(periodic_task.PeriodicTasks):
             LOG.debug("do_node_deploy Calling event: %(event)s for node: "
                       "%(node)s", {'event': event, 'node': node.uuid})
             try:
-                task.process_event(event,
-                                   callback=self._spawn_worker,
-                                   call_args=(do_node_deploy, task,
-                                              self.conductor.id,
-                                              configdrive),
-                                   err_handler=provisioning_error_handler)
+                task.process_event(
+                    event,
+                    callback=self._spawn_worker,
+                    call_args=(do_node_deploy, task, self.conductor.id,
+                               configdrive),
+                    err_handler=utils.provisioning_error_handler)
             except exception.InvalidState:
                 raise exception.InvalidStateRequested(
                     action=event, node=task.node.uuid,
@@ -782,10 +776,11 @@ class ConductorManager(periodic_task.PeriodicTasks):
                     "Can not delete instance. Error: %(msg)s") % {'msg': e})
 
             try:
-                task.process_event('delete',
-                                   callback=self._spawn_worker,
-                                   call_args=(self._do_node_tear_down, task),
-                                   err_handler=provisioning_error_handler)
+                task.process_event(
+                    'delete',
+                    callback=self._spawn_worker,
+                    call_args=(self._do_node_tear_down, task),
+                    err_handler=utils.provisioning_error_handler)
             except exception.InvalidState:
                 raise exception.InvalidStateRequested(
                     action='delete', node=task.node.uuid,
@@ -840,10 +835,11 @@ class ConductorManager(periodic_task.PeriodicTasks):
 
         """
         node = task.node
-        if not node.clean_step:
-            return []
-
         next_steps = node.driver_internal_info.get('clean_steps', [])
+        if not node.clean_step:
+            # first time through, return all steps
+            return next_steps
+
         try:
             # Trim off the last clean step (now finished) and
             # all previous steps
@@ -854,7 +850,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
                    {'node': node.uuid, 'step': node.clean_step,
                     'state': node.provision_state})
             LOG.exception(msg)
-            cleaning_error_handler(task, msg)
+            utils.cleaning_error_handler(task, msg)
             raise exception.NodeCleaningFailure(node=node.uuid,
                                                 reason=msg)
         return next_steps
@@ -906,11 +902,12 @@ class ConductorManager(periodic_task.PeriodicTasks):
                               'marked to be aborted after step "%(step)s '
                               'completed. Aborting now that it has completed.',
                               {'node': task.node.uuid, 'step': step_name})
-                    task.process_event('abort',
-                                       callback=self._spawn_worker,
-                                       call_args=(self._do_node_clean_abort,
-                                                  task, step_name),
-                                       err_handler=provisioning_error_handler)
+                    task.process_event(
+                        'abort',
+                        callback=self._spawn_worker,
+                        call_args=(self._do_node_clean_abort,
+                                   task, step_name),
+                        err_handler=utils.provisioning_error_handler)
                     return
 
                 LOG.debug('The cleaning operation for node %(node)s was '
@@ -926,7 +923,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
             if task.node.provision_state == states.CLEANWAIT:
                 task.process_event('resume')
 
-            task.set_spawn_error_hook(cleaning_error_handler, task.node,
+            task.set_spawn_error_hook(utils.cleaning_error_handler, task.node,
                                       _('Failed to run next clean step'))
             task.spawn_after(
                 self._spawn_worker,
@@ -957,7 +954,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
             msg = (_('Failed to validate power driver interface. '
                      'Can not clean node %(node)s. Error: %(msg)s') %
                    {'node': node.uuid, 'msg': e})
-            return cleaning_error_handler(task, msg)
+            return utils.cleaning_error_handler(task, msg)
 
         # Allow the deploy driver to set up the ramdisk again (necessary for
         # IPA cleaning/zapping)
@@ -967,7 +964,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
             msg = (_('Failed to prepare node %(node)s for cleaning: %(e)s')
                    % {'node': node.uuid, 'e': e})
             LOG.exception(msg)
-            return cleaning_error_handler(task, msg)
+            return utils.cleaning_error_handler(task, msg)
 
         # TODO(lucasagomes): Should be removed once the Mitaka release starts
         if prepare_result == states.CLEANING:
@@ -984,7 +981,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
             task.process_event('wait')
             return
 
-        set_node_cleaning_steps(task)
+        utils.set_node_cleaning_steps(task)
         self._do_next_clean_step(
             task,
             node.driver_internal_info.get('clean_steps', []))
@@ -1017,7 +1014,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
                        {'node': node.uuid, 'exc': e,
                         'step': node.clean_step})
                 LOG.exception(msg)
-                cleaning_error_handler(task, msg)
+                utils.cleaning_error_handler(task, msg)
                 return
 
             # TODO(lucasagomes): Should be removed once the Mitaka
@@ -1044,7 +1041,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
                          '%(node)s, step returned invalid value: %(val)s')
                        % {'step': step, 'node': node.uuid, 'val': result})
                 LOG.error(msg)
-                return cleaning_error_handler(task, msg)
+                return utils.cleaning_error_handler(task, msg)
             LOG.info(_LI('Node %(node)s finished clean step %(step)s'),
                      {'node': node.uuid, 'step': step})
 
@@ -1059,7 +1056,8 @@ class ConductorManager(periodic_task.PeriodicTasks):
             msg = (_('Failed to tear down from cleaning for node %s')
                    % node.uuid)
             LOG.exception(msg)
-            return cleaning_error_handler(task, msg, tear_down_cleaning=False)
+            return utils.cleaning_error_handler(task, msg,
+                                                tear_down_cleaning=False)
 
         LOG.info(_LI('Node %s cleaning complete'), node.uuid)
         task.process_event('done')
@@ -1110,8 +1108,9 @@ class ConductorManager(periodic_task.PeriodicTasks):
                           {'node': node.uuid, 'err': e})
             error_msg = _('Failed to tear down cleaning after aborting '
                           'the operation')
-            cleaning_error_handler(task, error_msg, tear_down_cleaning=False,
-                                   set_fail_state=False)
+            utils.cleaning_error_handler(task, error_msg,
+                                         tear_down_cleaning=False,
+                                         set_fail_state=False)
             return
 
         info_message = _('Clean operation aborted for node %s') % node.uuid
@@ -1122,6 +1121,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
             info_message += msg
 
         node.last_error = last_error
+        node.clean_step = None
         node.save()
         LOG.info(info_message)
 
@@ -1149,18 +1149,20 @@ class ConductorManager(periodic_task.PeriodicTasks):
                                   % action) as task:
             if (action == states.VERBS['provide'] and
                     task.node.provision_state == states.MANAGEABLE):
-                task.process_event('provide',
-                                   callback=self._spawn_worker,
-                                   call_args=(self._do_node_clean, task),
-                                   err_handler=provisioning_error_handler)
+                task.process_event(
+                    'provide',
+                    callback=self._spawn_worker,
+                    call_args=(self._do_node_clean, task),
+                    err_handler=utils.provisioning_error_handler)
                 return
 
             if (action == states.VERBS['manage'] and
                     task.node.provision_state == states.ENROLL):
-                task.process_event('manage',
-                                   callback=self._spawn_worker,
-                                   call_args=(self._do_node_verify, task),
-                                   err_handler=provisioning_error_handler)
+                task.process_event(
+                    'manage',
+                    callback=self._spawn_worker,
+                    call_args=(self._do_node_verify, task),
+                    err_handler=utils.provisioning_error_handler)
                 return
 
             if (action == states.VERBS['abort'] and
@@ -1190,10 +1192,11 @@ class ConductorManager(periodic_task.PeriodicTasks):
                           {'node': task.node.uuid,
                            'prov': task.node.provision_state,
                            'step': task.node.clean_step.get('step')})
-                task.process_event('abort',
-                                   callback=self._spawn_worker,
-                                   call_args=(self._do_node_clean_abort, task),
-                                   err_handler=provisioning_error_handler)
+                task.process_event(
+                    'abort',
+                    callback=self._spawn_worker,
+                    call_args=(self._do_node_clean_abort, task),
+                    err_handler=utils.provisioning_error_handler)
                 return
 
             try:
@@ -1291,7 +1294,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
                    'provisioned_before': callback_timeout}
         sort_key = 'provision_updated_at'
         callback_method = utils.cleanup_after_timeout
-        err_handler = provisioning_error_handler
+        err_handler = utils.provisioning_error_handler
         self._fail_if_in_state(context, filters, states.DEPLOYWAIT,
                                sort_key, callback_method, err_handler)
 
@@ -1345,7 +1348,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 context, {'id': node_id}, states.DEPLOYING,
                 'provision_updated_at',
                 callback_method=utils.cleanup_after_timeout,
-                err_handler=provisioning_error_handler)
+                err_handler=utils.provisioning_error_handler)
 
     def _do_takeover(self, task):
         """Take over this node.
@@ -1360,6 +1363,20 @@ class ConductorManager(periodic_task.PeriodicTasks):
                   {'cdr': self.host, 'node': task.node.uuid})
         task.driver.deploy.prepare(task)
         task.driver.deploy.take_over(task)
+        # NOTE(zhenguo): If console enabled, take over the console session
+        # as well.
+        if task.node.console_enabled:
+            try:
+                task.driver.console.start_console(task)
+            except Exception as err:
+                msg = (_('Failed to start console while taking over the '
+                         'node %(node)s: %(err)s.') % {'node': task.node.uuid,
+                                                       'err': err})
+                LOG.error(msg)
+                # If taking over console failed, set node's console_enabled
+                # back to False and set node's last error.
+                task.node.last_error = msg
+                task.node.console_enabled = False
         # NOTE(lucasagomes): Set the ID of the new conductor managing
         #                    this node
         task.node.conductor_affinity = self.conductor.id
@@ -1401,7 +1418,6 @@ class ConductorManager(periodic_task.PeriodicTasks):
         The ensuing actions could include preparing a PXE environment,
         updating the DHCP server, and so on.
         """
-        self.ring_manager.reset()
         filters = {'reserved': False,
                    'maintenance': False,
                    'provision_state': states.ACTIVE}
@@ -1685,13 +1701,13 @@ class ConductorManager(periodic_task.PeriodicTasks):
             else:
                 task.driver.console.stop_console(task)
         except Exception as e:
-            with excutils.save_and_reraise_exception():
-                op = _('enabling') if enabled else _('disabling')
-                msg = (_('Error %(op)s the console on node %(node)s. '
-                         'Reason: %(error)s') % {'op': op,
-                                                 'node': node.uuid,
-                                                 'error': e})
-                node.last_error = msg
+            op = _('enabling') if enabled else _('disabling')
+            msg = (_('Error %(op)s the console on node %(node)s. '
+                     'Reason: %(error)s') % {'op': op,
+                                             'node': node.uuid,
+                                             'error': e})
+            node.last_error = msg
+            LOG.error(msg)
         else:
             node.console_enabled = enabled
             node.last_error = None
@@ -1785,27 +1801,27 @@ class ConductorManager(periodic_task.PeriodicTasks):
                     sensors_data = task.driver.management.get_sensors_data(
                         task)
             except NotImplementedError:
-                LOG.warn(_LW(
+                LOG.warning(_LW(
                     'get_sensors_data is not implemented for driver'
                     ' %(driver)s, node_uuid is %(node)s'),
                     {'node': node_uuid, 'driver': driver})
             except exception.FailedToParseSensorData as fps:
-                LOG.warn(_LW(
+                LOG.warning(_LW(
                     "During get_sensors_data, could not parse "
                     "sensor data for node %(node)s. Error: %(err)s."),
                     {'node': node_uuid, 'err': str(fps)})
             except exception.FailedToGetSensorData as fgs:
-                LOG.warn(_LW(
+                LOG.warning(_LW(
                     "During get_sensors_data, could not get "
                     "sensor data for node %(node)s. Error: %(err)s."),
                     {'node': node_uuid, 'err': str(fgs)})
             except exception.NodeNotFound:
-                LOG.warn(_LW(
+                LOG.warning(_LW(
                     "During send_sensor_data, node %(node)s was not "
                     "found and presumed deleted by another process."),
                     {'node': node_uuid})
             except Exception as e:
-                LOG.warn(_LW(
+                LOG.warning(_LW(
                     "Failed to get sensor data for node %(node)s. "
                     "Error: %(error)s"), {'node': node_uuid, 'error': str(e)})
             else:
@@ -1932,16 +1948,7 @@ class ConductorManager(periodic_task.PeriodicTasks):
             if not getattr(task.driver, 'management', None):
                 raise exception.UnsupportedDriverExtension(
                     driver=task.node.driver, extension='management')
-            if task.driver.management.get_supported_boot_devices_task_arg:
-                return task.driver.management.get_supported_boot_devices(task)
-            else:
-                LOG.warning(_LW("Driver '%s' is missing a task "
-                                "argument to the method "
-                                "get_supported_boot_devices() which "
-                                "has been deprecated. Please update the code "
-                                "to include a task argument."),
-                            task.node.driver)
-                return task.driver.management.get_supported_boot_devices()
+            return task.driver.management.get_supported_boot_devices(task)
 
     @messaging.expected_exceptions(exception.NoFreeConductorWorker,
                                    exception.NodeLocked,
@@ -1986,10 +1993,11 @@ class ConductorManager(periodic_task.PeriodicTasks):
                 raise exception.HardwareInspectionFailure(error=error)
 
             try:
-                task.process_event('inspect',
-                                   callback=self._spawn_worker,
-                                   call_args=(_do_inspect_hardware, task),
-                                   err_handler=provisioning_error_handler)
+                task.process_event(
+                    'inspect',
+                    callback=self._spawn_worker,
+                    call_args=(_do_inspect_hardware, task),
+                    err_handler=utils.provisioning_error_handler)
 
             except exception.InvalidState:
                 raise exception.InvalidStateRequested(
@@ -2249,58 +2257,6 @@ def get_vendor_passthru_metadata(route_dict):
     return d
 
 
-def power_state_error_handler(e, node, power_state):
-    """Set the node's power states if error occurs.
-
-    This hook gets called upon an execption being raised when spawning
-    the worker thread to change the power state of a node.
-
-    :param e: the exception object that was raised.
-    :param node: an Ironic node object.
-    :param power_state: the power state to set on the node.
-
-    """
-    if isinstance(e, exception.NoFreeConductorWorker):
-        node.power_state = power_state
-        node.target_power_state = states.NOSTATE
-        node.last_error = (_("No free conductor workers available"))
-        node.save()
-        LOG.warning(_LW("No free conductor workers available to perform "
-                        "an action on node %(node)s, setting node's "
-                        "power state back to %(power_state)s."),
-                    {'node': node.uuid, 'power_state': power_state})
-
-
-def provisioning_error_handler(e, node, provision_state,
-                               target_provision_state):
-    """Set the node's provisioning states if error occurs.
-
-    This hook gets called upon an exception being raised when spawning
-    the worker to do the deployment or tear down of a node.
-
-    :param e: the exception object that was raised.
-    :param node: an Ironic node object.
-    :param provision_state: the provision state to be set on
-        the node.
-    :param target_provision_state: the target provision state to be
-        set on the node.
-
-    """
-    if isinstance(e, exception.NoFreeConductorWorker):
-        # NOTE(deva): there is no need to clear conductor_affinity
-        #             because it isn't updated on a failed deploy
-        node.provision_state = provision_state
-        node.target_provision_state = target_provision_state
-        node.last_error = (_("No free conductor workers available"))
-        node.save()
-        LOG.warning(_LW("No free conductor workers available to perform "
-                        "an action on node %(node)s, setting node's "
-                        "provision_state back to %(prov_state)s and "
-                        "target_provision_state to %(tgt_prov_state)s."),
-                    {'node': node.uuid, 'prov_state': provision_state,
-                     'tgt_prov_state': target_provision_state})
-
-
 def _get_configdrive_obj_name(node):
     """Generate the object name for the config drive."""
     return 'configdrive-%s' % node.uuid
@@ -2408,8 +2364,8 @@ def do_node_deploy(task, conductor_id, configdrive=None):
 
 
 @task_manager.require_exclusive_lock
-def handle_sync_power_state_max_retries_exceeded(task,
-                                                 actual_power_state):
+def handle_sync_power_state_max_retries_exceeded(task, actual_power_state,
+                                                 exception=None):
     """Handles power state sync exceeding the max retries.
 
     When synchronizing the power state between a node and the DB has exceeded
@@ -2419,6 +2375,8 @@ def handle_sync_power_state_max_retries_exceeded(task,
     :param task: a TaskManager instance with an exclusive lock
     :param actual_power_state: the actual power state of the node; a power
            state from ironic.common.states
+    :param exception: the exception object that caused the sync power state
+           to fail, if present.
     """
     node = task.node
     msg = (_("During sync_power_state, max retries exceeded "
@@ -2428,6 +2386,10 @@ def handle_sync_power_state_max_retries_exceeded(task,
              "Switching node to maintenance mode.") %
            {'node': node.uuid, 'actual': actual_power_state,
             'state': node.power_state})
+
+    if exception is not None:
+        msg += _(" Error: %s") % exception
+
     node.power_state = actual_power_state
     node.last_error = msg
     node.maintenance = True
@@ -2475,7 +2437,8 @@ def do_sync_power_state(task, count):
         # Stop if any exception is raised when getting the power state
         if count > max_retries:
             task.upgrade_lock()
-            handle_sync_power_state_max_retries_exceeded(task, power_state)
+            handle_sync_power_state_max_retries_exceeded(task, power_state,
+                                                         exception=e)
         else:
             LOG.warning(_LW("During sync_power_state, could not get power "
                             "state for node %(node)s, attempt %(attempt)s of "
@@ -2580,67 +2543,3 @@ def _do_inspect_hardware(task):
                    "state %(state)s") % {'state': new_state})
         handle_failure(error)
         raise exception.HardwareInspectionFailure(error=error)
-
-
-def cleaning_error_handler(task, msg, tear_down_cleaning=True,
-                           set_fail_state=True):
-    """Put a failed node in CLEANFAIL or ZAPFAIL and maintenance."""
-    # Reset clean step, msg should include current step
-    if task.node.provision_state in (states.CLEANING, states.CLEANWAIT):
-        task.node.clean_step = {}
-    task.node.last_error = msg
-    task.node.maintenance = True
-    task.node.maintenance_reason = msg
-    task.node.save()
-    if tear_down_cleaning:
-        try:
-            task.driver.deploy.tear_down_cleaning(task)
-        except Exception as e:
-            msg = (_LE('Failed to tear down cleaning on node %(uuid)s, '
-                       'reason: %(err)s'), {'err': e, 'uuid': task.node.uuid})
-            LOG.exception(msg)
-
-    if set_fail_state:
-        task.process_event('fail')
-
-
-def _step_key(step):
-    """Sort by priority, then interface priority in event of tie.
-
-    :param step: cleaning step dict to get priority for.
-    """
-    return (step.get('priority'),
-            CLEANING_INTERFACE_PRIORITY[step.get('interface')])
-
-
-def _get_cleaning_steps(task, enabled=False):
-    """Get sorted cleaning steps for task.node
-
-    :param task: A TaskManager object
-    :param enabled: If True, returns only enabled (priority > 0) steps. If
-        False, returns all clean steps.
-    :returns: A list of clean steps dictionaries, sorted with largest priority
-        as the first item
-    """
-    # Iterate interfaces and get clean steps from each
-    steps = list()
-    for interface in CLEANING_INTERFACE_PRIORITY:
-        interface = getattr(task.driver, interface)
-        if interface:
-            interface_steps = [x for x in interface.get_clean_steps(task)
-                               if not enabled or x['priority'] > 0]
-            steps.extend(interface_steps)
-    # Sort the steps from higher priority to lower priority
-    return sorted(steps, key=_step_key, reverse=True)
-
-
-def set_node_cleaning_steps(task):
-    """Get the list of clean steps, save them to the node."""
-    # Get the prioritized steps, store them.
-    node = task.node
-    driver_internal_info = node.driver_internal_info
-    driver_internal_info['clean_steps'] = _get_cleaning_steps(task,
-                                                              enabled=True)
-    node.driver_internal_info = driver_internal_info
-    node.clean_step = {}
-    node.save()

@@ -21,10 +21,12 @@ from oslo_utils import importutils
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.drivers import base
+from ironic.drivers.modules import agent
 from ironic.drivers.modules import ipmitool
-from ironic.drivers.modules.irmc import deploy
+from ironic.drivers.modules.irmc import boot
 from ironic.drivers.modules.irmc import management
 from ironic.drivers.modules.irmc import power
+from ironic.drivers.modules import iscsi_deploy
 
 
 class IRMCVirtualMediaIscsiDriver(base.BaseDriver):
@@ -33,8 +35,7 @@ class IRMCVirtualMediaIscsiDriver(base.BaseDriver):
     This driver implements the `core` functionality using
     :class:ironic.drivers.modules.irmc.power.IRMCPower for power management.
     and
-    :class:ironic.drivers.modules.irmc.deploy.IRMCVirtualMediaIscsiDeploy for
-    deploy.
+    :class:ironic.drivers.modules.iscsi_deploy.ISCSIDeploy for deploy.
     """
 
     def __init__(self):
@@ -44,10 +45,11 @@ class IRMCVirtualMediaIscsiDriver(base.BaseDriver):
                 reason=_("Unable to import python-scciclient library"))
 
         self.power = power.IRMCPower()
-        self.deploy = deploy.IRMCVirtualMediaIscsiDeploy()
+        self.boot = boot.IRMCVirtualMediaBoot()
+        self.deploy = iscsi_deploy.ISCSIDeploy()
         self.console = ipmitool.IPMIShellinaboxConsole()
         self.management = management.IRMCManagement()
-        self.vendor = deploy.VendorPassthru()
+        self.vendor = iscsi_deploy.VendorPassthru()
 
 
 class IRMCVirtualMediaAgentDriver(base.BaseDriver):
@@ -67,7 +69,8 @@ class IRMCVirtualMediaAgentDriver(base.BaseDriver):
                 reason=_("Unable to import python-scciclient library"))
 
         self.power = power.IRMCPower()
-        self.deploy = deploy.IRMCVirtualMediaAgentDeploy()
+        self.boot = boot.IRMCVirtualMediaBoot()
+        self.deploy = agent.AgentDeploy()
         self.console = ipmitool.IPMIShellinaboxConsole()
         self.management = management.IRMCManagement()
-        self.vendor = deploy.IRMCVirtualMediaAgentVendorInterface()
+        self.vendor = agent.AgentVendorInterface()

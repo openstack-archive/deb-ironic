@@ -46,6 +46,7 @@ FLOATOPT = "FloatOpt"
 LISTOPT = "ListOpt"
 DICTOPT = "DictOpt"
 MULTISTROPT = "MultiStrOpt"
+PORTOPT = "PortOpt"
 
 OPT_TYPES = {
     STROPT: 'string value',
@@ -55,11 +56,12 @@ OPT_TYPES = {
     LISTOPT: 'list value',
     DICTOPT: 'dict value',
     MULTISTROPT: 'multi valued',
+    PORTOPT: 'port value',
 }
 
 OPTION_REGEX = re.compile(r"(%s)" % "|".join([STROPT, BOOLOPT, INTOPT,
                                               FLOATOPT, LISTOPT, DICTOPT,
-                                              MULTISTROPT]))
+                                              MULTISTROPT, PORTOPT]))
 
 PY_EXT = ".py"
 BASEDIR = os.path.abspath(os.path.join(os.path.dirname(__file__),
@@ -155,9 +157,7 @@ def _import_module(mod_str):
 def _is_in_group(opt, group):
     """Check if opt is in group."""
     for value in group._opts.values():
-        # NOTE(llu): Temporary workaround for bug #1262148, wait until
-        # newly released oslo.config support '==' operator.
-        if not(value['opt'] != opt):
+        if value['opt'] is opt:
             return True
     return False
 
@@ -215,7 +215,7 @@ def _list_opts(obj):
 def print_group_opts(group, opts_by_module):
     print("[%s]" % group)
     print('')
-    for mod, opts in opts_by_module:
+    for mod, opts in sorted(opts_by_module, key=lambda x: x[0]):
         print('#')
         print('# Options defined in %s' % mod)
         print('#')
@@ -278,12 +278,13 @@ def _print_opt(opt):
     print('#', "\n# ".join(textwrap.wrap(opt_help, WORDWRAP_WIDTH)))
     if opt.deprecated_opts:
         for deprecated_opt in opt.deprecated_opts:
-            if deprecated_opt.name:
-                deprecated_group = (deprecated_opt.group if
-                                    deprecated_opt.group else "DEFAULT")
-                print('# Deprecated group/name - [%s]/%s' %
-                      (deprecated_group,
-                       deprecated_opt.name))
+            deprecated_name = (deprecated_opt.name if
+                               deprecated_opt.name else opt_name)
+            deprecated_group = (deprecated_opt.group if
+                                deprecated_opt.group else "DEFAULT")
+            print('# Deprecated group/name - [%s]/%s' %
+                  (deprecated_group,
+                   deprecated_name))
     try:
         if opt_default is None:
             print('#%s=<None>' % opt_name)
@@ -304,6 +305,10 @@ def _print_type(opt_type, opt_name, opt_default):
         assert(isinstance(opt_default, bool))
         print('#%s=%s' % (opt_name, str(opt_default).lower()))
     elif opt_type == INTOPT:
+        assert(isinstance(opt_default, int) and
+               not isinstance(opt_default, bool))
+        print('#%s=%s' % (opt_name, opt_default))
+    elif opt_type == PORTOPT:
         assert(isinstance(opt_default, int) and
                not isinstance(opt_default, bool))
         print('#%s=%s' % (opt_name, opt_default))

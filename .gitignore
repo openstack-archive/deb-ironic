@@ -8,12 +8,16 @@
 _build
 doc/source/api/
 
+# release notes build
+releasenotes/build
+
 # Packages/installer info
 *.egg
 *.egg-info
 dist
 build
 eggs
+.eggs
 parts
 var
 sdist

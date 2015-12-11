@@ -254,7 +254,7 @@ def _parse_driver_info(node):
 
     address = info.get('ipmi_address')
     username = info.get('ipmi_username')
-    password = info.get('ipmi_password')
+    password = six.text_type(info.get('ipmi_password', ''))
     port = info.get('ipmi_terminal_port')
     priv_level = info.get('ipmi_priv_level', 'ADMINISTRATOR')
     bridging_type = info.get('ipmi_bridging', 'no')
@@ -274,11 +274,7 @@ def _parse_driver_info(node):
             {'version': protocol_version, 'valid_versions': valid_versions})
 
     if port is not None:
-        try:
-            port = int(port)
-        except ValueError:
-            raise exception.InvalidParameterValue(_(
-                "IPMI terminal port is not an integer."))
+        port = utils.validate_network_port(port, 'ipmi_terminal_port')
 
     # check if ipmi_bridging has proper value
     if bridging_type == 'no':
@@ -1095,7 +1091,7 @@ class IPMIShellinaboxConsole(base.ConsoleInterface):
 
         path = _console_pwfile_path(driver_info['uuid'])
         pw_file = console_utils.make_persistent_password_file(
-            path, driver_info['password'])
+            path, driver_info['password'] or '\0')
 
         ipmi_cmd = ("/:%(uid)s:%(gid)s:HOME:ipmitool -H %(address)s"
                     " -I lanplus -U %(user)s -f %(pwfile)s"

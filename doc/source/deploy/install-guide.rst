@@ -92,31 +92,25 @@ Configure the Identity service for the Bare Metal service
    The service uses this to authenticate with the Identity service.
    Use the ``service`` tenant and give the user the ``admin`` role::
 
-    keystone user-create --name=ironic --pass=IRONIC_PASSWORD --email=ironic@example.com
-    keystone user-role-add --user=ironic --tenant=service --role=admin
+    openstack user create --password IRONIC_PASSWORD \
+    --email ironic@example.com ironic
+    openstack role add --project service --user ironic admin
 
 #. You must register the Bare Metal service with the Identity service so that
    other OpenStack services can locate it. To register the service::
 
-    keystone service-create --name=ironic --type=baremetal \
-    --description="Ironic bare metal provisioning service"
+    openstack service create --name ironic --description \
+    "Ironic baremetal provisioning service" baremetal
 
 #. Use the ``id`` property that is returned from the Identity service when
    registering the service (above), to create the endpoint,
    and replace IRONIC_NODE with your Bare Metal service's API node::
 
-    keystone endpoint-create \
-    --service-id=the_service_id_above \
-    --publicurl=http://IRONIC_NODE:6385 \
-    --internalurl=http://IRONIC_NODE:6385 \
-    --adminurl=http://IRONIC_NODE:6385
-
-.. error::
-    If the keystone endpoint-create operation returns an error about not being
-    able to find the region "regionOne", the error is due to this keystone bug:
-    https://bugs.launchpad.net/keystone/+bug/1400589. As a workaround until
-    that bug is fixed you can force the creation of "RegionOne" by passing
-    --region=RegionOne as an argument to the keystone endpoint-create command.
+    openstack endpoint create --region RegionOne \
+    --publicurl http://IRONIC_NODE:6385 \
+    --internalurl http://IRONIC_NODE:6385 \
+    --adminurl http://IRONIC_NODE:6385 \
+    baremetal
 
 Set up the database for Bare Metal
 ----------------------------------
@@ -283,6 +277,10 @@ so that the Bare Metal service is configured for your needs.
     # [hostname|IP]:port. (string value)
     #glance_api_servers=<None>
 
+   Note: Swift backend for the Image service should be installed and configured
+   for ``agent_*`` drivers. Starting with Mitaka the Bare Metal service also
+   supports Ceph Object Gateway (RADOS Gateway) as the Image service's backend
+   (:ref:`radosgw support`).
 
 #. Create the Bare Metal service database tables::
 
@@ -617,15 +615,20 @@ them to the Image service:
    - Build the image your users will run (Ubuntu image has been taken as
      an example)::
 
-       disk-image-create ubuntu baremetal dhcp-all-interfaces grub2 -o my-image
+       Partition images:
+           disk-image-create ubuntu baremetal dhcp-all-interfaces grub2 -o my-image
 
-     The above command creates *my-image.qcow2*, *my-image.vmlinuz* and
-     *my-image.initrd* files. If you want to use Fedora image, replace
-     *ubuntu* with *fedora* in the above command. The *grub2* element is
-     only needed if local boot will be used to deploy *my-image.qcow2*,
-     otherwise the images *my-image.vmlinuz* and *my-image.initrd*
-     will be used for PXE booting after deploying the bare metal with
-     *my-image.qcow2*.
+       Whole disk images:
+           disk-image-create ubuntu vm dhcp-all-interfaces grub2 -o my-image
+
+     The partition image command creates *my-image.qcow2*, *my-image.vmlinuz* and
+     *my-image.initrd* files. The *grub2* element in the partition image creation
+     command is only needed if local boot will be used to deploy *my-image.qcow2*,
+     otherwise the images *my-image.vmlinuz* and *my-image.initrd* will be used for
+     PXE booting after deploying the bare metal with *my-image.qcow2*.
+
+     If you want to use Fedora image, replace *ubuntu* with *fedora* in the chosen
+     command.
 
    - To build the deploy image take a look at the `Building or
      downloading a deploy ramdisk image`_ section.
@@ -876,7 +879,7 @@ steps on the ironic conductor node to configure the PXE UEFI environment.
         GRUB_DIR=/tftpboot/EFI/centos
 
     Create directory GRUB_DIR
-      sudo mkdir $GRUB_DIR
+      sudo mkdir -p $GRUB_DIR
 
   This file is used to redirect grub to baremetal node specific config file.
   It redirects it to specific grub config file based on DHCP IP assigned to
@@ -988,9 +991,11 @@ on the Bare Metal service node(s) where ``ironic-conductor`` is running.
     Fedora/RHEL7/CentOS7:
         cp /usr/share/ipxe/undionly.kpxe /tftpboot
 
-    *Note: If the packaged version of the iPXE boot image doesn't
-    work for you or you want to build one from source take a look at
-    http://ipxe.org/download for more information on preparing iPXE image.*
+   .. note::
+      If the packaged version of the iPXE boot image doesn't work, you
+      can download a prebuilt one from http://boot.ipxe.org/undionly.kpxe
+      or build one image from source, see http://ipxe.org/download for
+      more information.
 
 #. Enable/Configure iPXE in the Bare Metal Service's configuration file
    (/etc/ironic/ironic.conf)::
@@ -1819,8 +1824,10 @@ The list of support hints is:
 * model (STRING): device identifier
 * vendor (STRING): device vendor
 * serial (STRING): disk serial number
-* wwn (STRING): unique storage identifier
 * size (INT): size of the device in GiB
+* wwn (STRING): unique storage identifier
+* wwn_with_extension (STRING): unique storage identifier with the vendor extension appended
+* wwn_vendor_extension (STRING): unique vendor storage identifier
 
 To associate one or more hints with a node, update the node's properties
 with a ``root_device`` key, for example::
@@ -2151,7 +2158,7 @@ CoreOS tools
         sudo dnf install docker gzip util-linux cpio findutils grep gpg
 
     Ubuntu 14.04 (trusty) or higher:
-        sudo apt-get install docker.io gzip uuid-runtime cpio findutils grep gpg
+        sudo apt-get install docker.io gzip uuid-runtime cpio findutils grep gnupg
 
 #. Change directory to ``imagebuild/coreos``::
 
@@ -2163,7 +2170,7 @@ CoreOS tools
         sudo systemctl start docker
 
     Ubuntu:
-        sudo service docker.io start
+        sudo service docker start
 
 #. Create the image::
 

@@ -8,14 +8,13 @@
 # KATO Tomoyuki <kato.tomoyuki@jp.fujitsu.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: ironic 4.2.1.dev18\n"
+"Project-Id-Version: ironic 4.2.1.dev157\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-02 06:31+0000\n"
-"PO-Revision-Date: 2015-10-02 02:51+0000\n"
-"Last-Translator: Akihiro Motoki <amotoki@gmail.com>\n"
+"POT-Creation-Date: 2015-10-23 06:32+0000\n"
+"PO-Revision-Date: 2015-10-09 05:15+0000\n"
+"Last-Translator: KATO Tomoyuki <kato.tomoyuki@jp.fujitsu.com>\n"
 "Language: ja\n"
-"Language-Team: Japanese (http://www.transifex.com/openstack/ironic/language/"
-"ja/)\n"
+"Language-Team: Japanese\n"
 "Plural-Forms: nplurals=1; plural=0\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -618,10 +617,6 @@ msgstr ""
 "DRAC クライアントで障害が発生しました。最終エラー (cURL エラーコード): "
 "%(last_error)s、エラー文字列: \"%(fault_string)s\"、応答コード: "
 "%(response_code)s"
-
-#, python-format
-msgid "DRAC operation failed. Message: %(message)s"
-msgstr "DRAC 操作が失敗しました。メッセージ: %(message)s"
 
 #, python-format
 msgid ""
@@ -1727,10 +1722,6 @@ msgid "Root device hint \"size\" is not an integer value."
 msgstr "ルートデバイスヒント「size」が整数値ではありません。"
 
 #, python-format
-msgid "SNMP community.  Required for versions %(v1)s, %(v2c)s"
-msgstr "SNMP コミュニティー。バージョン %(v1)s および %(v2c)s に必須。"
-
-#, python-format
 msgid "SNMP driver requires snmp_community to be set for version %s."
 msgstr ""
 "SNMP ドライバーのバージョン %s は snmp_community の設定を必要とします。"
@@ -1754,13 +1745,6 @@ msgstr "SNMP の操作「%(operation)s」が失敗しました: %(error)s"
 #, python-format
 msgid "SNMP port, default %(port)d"
 msgstr "SNMP ポート。デフォルトは %(port)d。"
-
-#, python-format
-msgid ""
-"SNMP protocol version: %(v1)s, %(v2c)s, %(v3)s  (optional, default %(v1)s)"
-msgstr ""
-"SNMP プロトコル・バージョン: %(v1)s、%(v2c)s、または %(v3)s (オプション。デ"
-"フォルトは %(v1)s)"
 
 #, python-format
 msgid "SNMP security name.  Required for version %(v3)s"
@@ -2022,6 +2006,9 @@ msgstr ""
 
 msgid "The provided endpoint is invalid"
 msgstr "指定されたエンドポイントが無効です"
+
+msgid "The region used for getting endpoints of OpenStack services."
+msgstr "OpenStack サービスのエンドポイントを取得するために使用するリージョン。"
 
 #, python-format
 msgid ""
@@ -2389,9 +2376,6 @@ msgstr ""
 "image_source の image_checksum をノード %s の instance_info で指定する必要が"
 "あります"
 
-msgid "ironic-conductor node's TFTP root path."
-msgstr "ironic-conductor ノードの TFTP ルートパス。"
-
 msgid ""
 "ironic-inspector HTTP endpoint. If this is not set, the ironic-inspector "
 "client default (http://127.0.0.1:5050) will be used."
@@ -2405,9 +2389,6 @@ msgstr "ironic-inspector による検査に失敗しました: %s"
 
 msgid "ironic-inspector support is disabled"
 msgstr "ironic-inspector のサポートが無効化されています"
-
-msgid "libvirt URI"
-msgstr "libvirt URI"
 
 msgid ""
 "local IPMB address for bridged requests. Used only if ipmi_bridging is set "

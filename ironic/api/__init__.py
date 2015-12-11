@@ -21,10 +21,9 @@ API_SERVICE_OPTS = [
     cfg.StrOpt('host_ip',
                default='0.0.0.0',
                help=_('The IP address on which ironic-api listens.')),
-    cfg.IntOpt('port',
-               default=6385,
-               min=1, max=65535,
-               help=_('The TCP port on which ironic-api listens.')),
+    cfg.PortOpt('port',
+                default=6385,
+                help=_('The TCP port on which ironic-api listens.')),
     cfg.IntOpt('max_limit',
                default=1000,
                help=_('The maximum number of items returned in a single '
@@ -37,6 +36,19 @@ API_SERVICE_OPTS = [
                       "host URL. If the API is operating behind a proxy, you "
                       "will want to change this to represent the proxy's URL. "
                       "Defaults to None.")),
+    cfg.IntOpt('api_workers',
+               help=_('Number of workers for OpenStack Ironic API service. '
+                      'The default is equal to the number of CPUs available '
+                      'if that can be determined, else a default worker '
+                      'count of 1 is returned.')),
+    cfg.BoolOpt('enable_ssl_api',
+                default=False,
+                help=_("Enable the integrated stand-alone API to service "
+                       "requests via HTTPS instead of HTTP. If there is a "
+                       "front-end service performing HTTPS offloading from "
+                       "the service, this option should be False; note, you "
+                       "will want to change public API endpoint to represent "
+                       "SSL termination URL with 'public_endpoint' option.")),
 ]
 
 CONF = cfg.CONF
