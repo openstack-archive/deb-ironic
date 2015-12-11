@@ -1,6 +1,7 @@
 ironic (1:4.3.0-1) experimental; urgency=medium
 
   * New upstream release.
+  * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 11 Dec 2015 09:25:18 +0100
 
