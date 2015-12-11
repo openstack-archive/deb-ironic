@@ -1,3 +1,10 @@
+ironic (1:4.2.2-1) unstable; urgency=high
+
+  * New upstream release:
+    - Fixes CVE-2015-7514: Ironic does not honor clean steps (Closes: #807269).
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 11 Dec 2015 11:00:40 +0100
+
 ironic (1:4.2.1-4) unstable; urgency=medium
 
   * Added missing q-text-as-data depends in ironic-api.
