@@ -78,8 +78,8 @@ Build-Depends-Indep: alembic (>= 0.8.0),
                      testrepository,
                      websockify (>= 0.6.1),
 Standards-Version: 3.9.6
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/ironic.git;a=summary
-Vcs-Git: git://anonscm.debian.org/openstack/ironic.git
+Vcs-Browser: https://anonscm.debian.org/cgit/openstack/ironic.git/
+Vcs-Git: https://anonscm.debian.org/git/openstack/ironic.git
 Homepage: https://github.com/openstack/ironic
 
 Package: python-ironic
