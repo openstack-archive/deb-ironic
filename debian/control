@@ -80,7 +80,7 @@ Build-Depends-Indep: alembic (>= 0.8.0),
 Standards-Version: 3.9.6
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/ironic.git;a=summary
 Vcs-Git: git://anonscm.debian.org/openstack/ironic.git
-Homepage: http://github.com/openstack/ironic
+Homepage: https://github.com/openstack/ironic
 
 Package: python-ironic
 Architecture: all
