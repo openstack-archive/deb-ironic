@@ -1,2 +1,3 @@
 adds-alembic.ini-in-MANIFEST.in.patch
 allow-any-pytz-version.patch
+Tolerate_roles_in_context.RequestContext.patch
