@@ -1,16 +1,14 @@
-ironic (1:4.3.0-2) UNRELEASED; urgency=medium
-
-  * Fixed homepage (https).
-  * Fixed VCS URLs (https).
-
- -- Ondřej Nový <novy@ondrej.org>  Sun, 28 Feb 2016 15:26:26 +0100
-
 ironic (1:4.3.0-1) experimental; urgency=medium
 
+  [ Thomas Goirand ]
   * New upstream release.
   * Fixed (build-)depends for this release.
 
- -- Thomas Goirand <zigo@debian.org>  Fri, 11 Dec 2015 09:25:18 +0100
+  [ Ondřej Nový ]
+  * Fixed homepage (https).
+  * Fixed VCS URLs (https).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 09 Mar 2016 10:27:03 +0000
 
 ironic (1:4.2.1-4) unstable; urgency=medium
 
