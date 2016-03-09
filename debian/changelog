@@ -6,6 +6,7 @@ ironic (1:4.3.0-1) experimental; urgency=medium
   * Added patch:
     - Tolerate_roles_in_context.RequestContext.patch
   * Fixed debian/copyright ordering.
+  * Standards-Version: 3.9.7 (no change).
 
   [ Ondřej Nový ]
   * Fixed homepage (https).
