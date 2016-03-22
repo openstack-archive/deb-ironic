@@ -48,7 +48,7 @@ endif
 
 override_dh_sphinxdoc:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
-	PYTHONPATH=$(CURDIR) sphinx-build doc/source $(CURDIR)/debian/ironic-doc/usr/share/doc/ironic-doc/html
+	PYTHONPATH=$(CURDIR) sphinx-build -b html doc/source $(CURDIR)/debian/ironic-doc/usr/share/doc/ironic-doc/html
 ## This is a workaround to avoid FTBFS, though a real fix should be found.
 	mkdir -p $(CURDIR)/debian/ironic-doc/usr/share/doc/ironic-doc/html/_static
 	touch $(CURDIR)/debian/ironic-doc/usr/share/doc/ironic-doc/html/_static/toggle.js
