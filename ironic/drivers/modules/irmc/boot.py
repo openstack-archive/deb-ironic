@@ -20,6 +20,7 @@ import os
 import shutil
 import tempfile
 
+from ironic_lib import utils as ironic_utils
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import importutils
@@ -32,7 +33,6 @@ from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.common import images
 from ironic.common import states
-from ironic.common import utils
 from ironic.conductor import utils as manager_utils
 from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
@@ -57,7 +57,9 @@ opts = [
                help=_('IP of remote image server')),
     cfg.StrOpt('remote_image_share_type',
                default='CIFS',
-               help=_('Share type of virtual media, either "NFS" or "CIFS"')),
+               choices=['CIFS', 'NFS'],
+               ignore_case=True,
+               help=_('Share type of virtual media')),
     cfg.StrOpt('remote_image_share_name',
                default='share',
                help=_('share name of remote_image_server')),
@@ -81,8 +83,6 @@ REQUIRED_PROPERTIES = {
 
 COMMON_PROPERTIES = REQUIRED_PROPERTIES
 
-SUPPORTED_SHARE_TYPES = ('nfs', 'cifs')
-
 
 def _parse_config_option():
     """Parse config file options.
@@ -97,11 +97,6 @@ def _parse_config_option():
             _("Value '%s' for remote_image_share_root isn't a directory "
               "or doesn't exist.") %
             CONF.irmc.remote_image_share_root)
-    if CONF.irmc.remote_image_share_type.lower() not in SUPPORTED_SHARE_TYPES:
-        error_msgs.append(
-            _("Value '%s' for remote_image_share_type is not supported "
-              "value either 'NFS' or 'CIFS'.") %
-            CONF.irmc.remote_image_share_type)
     if error_msgs:
         msg = (_("The following errors were encountered while parsing "
                  "config file:%s") % error_msgs)
@@ -421,7 +416,7 @@ def _remove_share_file(share_filename):
     """
     share_fullpathname = os.path.join(
         CONF.irmc.remote_image_share_name, share_filename)
-    utils.unlink_without_raise(share_fullpathname)
+    ironic_utils.unlink_without_raise(share_fullpathname)
 
 
 def _attach_virtual_cd(node, bootable_iso_filename):

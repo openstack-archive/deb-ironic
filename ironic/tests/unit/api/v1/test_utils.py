@@ -56,6 +56,24 @@ class TestApiUtils(base.TestCase):
                           utils.validate_sort_dir,
                           'fake-sort')
 
+    def test_get_patch_value_no_path(self):
+        patch = [{'path': '/name', 'op': 'update', 'value': 'node-0'}]
+        path = '/invalid'
+        value = utils.get_patch_value(patch, path)
+        self.assertIsNone(value)
+
+    def test_get_patch_value_remove(self):
+        patch = [{'path': '/name', 'op': 'remove'}]
+        path = '/name'
+        value = utils.get_patch_value(patch, path)
+        self.assertIsNone(value)
+
+    def test_get_patch_value_success(self):
+        patch = [{'path': '/name', 'op': 'replace', 'value': 'node-x'}]
+        path = '/name'
+        value = utils.get_patch_value(patch, path)
+        self.assertEqual('node-x', value)
+
     def test_check_for_invalid_fields(self):
         requested = ['field_1', 'field_3']
         supported = ['field_1', 'field_2', 'field_3']
@@ -78,6 +96,76 @@ class TestApiUtils(base.TestCase):
         mock_request.version.minor = 7
         self.assertRaises(exception.NotAcceptable,
                           utils.check_allow_specify_fields, ['foo'])
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_specify_driver(self, mock_request):
+        mock_request.version.minor = 16
+        self.assertIsNone(utils.check_allow_specify_driver(['fake']))
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_specify_driver_fail(self, mock_request):
+        mock_request.version.minor = 15
+        self.assertRaises(exception.NotAcceptable,
+                          utils.check_allow_specify_driver, ['fake'])
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_manage_verbs(self, mock_request):
+        mock_request.version.minor = 4
+        utils.check_allow_management_verbs('manage')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_manage_verbs_fail(self, mock_request):
+        mock_request.version.minor = 3
+        self.assertRaises(exception.NotAcceptable,
+                          utils.check_allow_management_verbs, 'manage')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_provide_verbs(self, mock_request):
+        mock_request.version.minor = 4
+        utils.check_allow_management_verbs('provide')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_provide_verbs_fail(self, mock_request):
+        mock_request.version.minor = 3
+        self.assertRaises(exception.NotAcceptable,
+                          utils.check_allow_management_verbs, 'provide')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_inspect_verbs(self, mock_request):
+        mock_request.version.minor = 6
+        utils.check_allow_management_verbs('inspect')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_inspect_verbs_fail(self, mock_request):
+        mock_request.version.minor = 5
+        self.assertRaises(exception.NotAcceptable,
+                          utils.check_allow_management_verbs, 'inspect')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_abort_verbs(self, mock_request):
+        mock_request.version.minor = 13
+        utils.check_allow_management_verbs('abort')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_abort_verbs_fail(self, mock_request):
+        mock_request.version.minor = 12
+        self.assertRaises(exception.NotAcceptable,
+                          utils.check_allow_management_verbs, 'abort')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_clean_verbs(self, mock_request):
+        mock_request.version.minor = 15
+        utils.check_allow_management_verbs('clean')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_clean_verbs_fail(self, mock_request):
+        mock_request.version.minor = 14
+        self.assertRaises(exception.NotAcceptable,
+                          utils.check_allow_management_verbs, 'clean')
+
+    @mock.patch.object(pecan, 'request', spec_set=['version'])
+    def test_check_allow_unknown_verbs(self, mock_request):
+        utils.check_allow_management_verbs('rebuild')
 
     @mock.patch.object(pecan, 'request', spec_set=['version'])
     def test_allow_links_node_states_and_driver_properties(self, mock_request):

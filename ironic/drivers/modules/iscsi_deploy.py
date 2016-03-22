@@ -15,6 +15,8 @@
 
 import os
 
+from ironic_lib import disk_utils
+from ironic_lib import utils as ironic_utils
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import fileutils
@@ -241,7 +243,7 @@ def check_image_size(task):
     """
     i_info = parse_instance_info(task.node)
     image_path = _get_image_file_path(task.node.uuid)
-    image_mb = deploy_utils.get_image_mb(image_path)
+    image_mb = disk_utils.get_image_mb(image_path)
     root_mb = 1024 * int(i_info['root_gb'])
     if image_mb > root_mb:
         msg = (_('Root partition is too small for requested image. Image '
@@ -280,7 +282,7 @@ def destroy_images(node_uuid):
 
     :param node_uuid: the uuid of the ironic node.
     """
-    utils.unlink_without_raise(_get_image_file_path(node_uuid))
+    ironic_utils.unlink_without_raise(_get_image_file_path(node_uuid))
     utils.rmtree_without_raise(_get_image_dir_path(node_uuid))
     InstanceImageCache().clean_up()
 
@@ -316,6 +318,11 @@ def get_deploy_info(node, **kwargs):
                        'preserve_ephemeral': i_info['preserve_ephemeral'],
                        'boot_option': deploy_utils.get_boot_option(node),
                        'boot_mode': _get_boot_mode(node)})
+
+        # Append disk label if specified
+        disk_label = deploy_utils.get_disk_label(node)
+        if disk_label is not None:
+            params['disk_label'] = disk_label
 
     missing = [key for key in params if params[key] is None]
     if missing:
@@ -749,7 +756,9 @@ class ISCSIDeploy(base.DeployInterface):
         """Get the list of clean steps from the agent.
 
         :param task: a TaskManager object containing the node
-
+        :raises NodeCleaningFailure: if the clean steps are not yet
+            available (cached), for example, when a node has just been
+            enrolled and has not been cleaned yet.
         :returns: A list of clean step dictionaries. If bash ramdisk is
             used for this node, it returns an empty list.
         """

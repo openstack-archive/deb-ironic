@@ -18,6 +18,8 @@
 import os
 import tempfile
 
+from ironic_lib import disk_utils
+from ironic_lib import utils as ironic_utils
 import mock
 from oslo_config import cfg
 from oslo_utils import fileutils
@@ -344,7 +346,7 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         mgr_utils.mock_the_extension_manager(driver="fake_pxe")
         self.node = obj_utils.create_test_node(self.context, **n)
 
-    @mock.patch.object(deploy_utils, 'get_image_mb', autospec=True)
+    @mock.patch.object(disk_utils, 'get_image_mb', autospec=True)
     def test_check_image_size(self, get_image_mb_mock):
         get_image_mb_mock.return_value = 1000
         with task_manager.acquire(self.context, self.node.uuid,
@@ -354,7 +356,7 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             get_image_mb_mock.assert_called_once_with(
                 iscsi_deploy._get_image_file_path(task.node.uuid))
 
-    @mock.patch.object(deploy_utils, 'get_image_mb', autospec=True)
+    @mock.patch.object(disk_utils, 'get_image_mb', autospec=True)
     def test_check_image_size_fails(self, get_image_mb_mock):
         get_image_mb_mock.return_value = 1025
         with task_manager.acquire(self.context, self.node.uuid,
@@ -385,7 +387,7 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
                                       'disk'),
                          image_path)
 
-    @mock.patch.object(utils, 'unlink_without_raise', autospec=True)
+    @mock.patch.object(ironic_utils, 'unlink_without_raise', autospec=True)
     @mock.patch.object(utils, 'rmtree_without_raise', autospec=True)
     @mock.patch.object(iscsi_deploy, 'InstanceImageCache', autospec=True)
     def test_destroy_images(self, mock_cache, mock_rmtree, mock_unlink):
@@ -698,37 +700,42 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             mock_image_cache.return_value.clean_up.assert_called_once_with()
             self.assertEqual(uuid_dict_returned, retval)
 
-    def test_get_deploy_info_boot_option_default(self):
+    def _test_get_deploy_info(self, extra_instance_info=None):
+        if extra_instance_info is None:
+            extra_instance_info = {}
+
         instance_info = self.node.instance_info
         instance_info['deploy_key'] = 'key'
+        instance_info.update(extra_instance_info)
         self.node.instance_info = instance_info
         kwargs = {'address': '1.1.1.1', 'iqn': 'target-iqn', 'key': 'key'}
         ret_val = iscsi_deploy.get_deploy_info(self.node, **kwargs)
         self.assertEqual('1.1.1.1', ret_val['address'])
         self.assertEqual('target-iqn', ret_val['iqn'])
+        return ret_val
+
+    def test_get_deploy_info_boot_option_default(self):
+        ret_val = self._test_get_deploy_info()
         self.assertEqual('netboot', ret_val['boot_option'])
 
     def test_get_deploy_info_netboot_specified(self):
-        instance_info = self.node.instance_info
-        instance_info['deploy_key'] = 'key'
-        instance_info['capabilities'] = {'boot_option': 'netboot'}
-        self.node.instance_info = instance_info
-        kwargs = {'address': '1.1.1.1', 'iqn': 'target-iqn', 'key': 'key'}
-        ret_val = iscsi_deploy.get_deploy_info(self.node, **kwargs)
-        self.assertEqual('1.1.1.1', ret_val['address'])
-        self.assertEqual('target-iqn', ret_val['iqn'])
+        capabilities = {'capabilities': {'boot_option': 'netboot'}}
+        ret_val = self._test_get_deploy_info(extra_instance_info=capabilities)
         self.assertEqual('netboot', ret_val['boot_option'])
 
     def test_get_deploy_info_localboot(self):
-        instance_info = self.node.instance_info
-        instance_info['deploy_key'] = 'key'
-        instance_info['capabilities'] = {'boot_option': 'local'}
-        self.node.instance_info = instance_info
-        kwargs = {'address': '1.1.1.1', 'iqn': 'target-iqn', 'key': 'key'}
-        ret_val = iscsi_deploy.get_deploy_info(self.node, **kwargs)
-        self.assertEqual('1.1.1.1', ret_val['address'])
-        self.assertEqual('target-iqn', ret_val['iqn'])
+        capabilities = {'capabilities': {'boot_option': 'local'}}
+        ret_val = self._test_get_deploy_info(extra_instance_info=capabilities)
         self.assertEqual('local', ret_val['boot_option'])
+
+    def test_get_deploy_info_disk_label(self):
+        capabilities = {'capabilities': {'disk_label': 'msdos'}}
+        ret_val = self._test_get_deploy_info(extra_instance_info=capabilities)
+        self.assertEqual('msdos', ret_val['disk_label'])
+
+    def test_get_deploy_info_not_specified(self):
+        ret_val = self._test_get_deploy_info()
+        self.assertNotIn('disk_label', ret_val)
 
     @mock.patch.object(iscsi_deploy, 'continue_deploy', autospec=True)
     @mock.patch.object(iscsi_deploy, 'build_deploy_ramdisk_options',

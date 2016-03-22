@@ -32,7 +32,6 @@ import netaddr
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
-from oslo_utils import excutils
 from oslo_utils import timeutils
 import paramiko
 import pytz
@@ -231,6 +230,43 @@ def is_hostname_safe(hostname):
     return _is_hostname_safe_re.match(hostname) is not None
 
 
+def is_valid_no_proxy(no_proxy):
+    """Check no_proxy validity
+
+    Check if no_proxy value that will be written to environment variable by
+    ironic-python-agent is valid.
+
+    :param no_proxy: the value that requires validity check. Expected to be a
+        comma-separated list of host names, IP addresses and domain names
+        (with optional :port).
+    :returns: True if no_proxy is valid, False otherwise.
+    """
+    if not isinstance(no_proxy, six.string_types):
+        return False
+    hostname_re = re.compile('(?!-)[A-Z\d-]{1,63}(?<!-)$', re.IGNORECASE)
+    for hostname in no_proxy.split(','):
+        hostname = hostname.strip().split(':')[0]
+        if not hostname:
+            continue
+        max_length = 253
+        if hostname.startswith('.'):
+            # It is allowed to specify a dot in the beginning of the value to
+            # indicate that it is a domain name, which means there will be at
+            # least one additional character in full hostname. *. is also
+            # possible but may be not supported by some clients, so is not
+            # considered valid here.
+            hostname = hostname[1:]
+            max_length = 251
+
+        if len(hostname) > max_length:
+            return False
+
+        if not all(hostname_re.match(part) for part in hostname.split('.')):
+            return False
+
+    return True
+
+
 def validate_and_normalize_mac(address):
     """Validate a MAC address and return normalized form.
 
@@ -354,9 +390,36 @@ def file_open(*args, **kwargs):
     return file(*args, **kwargs)
 
 
-def hash_file(file_like_object):
-    """Generate a hash for the contents of a file."""
-    checksum = hashlib.sha1()
+def _get_hash_object(hash_algo_name):
+    """Create a hash object based on given algorithm.
+
+    :param hash_algo_name: name of the hashing algorithm.
+    :raises: InvalidParameterValue, on unsupported or invalid input.
+    :returns: a hash object based on the given named algorithm.
+    """
+    algorithms = (hashlib.algorithms_guaranteed if six.PY3
+                  else hashlib.algorithms)
+    if hash_algo_name not in algorithms:
+        msg = (_("Unsupported/Invalid hash name '%s' provided.")
+               % hash_algo_name)
+        LOG.error(msg)
+        raise exception.InvalidParameterValue(msg)
+
+    return getattr(hashlib, hash_algo_name)()
+
+
+def hash_file(file_like_object, hash_algo='md5'):
+    """Generate a hash for the contents of a file.
+
+    It returns a hash of the file object as a string of double length,
+    containing only hexadecimal digits. It supports all the algorithms
+    hashlib does.
+    :param file_like_object: file like object whose hash to be calculated.
+    :param hash_algo: name of the hashing strategy, default being 'md5'.
+    :raises: InvalidParameterValue, on unsupported or invalid input.
+    :returns: a condensed digest of the bytes of contents.
+    """
+    checksum = _get_hash_object(hash_algo)
     for chunk in iter(lambda: file_like_object.read(32768), b''):
         checksum.update(chunk)
     return checksum.hexdigest()
@@ -424,60 +487,6 @@ def tempdir(**kwargs):
             shutil.rmtree(tmpdir)
         except OSError as e:
             LOG.error(_LE('Could not remove tmpdir: %s'), e)
-
-
-def mkfs(fs, path, label=None):
-    """Format a file or block device
-
-    :param fs: Filesystem type (examples include 'swap', 'ext3', 'ext4'
-               'btrfs', etc.)
-    :param path: Path to file or block device to format
-    :param label: Volume label to use
-    """
-    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
-    # planned to be deleted here. If need to modify this function, please also
-    # do the same modification in ironic-lib
-    if fs == 'swap':
-        args = ['mkswap']
-    else:
-        args = ['mkfs', '-t', fs]
-    # add -F to force no interactive execute on non-block device.
-    if fs in ('ext3', 'ext4'):
-        args.extend(['-F'])
-    if label:
-        if fs in ('msdos', 'vfat'):
-            label_opt = '-n'
-        else:
-            label_opt = '-L'
-        args.extend([label_opt, label])
-    args.append(path)
-    try:
-        execute(*args, run_as_root=True, use_standard_locale=True)
-    except processutils.ProcessExecutionError as e:
-        with excutils.save_and_reraise_exception() as ctx:
-            if os.strerror(errno.ENOENT) in e.stderr:
-                ctx.reraise = False
-                LOG.exception(_LE('Failed to make file system. '
-                                  'File system %s is not supported.'), fs)
-                raise exception.FileSystemNotSupported(fs=fs)
-            else:
-                LOG.exception(_LE('Failed to create a file system '
-                                  'in %(path)s. Error: %(error)s'),
-                              {'path': path, 'error': e})
-
-
-def unlink_without_raise(path):
-    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
-    # planned to be deleted here. If need to modify this function, please also
-    # do the same modification in ironic-lib
-    try:
-        os.unlink(path)
-    except OSError as e:
-        if e.errno == errno.ENOENT:
-            return
-        else:
-            LOG.warning(_LW("Failed to unlink %(path)s, error: %(e)s"),
-                        {'path': path, 'e': e})
 
 
 def rmtree_without_raise(path):
@@ -549,32 +558,6 @@ def umount(loc, *args):
     """
     args = ('umount', ) + args + (loc, )
     execute(*args, run_as_root=True, check_exit_code=[0])
-
-
-def dd(src, dst, *args):
-    """Execute dd from src to dst.
-
-    :param src: the input file for dd command.
-    :param dst: the output file for dd command.
-    :param args: a tuple containing the arguments to be
-        passed to dd command.
-    :raises: processutils.ProcessExecutionError if it failed
-        to run the process.
-    """
-    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
-    # planned to be deleted here. If need to modify this function, please also
-    # do the same modification in ironic-lib
-    LOG.debug("Starting dd process.")
-    execute('dd', 'if=%s' % src, 'of=%s' % dst, *args,
-            use_standard_locale=True, run_as_root=True, check_exit_code=[0])
-
-
-def is_http_url(url):
-    # NOTE(jlvillal): This function has been moved to ironic-lib. And is
-    # planned to be deleted here. If need to modify this function, please also
-    # do the same modification in ironic-lib
-    url = url.lower()
-    return url.startswith('http://') or url.startswith('https://')
 
 
 def check_dir(directory_to_check=None, required_space=1):

@@ -20,6 +20,10 @@ management operations on the baremetal node (instead of using IPMI). Unlike with
 iSCSI deploy in Agent deploy, the ramdisk is responsible for writing the image to
 the disk, instead of the conductor.
 
+The CIMC drivers can use the Ironic Inspector service for in-band inspection of
+equipment. For more information see the `Ironic Inspector documentation
+<http://docs.openstack.org/developer/ironic-inspector/>`_.
+
 Prerequisites
 =============
 
@@ -34,16 +38,9 @@ Install the ``ImcSdk`` module
   Install the ``ImcSdk`` module on the Ironic conductor node. Required version is
   0.7.2.
 
-#. Download the tar.gz from: https://communities.cisco.com/docs/DOC-56257
-
-#. Unpack it::
-
-   $ tar xvf ImcSdk-0.7.2.tar.gz
-
 #. Install it::
 
-   $ cd ImcSdk-0.7.2
-   $ sudo python setup.py install
+   $ pip install "ImcSdk>=0.7.2"
 
 Tested Platforms
 ~~~~~~~~~~~~~~~~

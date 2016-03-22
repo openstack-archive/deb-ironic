@@ -22,27 +22,18 @@ CONF = cfg.CONF
 
 
 class TestWSGIService(base.TestCase):
-
-    @mock.patch.object(service.app, 'VersionSelectorApplication')
-    def test_reset_pool_size_to_default(self, mock_app):
-        test_service = service.WSGIService("test_service")
-        test_service.start()
-
-        # Stopping the service, which in turn sets pool size to 0
-        test_service.stop()
-        self.assertEqual(0, test_service.server._pool.size)
-
-        # Resetting pool size to default
-        test_service.reset()
-        test_service.start()
-        self.assertTrue(test_service.server._pool.size > 0)
-        self.assertTrue(mock_app.called)
-
     @mock.patch.object(service.wsgi, 'Server')
     def test_workers_set_default(self, wsgi_server):
-        test_service = service.WSGIService("ironic_api")
+        service_name = "ironic_api"
+        test_service = service.WSGIService(service_name)
         self.assertEqual(processutils.get_worker_count(),
                          test_service.workers)
+        wsgi_server.assert_called_once_with(CONF, service_name,
+                                            test_service.app,
+                                            host='0.0.0.0',
+                                            port=6385,
+                                            use_ssl=False,
+                                            logger_name=service_name)
 
     @mock.patch.object(service.wsgi, 'Server')
     def test_workers_set_correct_setting(self, wsgi_server):
@@ -67,9 +58,11 @@ class TestWSGIService(base.TestCase):
     @mock.patch.object(service.wsgi, 'Server')
     def test_wsgi_service_with_ssl_enabled(self, wsgi_server):
         self.config(enable_ssl_api=True, group='api')
+        service_name = 'ironic_api'
         srv = service.WSGIService('ironic_api', CONF.api.enable_ssl_api)
-        wsgi_server.assert_called_once_with(CONF, 'ironic_api',
+        wsgi_server.assert_called_once_with(CONF, service_name,
                                             srv.app,
                                             host='0.0.0.0',
                                             port=6385,
-                                            use_ssl=True)
+                                            use_ssl=True,
+                                            logger_name=service_name)

@@ -64,9 +64,12 @@ additional functionality:
   introspection by PXE booting unregistered hardware into a "discovery ramdisk".
 - diskimage-builder_; May be used to customize machine images, create and
   discovery deploy ramdisks, if necessary.
+- bifrost_; a set of Ansible playbooks that automates the task of deploying a
+  base image onto a set of known hardware using ironic.
 
 .. _ironic-inspector: https://github.com/openstack/ironic-inspector
 .. _diskimage-builder: https://github.com/openstack/diskimage-builder
+.. _bifrost: https://github.com/openstack/bifrost
 
 
 .. todo: include coreos-image-builder reference here, once the split is done
@@ -160,6 +163,14 @@ Although some configuration options are mentioned here, it is recommended that
 you review all the `available options <https://git.openstack.org/cgit/openstack/ironic/tree/etc/ironic/ironic.conf.sample>`_
 so that the Bare Metal service is configured for your needs.
 
+It is possible to set up an ironic-api and an ironic-conductor services on the
+same host or different hosts. Users also can add new ironic-conductor hosts
+to deal with an increasing number of bare metal nodes. But the additional ironic-conductor
+services should be at the same version as that of existing ironic-conductor services.
+
+Configuring ironic-api service
+------------------------------
+
 #. The Bare Metal service stores information in a database. This guide uses the
    MySQL database that is used by other OpenStack services.
 
@@ -169,17 +180,21 @@ so that the Bare Metal service is configured for your needs.
 
     [database]
     ...
-
     # The SQLAlchemy connection string used to connect to the
     # database (string value)
-    #connection=<None>
     connection = mysql+pymysql://ironic:IRONIC_DBPASSWORD@DB_IP/ironic?charset=utf8
 
-#. Configure the Bare Metal service to use the RabbitMQ message broker by
+#. Configure the ironic-api service to use the RabbitMQ message broker by
    setting one or more of these options. Replace RABBIT_HOST with the
-   address of the RabbitMQ server.::
+   address of the RabbitMQ server::
 
     [DEFAULT]
+    ...
+    # The messaging driver to use, defaults to rabbit. Other
+    # drivers include qpid and zmq. (string value)
+    #rpc_backend=rabbit
+
+    [oslo_messaging_rabbit]
     ...
     # The RabbitMQ broker address where a single node is used
     # (string value)
@@ -191,116 +206,190 @@ so that the Bare Metal service is configured for your needs.
     # The RabbitMQ password (string value)
     #rabbit_password=guest
 
-    # The RabbitMQ virtual host (string value)
-    #rabbit_virtual_host=/
-
-#. Configure the Bare Metal service to use these credentials with the Identity
+#. Configure the ironic-api service to use these credentials with the Identity
    service. Replace IDENTITY_IP with the IP of the Identity server, and
    replace IRONIC_PASSWORD with the password you chose for the ``ironic``
    user in the Identity service::
 
     [DEFAULT]
     ...
-    # Method to use for authentication: noauth or keystone.
-    # (string value)
-    auth_strategy=keystone
+    # Authentication strategy used by ironic-api: one of
+    # "keystone" or "noauth". "noauth" should not be used in a
+    # production environment because all authentication will be
+    # disabled. (string value)
+    #auth_strategy=keystone
 
-    ...
     [keystone_authtoken]
-
-    # Host providing the admin Identity API endpoint (string
-    # value)
-    #auth_host=127.0.0.1
-    auth_host=IDENTITY_IP
-
-    # Port of the admin Identity API endpoint (integer value)
-    #auth_port=35357
-
-    # Protocol of the admin Identity API endpoint(http or https)
-    # (string value)
-    #auth_protocol=https
-
+    ...
     # Complete public Identity API endpoint (string value)
-    #auth_uri=<None>
     auth_uri=http://IDENTITY_IP:5000/
 
-    # Keystone account username (string value)
-    #admin_user=<None>
+    # Complete admin Identity API endpoint. This should specify
+    # the unversioned root endpoint e.g. https://localhost:35357/
+    # (string value)
+    identity_uri=http://IDENTITY_IP:35357/
+
+    # Service username. (string value)
     admin_user=ironic
 
-    # Keystone account password (string value)
-    #admin_password=<None>
+    # Service account password. (string value)
     admin_password=IRONIC_PASSWORD
 
-    # Keystone service account tenant name to validate user tokens
-    # (string value)
-    #admin_tenant_name=admin
+    # Service tenant name. (string value)
     admin_tenant_name=service
-
-    # Directory used to cache files related to PKI tokens (string
-    # value)
-    #signing_dir=<None>
-
-#. Set the URL (replace NEUTRON_IP) for connecting to the Networking service,
-   to be the Networking service endpoint::
-
-    [neutron]
-
-    # URL for connecting to neutron. (string value)
-    #url=http://127.0.0.1:9696
-    url=http://NEUTRON_IP:9696
-
-#. Configure the Bare Metal service so that it can communicate with the
-   Image service. Replace GLANCE_IP with the hostname or IP address of
-   the Image service::
-
-    [glance]
-
-    # A list of URL schemes that can be downloaded directly via
-    # the direct_url.  Currently supported schemes: [file]. (list
-    # value)
-    #allowed_direct_url_schemes=
-
-    # Default glance hostname or IP address. (string value)
-    #glance_host=$my_ip
-    glance_host=GLANCE_IP
-
-    # Default glance port. (integer value)
-    #glance_port=9292
-
-    # Default protocol to use when connecting to glance. Set to
-    # https for SSL. (string value)
-    #glance_protocol=http
-
-    # A list of the glance api servers available to nova. Prefix
-    # with https:// for SSL-based glance API servers. Format is
-    # [hostname|IP]:port. (string value)
-    #glance_api_servers=<None>
-
-   Note: Swift backend for the Image service should be installed and configured
-   for ``agent_*`` drivers. Starting with Mitaka the Bare Metal service also
-   supports Ceph Object Gateway (RADOS Gateway) as the Image service's backend
-   (:ref:`radosgw support`).
 
 #. Create the Bare Metal service database tables::
 
     ironic-dbsync --config-file /etc/ironic/ironic.conf create_schema
 
-#. Restart the Bare Metal service::
+#. Restart the ironic-api service::
 
     Fedora/RHEL7/CentOS7:
       sudo systemctl restart openstack-ironic-api
-      sudo systemctl restart openstack-ironic-conductor
 
     Ubuntu:
       sudo service ironic-api restart
+
+
+Configuring ironic-conductor service
+------------------------------------
+
+#. Replace HOST_IP with IP of the conductor host, and replace DRIVERS with a
+   comma-separated list of drivers you chose for the conductor service as
+   follows::
+
+    [DEFAULT]
+    ...
+    # IP address of this host. If unset, will determine the IP
+    # programmatically. If unable to do so, will use "127.0.0.1".
+    # (string value)
+    my_ip = HOST_IP
+
+    # Specify the list of drivers to load during service
+    # initialization. Missing drivers, or drivers which fail to
+    # initialize, will prevent the conductor service from
+    # starting. The option default is a recommended set of
+    # production-oriented drivers. A complete list of drivers
+    # present on your system may be found by enumerating the
+    # "ironic.drivers" entrypoint. An example may be found in the
+    # developer documentation online. (list value)
+    enabled_drivers=DRIVERS
+
+   .. note::
+      If a conductor host has multiple IPs, ``my_ip`` should
+      be set to the IP which is on the same network as the bare metal nodes.
+
+#. Configure the ironic-api service URL. Replace IRONIC_API_IP with IP of
+   ironic-api service as follows::
+
+    [conductor]
+    ...
+    # URL of Ironic API service. If not set ironic can get the
+    # current value from the keystone service catalog. (string
+    # value)
+    api_url=http://IRONIC_API_IP:6385
+
+#. Configure the location of the database. Ironic-conductor should use the same
+   configuration as ironic-api. Replace IRONIC_DBPASSWORD with the password of
+   your ``ironic`` user, and replace DB_IP with the IP address where the DB server
+   is located::
+
+    [database]
+    ...
+    # The SQLAlchemy connection string to use to connect to the
+    # database. (string value)
+    connection = mysql+pymysql://ironic:IRONIC_DBPASSWORD@DB_IP/ironic?charset=utf8
+
+#. Configure the ironic-conductor service to use the RabbitMQ message broker by
+   setting one or more of these options. Ironic-conductor should use the same
+   configuration as ironic-api. Replace RABBIT_HOST with the address of the RabbitMQ
+   server::
+
+    [DEFAULT]
+    ...
+    # The messaging driver to use, defaults to rabbit. Other
+    # drivers include qpid and zmq. (string value)
+    #rpc_backend=rabbit
+
+    [oslo_messaging_rabbit]
+    ...
+    # The RabbitMQ broker address where a single node is used.
+    # (string value)
+    rabbit_host=RABBIT_HOST
+
+    # The RabbitMQ userid. (string value)
+    #rabbit_userid=guest
+
+    # The RabbitMQ password. (string value)
+    #rabbit_password=guest
+
+#. Configure the ironic-conductor service so that it can communicate with the
+   Image service. Replace GLANCE_IP with the hostname or IP address of
+   the Image service::
+
+    [glance]
+    ...
+    # Default glance hostname or IP address. (string value)
+    glance_host=GLANCE_IP
+
+   .. note::
+      Swift backend for the Image service should be installed and configured
+      for ``agent_*`` drivers. Starting with Mitaka the Bare Metal service also
+      supports Ceph Object Gateway (RADOS Gateway) as the Image service's backend
+      (:ref:`radosgw support`).
+
+#. Set the URL (replace NEUTRON_IP) for connecting to the Networking service,
+   to be the Networking service endpoint::
+
+    [neutron]
+    ...
+    # URL for connecting to neutron. (string value)
+    url=http://NEUTRON_IP:9696
+
+   To configure the network for ironic-conductor service to perform node cleaning, see
+   `CleaningNetworkSetup`_.
+
+#. Configure the ironic-conductor service to use these credentials with the Identity
+   service. Ironic-conductor should use the same configuration as ironic-api.
+   Replace IDENTITY_IP with the IP of the Identity server, and replace IRONIC_PASSWORD
+   with the password you chose for the ``ironic`` user in the Identity service::
+
+    [keystone_authtoken]
+    ...
+    # Complete public Identity API endpoint (string value)
+    auth_uri=http://IDENTITY_IP:5000/
+
+    # Complete admin Identity API endpoint. This should specify
+    # the unversioned root endpoint e.g. https://localhost:35357/
+    # (string value)
+    identity_uri=http://IDENTITY_IP:35357/
+
+    # Service username. (string value)
+    admin_user=ironic
+
+    # Service account password. (string value)
+    admin_password=IRONIC_PASSWORD
+
+    # Service tenant name. (string value)
+    admin_tenant_name=service
+
+#. Make sure that ``qemu-img`` and ``iscsiadm`` (in the case of using iscsi-deploy driver)
+   binaries are installed and prepare the host system as described at
+   `Setup the drivers for the Bare Metal service`_
+
+#. Restart the ironic-conductor service::
+
+    Fedora/RHEL7/CentOS7:
+      sudo systemctl restart openstack-ironic-conductor
+
+    Ubuntu:
       sudo service ironic-conductor restart
 
 
 Configuring ironic-api behind mod_wsgi
 --------------------------------------
 
-Bare Metal service comes with an example file  for configuring the
+Bare Metal service comes with an example file for configuring the
 ``ironic-api`` service to run behind Apache with mod_wsgi.
 
 1. Install the apache service::
@@ -569,9 +658,8 @@ Configure the Bare Metal service for cleaning
     [neutron]
     ...
 
-    # UUID of the network to create Neutron ports on when booting
-    # to a ramdisk for cleaning/zapping using Neutron DHCP (string
-    # value)
+    # UUID of the network to create Neutron ports on, when booting
+    # to a ramdisk for cleaning using Neutron DHCP. (string value)
     #cleaning_network_uuid=<None>
     cleaning_network_uuid = NETWORK_UUID
 
@@ -619,7 +707,7 @@ them to the Image service:
            disk-image-create ubuntu baremetal dhcp-all-interfaces grub2 -o my-image
 
        Whole disk images:
-           disk-image-create ubuntu vm dhcp-all-interfaces grub2 -o my-image
+           disk-image-create ubuntu vm dhcp-all-interfaces -o my-image
 
      The partition image command creates *my-image.qcow2*, *my-image.vmlinuz* and
      *my-image.initrd* files. The *grub2* element in the partition image creation
@@ -710,41 +798,16 @@ The flavor is mapped to the bare metal node through the hardware specifications.
 
    *Note: You can replace auto with your own flavor id.*
 
-#. A flavor can include a set of key/value pairs called extra_specs.
-   In case of Icehouse version of the Bare Metal service, you need to associate the
-   deploy ramdisk and deploy kernel images to the flavor as flavor-keys.
-   But in case of Juno and higher versions, this is deprecated. Because these
-   may vary between nodes in a heterogeneous environment, the deploy kernel
-   and ramdisk images should be associated with each node's driver_info.
+#. Set the architecture as extra_specs information of the flavor. This
+   will be used to match against the properties of bare metal nodes::
 
-   - **Icehouse** version of Bare Metal service::
+    nova flavor-key my-baremetal-flavor set cpu_arch=$ARCH
 
-      nova flavor-key my-baremetal-flavor set \
-      cpu_arch=$ARCH \
-      "baremetal:deploy_kernel_id"=$DEPLOY_VMLINUZ_UUID \
-      "baremetal:deploy_ramdisk_id"=$DEPLOY_INITRD_UUID
+#. Associate the deploy ramdisk and kernel images with the ironic node::
 
-   - **Juno** version of Bare Metal service::
-
-      nova flavor-key my-baremetal-flavor set cpu_arch=$ARCH
-
-     Associate the deploy ramdisk and deploy kernel images each of your
-     node's driver_info::
-
-      ironic node-update $NODE_UUID add \
-      driver_info/pxe_deploy_kernel=$DEPLOY_VMLINUZ_UUID \
-      driver_info/pxe_deploy_ramdisk=$DEPLOY_INITRD_UUID
-
-   - **Kilo** and higher versions of Bare Metal service::
-
-      nova flavor-key my-baremetal-flavor set cpu_arch=$ARCH
-
-     Associate the deploy ramdisk and deploy kernel images each of your
-     node's driver_info::
-
-      ironic node-update $NODE_UUID add \
-      driver_info/deploy_kernel=$DEPLOY_VMLINUZ_UUID \
-      driver_info/deploy_ramdisk=$DEPLOY_INITRD_UUID
+    ironic node-update $NODE_UUID add \
+    driver_info/deploy_kernel=$DEPLOY_VMLINUZ_UUID \
+    driver_info/deploy_ramdisk=$DEPLOY_INITRD_UUID
 
 
 Setup the drivers for the Bare Metal service
@@ -881,13 +944,13 @@ steps on the ironic conductor node to configure the PXE UEFI environment.
     Create directory GRUB_DIR
       sudo mkdir -p $GRUB_DIR
 
-  This file is used to redirect grub to baremetal node specific config file.
-  It redirects it to specific grub config file based on DHCP IP assigned to
-  baremetal node.
+   This file is used to redirect grub to baremetal node specific config file.
+   It redirects it to specific grub config file based on DHCP IP assigned to
+   baremetal node.
 
-  .. literalinclude:: ../../../ironic/drivers/modules/master_grub_cfg.txt
+   .. literalinclude:: ../../../ironic/drivers/modules/master_grub_cfg.txt
 
-  Change the permission of grub.cfg::
+   Change the permission of grub.cfg::
 
     sudo chmod 644 $GRUB_DIR/grub.cfg
 
@@ -982,20 +1045,20 @@ on the Bare Metal service node(s) where ``ironic-conductor`` is running.
     Fedora 22 or higher:
         dnf install ipxe-bootimgs
 
-#. Copy the iPXE boot image (undionly.kpxe) to ``/tftpboot``. The binary
-   might be found at::
+#. Copy the iPXE boot image (``undionly.kpxe`` for **BIOS** and
+   ``ipxe.efi`` for **UEFI**) to ``/tftpboot``. The binary might
+   be found at::
 
     Ubuntu:
-        cp /usr/lib/ipxe/undionly.kpxe /tftpboot
+        cp /usr/lib/ipxe/{undionly.kpxe,ipxe.efi} /tftpboot
 
     Fedora/RHEL7/CentOS7:
-        cp /usr/share/ipxe/undionly.kpxe /tftpboot
+        cp /usr/share/ipxe/{undionly.kpxe,ipxe.efi} /tftpboot
 
    .. note::
-      If the packaged version of the iPXE boot image doesn't work, you
-      can download a prebuilt one from http://boot.ipxe.org/undionly.kpxe
-      or build one image from source, see http://ipxe.org/download for
-      more information.
+      If the packaged version of the iPXE boot image doesn't work, you can
+      download a prebuilt one from http://boot.ipxe.org or build one image
+      from source, see http://ipxe.org/download for more information.
 
 #. Enable/Configure iPXE in the Bare Metal Service's configuration file
    (/etc/ironic/ironic.conf)::
@@ -1008,8 +1071,15 @@ on the Bare Metal service node(s) where ``ironic-conductor`` is running.
     # Neutron bootfile DHCP parameter. (string value)
     pxe_bootfile_name=undionly.kpxe
 
+    # Bootfile DHCP parameter for UEFI boot mode. (string value)
+    uefi_pxe_bootfile_name=ipxe.efi
+
     # Template file for PXE configuration. (string value)
     pxe_config_template=$pybasedir/drivers/modules/ipxe_config.template
+
+    # Template file for PXE configuration for UEFI boot loader.
+    # (string value)
+    uefi_pxe_config_template=$pybasedir/drivers/modules/ipxe_config.template
 
 #. Restart the ``ironic-conductor`` process::
 
@@ -1460,8 +1530,15 @@ and may be combined if desired.
     driver_info/ipmi_password=$PASS \
     driver_info/ipmi_address=$ADDRESS
 
-   Note that you may also specify all ``driver_info`` parameters during
-   ``node-create`` by passing the **-i** option multiple times.
+   .. note::
+      If IPMI is running on a port other than 623 (the default). The port must
+      be added to ``driver_info`` by specifying the ``ipmi_port`` value.
+      Example::
+
+       ironic node-update $NODE_UUID add driver_info/ipmi_port=$PORT_NUMBER
+
+      Note that you may also specify all ``driver_info`` parameters during
+      ``node-create`` by passing the **-i** option multiple times.
 
 #. Update the node's properties to match the bare metal flavor you created
    earlier::
@@ -1653,7 +1730,7 @@ To move a node from ``enroll`` to ``manageable`` provision state::
     +------------------------+--------------------------------------------------------------------+
 
 When a node is moved from the ``manageable`` to ``available`` provision
-state, the node will be cleaned if configured to do so (see
+state, the node will go through automated cleaning if configured to do so (see
 :ref:`CleaningNetworkSetup`).
 To move a node from ``manageable`` to ``available`` provision state::
 
@@ -1810,24 +1887,36 @@ The node should be in MANAGEABLE state before inspection is initiated.
 Specifying the disk for deployment
 ==================================
 
-Starting with the Kilo release, Bare Metal service supports passing hints to the
-deploy ramdisk about which disk it should pick for the deployment. In
-Linux when a server has more than one SATA, SCSI or IDE disk controller,
-the order in which their corresponding device nodes are added is arbitrary
-[`link`_], resulting in devices like ``/dev/sda`` and ``/dev/sdb`` to
-switch around between reboots. Therefore, to guarantee that a specific
-disk is always chosen for the deployment, Bare Metal service introduced
-root device hints.
-
-The list of support hints is:
+Starting with the Kilo release, Bare Metal service supports passing
+hints to the deploy ramdisk about which disk it should pick for the
+deployment. The list of support hints is:
 
 * model (STRING): device identifier
 * vendor (STRING): device vendor
 * serial (STRING): disk serial number
 * size (INT): size of the device in GiB
+
+  .. note::
+    A node's 'local_gb' property is often set to a value 1 GiB less than the
+    actual disk size to account for partitioning (this is how DevStack, TripleO
+    and Ironic Inspector work, to name a few). However, in this case ``size``
+    should be the actual size. For example, for a 128 GiB disk ``local_gb``
+    will be 127, but size hint will be 128.
+
 * wwn (STRING): unique storage identifier
 * wwn_with_extension (STRING): unique storage identifier with the vendor extension appended
 * wwn_vendor_extension (STRING): unique vendor storage identifier
+* name (STRING): the device name, e.g /dev/md0
+
+
+  .. warning::
+     The root device hint name should only be used for devices with
+     constant names (e.g RAID volumes). For SATA, SCSI and IDE disk
+     controllers this hint is not recommended because the order in which
+     the device nodes are added in Linux is arbitrary, resulting in
+     devices like /dev/sda and /dev/sdb `switching around at boot time
+     <https://access.redhat.com/documentation/en-US/Red_Hat_Enterprise_Linux/7/html/Storage_Administration_Guide/persistent_naming.html>`_.
+
 
 To associate one or more hints with a node, update the node's properties
 with a ``root_device`` key, for example::
@@ -1843,8 +1932,24 @@ can not be found.
     If multiple hints are specified, a device must satisfy all the hints.
 
 
-.. _`link`: https://access.redhat.com/documentation/en-US/Red_Hat_Enterprise_Linux/7/html/Storage_Administration_Guide/persistent_naming.html
+.. _EnableHTTPSinSwift:
 
+Enabling HTTPS in Swift
+=======================
+
+The drivers using virtual media use swift for storing boot images
+and node configuration information (contains sensitive information for Ironic
+conductor to provision bare metal hardware).  By default, HTTPS is not enabled
+in swift. HTTPS is required to encrypt all communication between swift and Ironic
+conductor and swift and bare metal (via virtual media).  It can be enabled in one
+of the following ways:
+
+* `Using an SSL termination proxy
+  <http://docs.openstack.org/security-guide/secure-communication/tls-proxies-and-http-services.html>`_
+
+* `Using native SSL support in swift
+  <http://docs.openstack.org/developer/swift/deployment_guide.html>`_
+  (recommended only for testing purpose by swift).
 
 Using Bare Metal service as a standalone service
 ================================================
@@ -2055,7 +2160,7 @@ For the format of the configuration drive, Bare Metal service expects a
 ``gzipped`` and ``base64`` encoded ISO 9660 [*]_ file with a ``config-2``
 label. The
 `ironic client <https://github.com/openstack/python-ironicclient>`_
-can generate a configuration drive in the expected format. Just pass a
+can generate a configuration drive in the `expected format`_. Just pass a
 directory path containing the files that will be injected into it via the
 ``--config-drive`` parameter of the ``node-set-provision-state`` command,
 for example::
@@ -2094,19 +2199,17 @@ the configuration drive and mount it, for example::
 Cloud-init integration
 ----------------------
 
-The configuration drive can be especially
-useful when used with ``cloud-init`` [`link
-<http://cloudinit.readthedocs.org/en/latest/topics/datasources.html#config-drive>`_],
+The configuration drive can be
+especially useful when used with `cloud-init
+<http://cloudinit.readthedocs.org/en/latest/topics/datasources.html#config-drive>`_,
 but in order to use it we should follow some rules:
 
-* ``Cloud-init`` expects a specific format to the data. For
-  more information about the expected file layout see [`link
-  <http://docs.openstack.org/user-guide/content/enable_config_drive.html#config_drive_contents>`_].
+* ``Cloud-init`` data should be organized in the `expected format`_.
 
 
 * Since the Bare Metal service uses a disk partition as the configuration drive,
-  it will only work with ``cloud-init`` version **>= 0.7.5** [`link
-  <http://bazaar.launchpad.net/~cloud-init-dev/cloud-init/trunk/view/head:/ChangeLog>`_].
+  it will only work with
+  `cloud-init version >= 0.7.5 <http://bazaar.launchpad.net/~cloud-init-dev/cloud-init/trunk/view/head:/ChangeLog>`_.
 
 
 * ``Cloud-init`` has a collection of data source modules, so when
@@ -2116,9 +2219,10 @@ but in order to use it we should follow some rules:
 
     DIB_CLOUD_INIT_DATASOURCES="ConfigDrive, OpenStack" disk-image-create -o fedora-cloud-image fedora baremetal
 
-  See [`link
-  <http://docs.openstack.org/developer/diskimage-builder/elements/cloud-init-datasources/README.html>`_]
-  for more information.
+  For more information see `how to configure cloud-init data sources
+  <http://docs.openstack.org/developer/diskimage-builder/elements/cloud-init-datasources/README.html>`_.
+
+.. _`expected format`: http://docs.openstack.org/user-guide/cli_config_drive.html#openstack-metadata-format
 
 .. _BuildingDeployRamdisk:
 

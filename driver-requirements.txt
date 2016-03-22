@@ -4,17 +4,18 @@
 # python projects they should package as optional dependencies for Ironic.
 
 # These are available on pypi
-proliantutils>=2.1.5
+proliantutils>=2.1.7
 pyghmi>=0.8.0
 pysnmp
 python-ironic-inspector-client
-python-oneviewclient<2.1.0,>=2.0.2
-python-scciclient>=0.2.0
+python-oneviewclient<3.0.0,>=2.0.2
+python-scciclient>=0.3.0
 python-seamicroclient>=0.4.0
 UcsSdk==0.8.2.2
+python-dracclient>=0.0.5
 
-# The drac and amt driver import a python module called "pywsman", however,
-# this does not exist on pypi.
+# The amt driver imports a python module called "pywsman", but this does not
+# exist on pypi.
 # It is installed by the openwsman-python (on RH) or python-openwsman (on deb)
 # package, from https://github.com/Openwsman/openwsman/blob/master/bindings/python/Makefile.am#L29
 # There is *also* a "wsman" module on pypi ... but I think that's the wrong one.
@@ -28,5 +29,5 @@ UcsSdk==0.8.2.2
 # http://docs.openstack.org/developer/ironic/drivers/vbox.html
 pyremotevbox>=0.5.0
 
-# The CIMC drivers use the Cisco IMC SDK version 0.7.2, which is available from
-# https://communities.cisco.com/docs/DOC-56257
+# The CIMC drivers use the Cisco IMC SDK version 0.7.2 or greater
+ImcSdk>=0.7.2

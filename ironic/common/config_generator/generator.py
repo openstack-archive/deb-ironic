@@ -28,8 +28,10 @@ import os
 import re
 import socket
 import sys
+import tempfile
 import textwrap
 
+import mock
 from oslo_config import cfg
 import oslo_i18n
 from oslo_utils import importutils
@@ -39,6 +41,7 @@ import stevedore.named
 
 oslo_i18n.install('ironic')
 
+OPT = "Opt"
 STROPT = "StrOpt"
 BOOLOPT = "BoolOpt"
 INTOPT = "IntOpt"
@@ -49,6 +52,7 @@ MULTISTROPT = "MultiStrOpt"
 PORTOPT = "PortOpt"
 
 OPT_TYPES = {
+    OPT: 'type of value is unknown',
     STROPT: 'string value',
     BOOLOPT: 'boolean value',
     INTOPT: 'integer value',
@@ -59,9 +63,7 @@ OPT_TYPES = {
     PORTOPT: 'port value',
 }
 
-OPTION_REGEX = re.compile(r"(%s)" % "|".join([STROPT, BOOLOPT, INTOPT,
-                                              FLOATOPT, LISTOPT, DICTOPT,
-                                              MULTISTROPT, PORTOPT]))
+OPTION_REGEX = re.compile(r"(%s)" % "|".join(OPT_TYPES))
 
 PY_EXT = ".py"
 BASEDIR = os.path.abspath(os.path.join(os.path.dirname(__file__),
@@ -73,6 +75,12 @@ def raise_extension_exception(extmanager, ep, err):
     raise
 
 
+# Don't let the system hostname or FQDN affect config file values. Certain 3rd
+# party libraries use either 'gethostbyname' or 'getfqdn' to set the default
+# value.
+@mock.patch.object(socket, 'gethostname', lambda: 'localhost')
+@mock.patch.object(socket, 'getfqdn', lambda: 'localhost')
+@mock.patch.object(tempfile, 'gettempdir', lambda: '/tmp')
 def generate(argv):
     parser = argparse.ArgumentParser(
         description='generate sample configuration file',
@@ -150,7 +158,7 @@ def _import_module(mod_str):
         else:
             return importutils.import_module(mod_str)
     except Exception as e:
-        sys.stderr.write("Error importing module %s: %s\n" % (mod_str, str(e)))
+        sys.stderr.write("Error importing module %s: %s\n" % (mod_str, e))
         return None
 
 
@@ -221,8 +229,16 @@ def print_group_opts(group, opts_by_module):
         print('#')
         print('')
         for opt in opts:
-            _print_opt(opt)
+            _print_opt(opt, group)
         print('')
+
+
+def _get_choice_text(choice):
+    if choice is None:
+        return '<None>'
+    elif choice == '':
+        return "''"
+    return six.text_type(choice)
 
 
 def _get_my_ip():
@@ -238,8 +254,6 @@ def _get_my_ip():
 
 def _sanitize_default(name, value):
     """Set up a reasonably sensible default for pybasedir, my_ip and host."""
-    hostname = socket.gethostname()
-    fqdn = socket.getfqdn()
     if value.startswith(sys.prefix):
         # NOTE(jd) Don't use os.path.join, because it is likely to think the
         # second part is an absolute pathname and therefore drop the first
@@ -251,53 +265,74 @@ def _sanitize_default(name, value):
         return value.replace(BASEDIR, '')
     elif value == _get_my_ip():
         return '10.0.0.1'
-    elif value in (hostname, fqdn):
-        if 'host' in name:
-            return 'ironic'
-    elif value.endswith(hostname):
-        return value.replace(hostname, 'ironic')
-    elif value.endswith(fqdn):
-        return value.replace(fqdn, 'ironic')
     elif value.strip() != value:
         return '"%s"' % value
     return value
 
 
-def _print_opt(opt):
+def _print_opt(opt, group):
     opt_name, opt_default, opt_help = opt.dest, opt.default, opt.help
     if not opt_help:
         sys.stderr.write('WARNING: "%s" is missing help string.\n' % opt_name)
         opt_help = ""
-    try:
-        opt_type = OPTION_REGEX.search(str(type(opt))).group(0)
-    except (ValueError, AttributeError) as err:
-        sys.stderr.write("%s\n" % str(err))
-        sys.exit(1)
+    result = OPTION_REGEX.search(str(type(opt)))
+    if not result:
+        raise ValueError(
+            "Config option: {!r} Unknown option type: {}\n".format(
+                opt_name, type(opt)))
+    opt_type = result.group(0)
     opt_help = u'%s (%s)' % (opt_help,
                              OPT_TYPES[opt_type])
     print('#', "\n# ".join(textwrap.wrap(opt_help, WORDWRAP_WIDTH)))
+
+    min_value = getattr(opt.type, 'min', None)
+    max_value = getattr(opt.type, 'max', None)
+    choices = getattr(opt.type, 'choices', None)
+
+    # NOTE(lintan): choices are mutually exclusive with 'min/max',
+    # see oslo.config for more details.
+    if min_value is not None and max_value is not None:
+        print('# Possible values: %(min_value)d-%(max_value)d' %
+              {'min_value': min_value, 'max_value': max_value})
+    elif min_value is not None:
+        print('# Minimum value: %d' % min_value)
+    elif max_value is not None:
+        print('# Maximum value: %d' % max_value)
+    elif choices is not None:
+        if choices == []:
+            print('# No possible values.')
+        else:
+            choices_text = ', '.join([_get_choice_text(choice)
+                                     for choice in choices])
+            print('# Possible values: %s' % choices_text)
+
     if opt.deprecated_opts:
         for deprecated_opt in opt.deprecated_opts:
             deprecated_name = (deprecated_opt.name if
                                deprecated_opt.name else opt_name)
             deprecated_group = (deprecated_opt.group if
-                                deprecated_opt.group else "DEFAULT")
+                                deprecated_opt.group else group)
             print('# Deprecated group/name - [%s]/%s' %
                   (deprecated_group,
                    deprecated_name))
+    if opt.deprecated_for_removal:
+        print('# This option is deprecated and planned for removal in a '
+              'future release.')
     try:
         if opt_default is None:
             print('#%s=<None>' % opt_name)
         else:
             _print_type(opt_type, opt_name, opt_default)
         print('')
-    except Exception:
-        sys.stderr.write('Error in option "%s"\n' % opt_name)
+    except Exception as e:
+        sys.stderr.write('Error in option "%s": %s\n' % (opt_name, e))
         sys.exit(1)
 
 
 def _print_type(opt_type, opt_name, opt_default):
-    if opt_type == STROPT:
+    if opt_type == OPT:
+        print('#%s=%s' % (opt_name, opt_default))
+    elif opt_type == STROPT:
         assert(isinstance(opt_default, six.string_types))
         print('#%s=%s' % (opt_name, _sanitize_default(opt_name,
                                                       opt_default)))
@@ -329,6 +364,8 @@ def _print_type(opt_type, opt_name, opt_default):
             opt_default = ['']
         for default in opt_default:
             print('#%s=%s' % (opt_name, default))
+    else:
+        raise ValueError("unknown oslo_config type %s" % opt_type)
 
 
 def main():

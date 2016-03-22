@@ -27,7 +27,7 @@ from ironic.drivers.modules.amt import resource_uris
 from ironic.tests import base
 from ironic.tests.unit.db import base as db_base
 from ironic.tests.unit.db import utils as db_utils
-from ironic.tests.unit.drivers.modules.drac import utils as test_utils
+from ironic.tests.unit.drivers.modules.amt import utils as test_utils
 from ironic.tests.unit.drivers import third_party_driver_mock_specs \
     as mock_specs
 from ironic.tests.unit.objects import utils as obj_utils
@@ -209,3 +209,8 @@ class AwakeAMTInterfaceTestCase(db_base.DbTestCase):
         CONF.set_override('awake_interval', 0, 'amt')
         amt_common.awake_amt_interface(self.node)
         self.assertFalse(mock_ex.called)
+
+    def test_out_range_protocol(self):
+        self.assertRaises(ValueError, cfg.CONF.set_override,
+                          'protocol', 'fake', 'amt',
+                          enforce_type=True)

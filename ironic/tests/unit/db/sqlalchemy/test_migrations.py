@@ -98,7 +98,7 @@ def patch_with_engine(engine):
 
 
 class WalkVersionsMixin(object):
-    def _walk_versions(self, engine=None, alembic_cfg=None, downgrade=True):
+    def _walk_versions(self, engine=None, alembic_cfg=None):
         # Determine latest version script from the repo, then
         # upgrade from 1 through to the latest, with no data
         # in the databases. This just checks that the schema itself
@@ -116,31 +116,6 @@ class WalkVersionsMixin(object):
             for version in reversed(versions):
                 self._migrate_up(engine, alembic_cfg,
                                  version.revision, with_data=True)
-
-            if downgrade:
-                for version in versions:
-                    self._migrate_down(engine, alembic_cfg, version.revision)
-
-    def _migrate_down(self, engine, config, version, with_data=False):
-        try:
-            self.migration_api.downgrade(version, config=config)
-        except NotImplementedError:
-            # NOTE(sirp): some migrations, namely release-level
-            # migrations, don't support a downgrade.
-            return False
-
-        self.assertEqual(version, self.migration_api.version(config))
-
-        # NOTE(sirp): `version` is what we're downgrading to (i.e. the 'target'
-        # version). So if we have any downgrade checks, they need to be run for
-        # the previous (higher numbered) migration.
-        if with_data:
-            post_downgrade = getattr(
-                self, "_post_downgrade_%s" % (version), None)
-            if post_downgrade:
-                post_downgrade(engine)
-
-        return True
 
     def _migrate_up(self, engine, config, version, with_data=False):
         """migrate up to a new version of the db.
@@ -201,29 +176,9 @@ class TestWalkVersions(base.TestCase, WalkVersionsMixin):
         self._pre_upgrade_141.assert_called_with(self.engine)
         self._check_141.assert_called_with(self.engine, test_value)
 
-    def test_migrate_down(self):
-        self.migration_api.version.return_value = '42'
-
-        self.assertTrue(self._migrate_down(self.engine, self.config, '42'))
-        self.migration_api.version.assert_called_with(self.config)
-
-    def test_migrate_down_not_implemented(self):
-        self.migration_api.downgrade.side_effect = NotImplementedError
-        self.assertFalse(self._migrate_down(self.engine, self.config, '42'))
-
-    def test_migrate_down_with_data(self):
-        self._post_downgrade_043 = mock.MagicMock()
-        self.migration_api.version.return_value = '043'
-
-        self._migrate_down(self.engine, self.config, '043', True)
-
-        self._post_downgrade_043.assert_called_with(self.engine)
-
     @mock.patch.object(script, 'ScriptDirectory')
     @mock.patch.object(WalkVersionsMixin, '_migrate_up')
-    @mock.patch.object(WalkVersionsMixin, '_migrate_down')
-    def test_walk_versions_all_default(self, _migrate_up, _migrate_down,
-                                       script_directory):
+    def test_walk_versions_all_default(self, _migrate_up, script_directory):
         fc = script_directory.from_config()
         fc.walk_revisions.return_value = self.versions
         self.migration_api.version.return_value = None
@@ -236,20 +191,14 @@ class TestWalkVersions(base.TestCase, WalkVersionsMixin):
                     with_data=True) for v in reversed(self.versions)]
         self.assertEqual(self._migrate_up.call_args_list, upgraded)
 
-        downgraded = [mock.call(self.engine, self.config, v.revision)
-                      for v in self.versions]
-        self.assertEqual(self._migrate_down.call_args_list, downgraded)
-
     @mock.patch.object(script, 'ScriptDirectory')
     @mock.patch.object(WalkVersionsMixin, '_migrate_up')
-    @mock.patch.object(WalkVersionsMixin, '_migrate_down')
-    def test_walk_versions_all_false(self, _migrate_up, _migrate_down,
-                                     script_directory):
+    def test_walk_versions_all_false(self, _migrate_up, script_directory):
         fc = script_directory.from_config()
         fc.walk_revisions.return_value = self.versions
         self.migration_api.version.return_value = None
 
-        self._walk_versions(self.engine, self.config, downgrade=False)
+        self._walk_versions(self.engine, self.config)
 
         upgraded = [mock.call(self.engine, self.config, v.revision,
                     with_data=True) for v in reversed(self.versions)]
@@ -264,7 +213,7 @@ class MigrationCheckersMixin(object):
         self.migration_api = migration
 
     def test_walk_versions(self):
-        self._walk_versions(self.engine, self.config, downgrade=False)
+        self._walk_versions(self.engine, self.config)
 
     def test_connect_fail(self):
         """Test that we can trigger a database connection failure
@@ -406,6 +355,64 @@ class MigrationCheckersMixin(object):
         node_tags.insert().execute(data)
         tag = node_tags.select(node_tags.c.node_id == '123').execute().first()
         self.assertEqual('tag1', tag['tag'])
+
+    def _check_5ea1b0d310e(self, engine, data):
+        portgroup = db_utils.get_table(engine, 'portgroups')
+        col_names = [column.name for column in portgroup.c]
+        expected_names = ['created_at', 'updated_at', 'id', 'uuid', 'name',
+                          'node_id', 'address', 'extra']
+        self.assertEqual(sorted(expected_names), sorted(col_names))
+
+        self.assertIsInstance(portgroup.c.created_at.type,
+                              sqlalchemy.types.DateTime)
+        self.assertIsInstance(portgroup.c.updated_at.type,
+                              sqlalchemy.types.DateTime)
+        self.assertIsInstance(portgroup.c.id.type,
+                              sqlalchemy.types.Integer)
+        self.assertIsInstance(portgroup.c.uuid.type,
+                              sqlalchemy.types.String)
+        self.assertIsInstance(portgroup.c.name.type,
+                              sqlalchemy.types.String)
+        self.assertIsInstance(portgroup.c.node_id.type,
+                              sqlalchemy.types.Integer)
+        self.assertIsInstance(portgroup.c.address.type,
+                              sqlalchemy.types.String)
+        self.assertIsInstance(portgroup.c.extra.type,
+                              sqlalchemy.types.TEXT)
+
+        ports = db_utils.get_table(engine, 'ports')
+        col_names = [column.name for column in ports.c]
+        self.assertIn('pxe_enabled', col_names)
+        self.assertIn('portgroup_id', col_names)
+        self.assertIn('local_link_connection', col_names)
+        self.assertIsInstance(ports.c.portgroup_id.type,
+                              sqlalchemy.types.Integer)
+        # in some backends bool type is integer
+        self.assertTrue(isinstance(ports.c.pxe_enabled.type,
+                                   sqlalchemy.types.Boolean) or
+                        isinstance(ports.c.pxe_enabled.type,
+                                   sqlalchemy.types.Integer))
+
+    def _pre_upgrade_f6fdb920c182(self, engine):
+        # add some ports.
+        ports = db_utils.get_table(engine, 'ports')
+        data = [{'uuid': uuidutils.generate_uuid(), 'pxe_enabled': None},
+                {'uuid': uuidutils.generate_uuid(), 'pxe_enabled': None}]
+        ports.insert().values(data).execute()
+        return data
+
+    def _check_f6fdb920c182(self, engine, data):
+        ports = db_utils.get_table(engine, 'ports')
+        result = engine.execute(ports.select())
+
+        def _was_inserted(uuid):
+            for row in data:
+                if row['uuid'] == uuid:
+                    return True
+
+        for row in result:
+            if _was_inserted(row['uuid']):
+                self.assertTrue(row['pxe_enabled'])
 
     def test_upgrade_and_version(self):
         with patch_with_engine(self.engine):

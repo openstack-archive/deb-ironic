@@ -18,6 +18,7 @@ PXE Boot Interface
 import os
 import shutil
 
+from ironic_lib import utils as ironic_utils
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import fileutils
@@ -33,7 +34,6 @@ from ironic.common import image_service as service
 from ironic.common import paths
 from ironic.common import pxe_utils
 from ironic.common import states
-from ironic.common import utils
 from ironic.drivers import base
 from ironic.drivers.modules import agent
 from ironic.drivers.modules import deploy_utils
@@ -81,11 +81,15 @@ pxe_opts = [
                    'drivers/modules/boot.ipxe'),
                help=_('On ironic-conductor node, the path to the main iPXE '
                       'script file.')),
+    cfg.IntOpt('ipxe_timeout',
+               default=0,
+               help=_('Timeout value (in seconds) for downloading an image '
+                      'via iPXE. Defaults to 0 (no timeout)')),
     cfg.StrOpt('ip_version',
                default='4',
                choices=['4', '6'],
                help=_('The IP version that will be used for PXE booting. '
-                      'Can be either 4 or 6. Defaults to 4. EXPERIMENTAL')),
+                      'Defaults to 4. EXPERIMENTAL')),
 ]
 
 LOG = logging.getLogger(__name__)
@@ -274,7 +278,8 @@ def _build_pxe_config_options(task, pxe_info):
         'pxe_append_params': _get_pxe_conf_option(task, 'pxe_append_params'),
         'tftp_server': CONF.pxe.tftp_server,
         'aki_path': kernel,
-        'ari_path': ramdisk
+        'ari_path': ramdisk,
+        'ipxe_timeout': CONF.pxe.ipxe_timeout * 1000
     }
 
     return pxe_options
@@ -360,7 +365,7 @@ def _clean_up_pxe_env(task, images_info):
     """
     for label in images_info:
         path = images_info[label][1]
-        utils.unlink_without_raise(path)
+        ironic_utils.unlink_without_raise(path)
 
     pxe_utils.clean_up_pxe_config(task)
     TFTPImageCache().clean_up()
@@ -404,14 +409,6 @@ class PXEBoot(base.BootInterface):
                 raise exception.MissingParameterValue(_(
                     "iPXE boot is enabled but no HTTP URL or HTTP "
                     "root was specified."))
-            # iPXE and UEFI should not be configured together.
-            if boot_mode == 'uefi':
-                LOG.error(_LE("UEFI boot mode is not supported with "
-                              "iPXE boot enabled."))
-                raise exception.InvalidParameterValue(_(
-                    "Conflict: iPXE is enabled, but cannot be used with node"
-                    "%(node_uuid)s configured to use UEFI boot") %
-                    {'node_uuid': node.uuid})
 
         if boot_mode == 'uefi':
             validate_boot_option_for_uefi(node)

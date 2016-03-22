@@ -45,6 +45,7 @@ class TestPXEUtils(db_base.DbTestCase):
                                    u'f33c123/deploy_ramdisk',
             'root_device': 'vendor=fake,size=123',
             'ipa-api-url': 'http://192.168.122.184:6385',
+            'ipxe_timeout': 0,
         }
 
         self.pxe_options = {
@@ -84,6 +85,21 @@ class TestPXEUtils(db_base.DbTestCase):
             'ari_path': 'http://1.2.3.4:1234/ramdisk',
         })
 
+        self.ipxe_options_bios = {
+            'boot_mode': 'bios',
+        }
+        self.ipxe_options_bios.update(self.ipxe_options)
+
+        self.ipxe_options_timeout = self.ipxe_options_bios.copy()
+        self.ipxe_options_timeout.update({
+            'ipxe_timeout': 120
+        })
+
+        self.ipxe_options_uefi = {
+            'boot_mode': 'uefi',
+        }
+        self.ipxe_options_uefi.update(self.ipxe_options)
+
         self.node = object_utils.create_test_node(self.context)
 
     def test__build_pxe_config(self):
@@ -108,7 +124,7 @@ class TestPXEUtils(db_base.DbTestCase):
 
         self.assertEqual(six.text_type(expected_template), rendered_template)
 
-    def test__build_ipxe_config(self):
+    def test__build_ipxe_bios_config(self):
         # NOTE(lucasagomes): iPXE is just an extension of the PXE driver,
         # it doesn't have it's own configuration option for template.
         # More info:
@@ -119,11 +135,50 @@ class TestPXEUtils(db_base.DbTestCase):
         )
         self.config(http_url='http://1.2.3.4:1234', group='deploy')
         rendered_template = pxe_utils._build_pxe_config(
-            self.ipxe_options, CONF.pxe.pxe_config_template,
+            self.ipxe_options_bios, CONF.pxe.pxe_config_template,
             '{{ ROOT }}', '{{ DISK_IDENTIFIER }}')
 
         expected_template = open(
             'ironic/tests/unit/drivers/ipxe_config.template').read().rstrip()
+
+        self.assertEqual(six.text_type(expected_template), rendered_template)
+
+    def test__build_ipxe_timeout_config(self):
+        # NOTE(lucasagomes): iPXE is just an extension of the PXE driver,
+        # it doesn't have it's own configuration option for template.
+        # More info:
+        # http://docs.openstack.org/developer/ironic/deploy/install-guide.html
+        self.config(
+            pxe_config_template='ironic/drivers/modules/ipxe_config.template',
+            group='pxe'
+        )
+        self.config(http_url='http://1.2.3.4:1234', group='deploy')
+        rendered_template = pxe_utils._build_pxe_config(
+            self.ipxe_options_timeout, CONF.pxe.pxe_config_template,
+            '{{ ROOT }}', '{{ DISK_IDENTIFIER }}')
+
+        tpl_file = 'ironic/tests/unit/drivers/ipxe_config_timeout.template'
+        expected_template = open(tpl_file).read().rstrip()
+
+        self.assertEqual(six.text_type(expected_template), rendered_template)
+
+    def test__build_ipxe_uefi_config(self):
+        # NOTE(lucasagomes): iPXE is just an extension of the PXE driver,
+        # it doesn't have it's own configuration option for template.
+        # More info:
+        # http://docs.openstack.org/developer/ironic/deploy/install-guide.html
+        self.config(
+            pxe_config_template='ironic/drivers/modules/ipxe_config.template',
+            group='pxe'
+        )
+        self.config(http_url='http://1.2.3.4:1234', group='deploy')
+        rendered_template = pxe_utils._build_pxe_config(
+            self.ipxe_options_uefi, CONF.pxe.pxe_config_template,
+            '{{ ROOT }}', '{{ DISK_IDENTIFIER }}')
+
+        expected_template = open(
+            'ironic/tests/unit/drivers/'
+            'ipxe_uefi_config.template').read().rstrip()
 
         self.assertEqual(six.text_type(expected_template), rendered_template)
 
@@ -154,7 +209,7 @@ class TestPXEUtils(db_base.DbTestCase):
         self.assertEqual(six.text_type(expected_template), rendered_template)
 
     @mock.patch('ironic.common.utils.create_link_without_raise', autospec=True)
-    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch('ironic_lib.utils.unlink_without_raise', autospec=True)
     @mock.patch('ironic.drivers.utils.get_node_mac_addresses', autospec=True)
     def test__write_mac_pxe_configs(self, get_macs_mock, unlink_mock,
                                     create_link_mock):
@@ -180,7 +235,7 @@ class TestPXEUtils(db_base.DbTestCase):
         create_link_mock.assert_has_calls(create_link_calls)
 
     @mock.patch('ironic.common.utils.create_link_without_raise', autospec=True)
-    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch('ironic_lib.utils.unlink_without_raise', autospec=True)
     @mock.patch('ironic.drivers.utils.get_node_mac_addresses', autospec=True)
     def test__write_mac_ipxe_configs(self, get_macs_mock, unlink_mock,
                                      create_link_mock):
@@ -213,7 +268,7 @@ class TestPXEUtils(db_base.DbTestCase):
         create_link_mock.assert_has_calls(create_link_calls)
 
     @mock.patch('ironic.common.utils.create_link_without_raise', autospec=True)
-    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch('ironic_lib.utils.unlink_without_raise', autospec=True)
     @mock.patch('ironic.common.dhcp_factory.DHCPFactory.provider',
                 autospec=True)
     def test__link_ip_address_pxe_configs(self, provider_mock, unlink_mock,
@@ -311,8 +366,38 @@ class TestPXEUtils(db_base.DbTestCase):
         pxe_cfg_file_path = pxe_utils.get_pxe_config_file_path(self.node.uuid)
         write_mock.assert_called_with(pxe_cfg_file_path, self.pxe_options_uefi)
 
+    @mock.patch('ironic.common.pxe_utils._link_mac_pxe_configs',
+                autospec=True)
+    @mock.patch('ironic.common.utils.write_to_file', autospec=True)
+    @mock.patch('ironic.common.pxe_utils._build_pxe_config', autospec=True)
+    @mock.patch('oslo_utils.fileutils.ensure_tree', autospec=True)
+    def test_create_pxe_config_uefi_ipxe(self, ensure_tree_mock, build_mock,
+                                         write_mock, link_mac_pxe_mock):
+        self.config(ipxe_enabled=True, group='pxe')
+        build_mock.return_value = self.ipxe_options_uefi
+        ipxe_template = "ironic/drivers/modules/ipxe_config.template"
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node.properties['capabilities'] = 'boot_mode:uefi'
+            pxe_utils.create_pxe_config(task, self.ipxe_options_uefi,
+                                        ipxe_template)
+
+            ensure_calls = [
+                mock.call(os.path.join(CONF.deploy.http_root, self.node.uuid)),
+                mock.call(os.path.join(CONF.deploy.http_root, 'pxelinux.cfg'))
+            ]
+            ensure_tree_mock.assert_has_calls(ensure_calls)
+            build_mock.assert_called_with(self.ipxe_options_uefi,
+                                          ipxe_template,
+                                          '{{ ROOT }}',
+                                          '{{ DISK_IDENTIFIER }}')
+            link_mac_pxe_mock.assert_called_once_with(task)
+
+        pxe_cfg_file_path = pxe_utils.get_pxe_config_file_path(self.node.uuid)
+        write_mock.assert_called_with(pxe_cfg_file_path,
+                                      self.ipxe_options_uefi)
+
     @mock.patch('ironic.common.utils.rmtree_without_raise', autospec=True)
-    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch('ironic_lib.utils.unlink_without_raise', autospec=True)
     def test_clean_up_pxe_config(self, unlink_mock, rmtree_mock):
         address = "aa:aa:aa:aa:aa:aa"
         object_utils.create_test_port(self.context, node_id=self.node.id,
@@ -422,9 +507,8 @@ class TestPXEUtils(db_base.DbTestCase):
                           node_uuid,
                           driver_info)
 
-    def test_dhcp_options_for_instance_ipxe(self):
+    def _dhcp_options_for_instance_ipxe(self, task, boot_file):
         self.config(tftp_server='192.0.2.1', group='pxe')
-        self.config(pxe_bootfile_name='fake-bootfile', group='pxe')
         self.config(ipxe_enabled=True, group='pxe')
         self.config(http_url='http://192.0.3.2:1234', group='deploy')
         self.config(ipxe_boot_script='/test/boot.ipxe', group='pxe')
@@ -432,7 +516,7 @@ class TestPXEUtils(db_base.DbTestCase):
         self.config(dhcp_provider='isc', group='dhcp')
         expected_boot_script_url = 'http://192.0.3.2:1234/boot.ipxe'
         expected_info = [{'opt_name': '!175,bootfile-name',
-                          'opt_value': 'fake-bootfile',
+                          'opt_value': boot_file,
                           'ip_version': 4},
                          {'opt_name': 'server-ip-address',
                           'opt_value': '192.0.2.1',
@@ -443,14 +527,14 @@ class TestPXEUtils(db_base.DbTestCase):
                          {'opt_name': 'bootfile-name',
                           'opt_value': expected_boot_script_url,
                           'ip_version': 4}]
-        with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertItemsEqual(expected_info,
-                                  pxe_utils.dhcp_options_for_instance(task))
+
+        self.assertItemsEqual(expected_info,
+                              pxe_utils.dhcp_options_for_instance(task))
 
         self.config(dhcp_provider='neutron', group='dhcp')
         expected_boot_script_url = 'http://192.0.3.2:1234/boot.ipxe'
         expected_info = [{'opt_name': 'tag:!ipxe,bootfile-name',
-                          'opt_value': 'fake-bootfile',
+                          'opt_value': boot_file,
                           'ip_version': 4},
                          {'opt_name': 'server-ip-address',
                           'opt_value': '192.0.2.1',
@@ -461,12 +545,25 @@ class TestPXEUtils(db_base.DbTestCase):
                          {'opt_name': 'tag:ipxe,bootfile-name',
                           'opt_value': expected_boot_script_url,
                           'ip_version': 4}]
+
+        self.assertItemsEqual(expected_info,
+                              pxe_utils.dhcp_options_for_instance(task))
+
+    def test_dhcp_options_for_instance_ipxe_bios(self):
+        boot_file = 'fake-bootfile-bios'
+        self.config(pxe_bootfile_name=boot_file, group='pxe')
         with task_manager.acquire(self.context, self.node.uuid) as task:
-            self.assertItemsEqual(expected_info,
-                                  pxe_utils.dhcp_options_for_instance(task))
+            self._dhcp_options_for_instance_ipxe(task, boot_file)
+
+    def test_dhcp_options_for_instance_ipxe_uefi(self):
+        boot_file = 'fake-bootfile-uefi'
+        self.config(uefi_pxe_bootfile_name=boot_file, group='pxe')
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node.properties['capabilities'] = 'boot_mode:uefi'
+            self._dhcp_options_for_instance_ipxe(task, boot_file)
 
     @mock.patch('ironic.common.utils.rmtree_without_raise', autospec=True)
-    @mock.patch('ironic.common.utils.unlink_without_raise', autospec=True)
+    @mock.patch('ironic_lib.utils.unlink_without_raise', autospec=True)
     @mock.patch('ironic.common.dhcp_factory.DHCPFactory.provider')
     def test_clean_up_pxe_config_uefi(self, provider_mock, unlink_mock,
                                       rmtree_mock):
@@ -491,7 +588,7 @@ class TestPXEUtils(db_base.DbTestCase):
                 os.path.join(CONF.pxe.tftp_root, self.node.uuid))
 
     @mock.patch('ironic.common.utils.rmtree_without_raise')
-    @mock.patch('ironic.common.utils.unlink_without_raise')
+    @mock.patch('ironic_lib.utils.unlink_without_raise', autospec=True)
     @mock.patch('ironic.common.dhcp_factory.DHCPFactory.provider')
     def test_clean_up_pxe_config_uefi_instance_info(self,
                                                     provider_mock, unlink_mock,
@@ -514,3 +611,24 @@ class TestPXEUtils(db_base.DbTestCase):
             unlink_mock.assert_has_calls(unlink_calls)
             rmtree_mock.assert_called_once_with(
                 os.path.join(CONF.pxe.tftp_root, self.node.uuid))
+
+    @mock.patch('ironic.common.utils.rmtree_without_raise', autospec=True)
+    @mock.patch('ironic_lib.utils.unlink_without_raise', autospec=True)
+    def test_clean_up_ipxe_config_uefi(self, unlink_mock, rmtree_mock):
+        self.config(ipxe_enabled=True, group='pxe')
+        address = "aa:aa:aa:aa:aa:aa"
+        properties = {'capabilities': 'boot_mode:uefi'}
+        object_utils.create_test_port(self.context, node_id=self.node.id,
+                                      address=address)
+
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node.properties = properties
+            pxe_utils.clean_up_pxe_config(task)
+
+            unlink_calls = [
+                mock.call('/httpboot/pxelinux.cfg/aa-aa-aa-aa-aa-aa'),
+                mock.call('/httpboot/pxelinux.cfg/aaaaaaaaaaaa')
+            ]
+            unlink_mock.assert_has_calls(unlink_calls)
+            rmtree_mock.assert_called_once_with(
+                os.path.join(CONF.deploy.http_root, self.node.uuid))

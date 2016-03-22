@@ -18,6 +18,8 @@ Test class for common methods used by iRMC modules.
 
 import mock
 
+from oslo_config import cfg
+
 from ironic.common import exception
 from ironic.conductor import task_manager
 from ironic.drivers.modules.irmc import common as irmc_common
@@ -48,6 +50,10 @@ class IRMCValidateParametersTestCase(db_base.DbTestCase):
         self.assertIsNotNone(info.get('irmc_port'))
         self.assertIsNotNone(info.get('irmc_auth_method'))
         self.assertIsNotNone(info.get('irmc_sensor_method'))
+        self.assertIsNotNone(info.get('irmc_snmp_version'))
+        self.assertIsNotNone(info.get('irmc_snmp_port'))
+        self.assertIsNotNone(info.get('irmc_snmp_community'))
+        self.assertFalse(info.get('irmc_snmp_security'))
 
     def test_parse_driver_option_default(self):
         self.node.driver_info = {
@@ -106,6 +112,34 @@ class IRMCValidateParametersTestCase(db_base.DbTestCase):
         except exception.MissingParameterValue as e:
             self.assertIn('irmc_password', str(e))
             self.assertIn('irmc_address', str(e))
+
+    def test_parse_driver_info_invalid_snmp_version(self):
+        self.node.driver_info['irmc_snmp_version'] = 'v3x'
+        self.assertRaises(exception.InvalidParameterValue,
+                          irmc_common.parse_driver_info, self.node)
+
+    def test_parse_driver_info_invalid_snmp_port(self):
+        self.node.driver_info['irmc_snmp_port'] = '161'
+        self.assertRaises(exception.InvalidParameterValue,
+                          irmc_common.parse_driver_info, self.node)
+
+    def test_parse_driver_info_invalid_snmp_community(self):
+        self.node.driver_info['irmc_snmp_version'] = 'v2c'
+        self.node.driver_info['irmc_snmp_community'] = 100
+        self.assertRaises(exception.InvalidParameterValue,
+                          irmc_common.parse_driver_info, self.node)
+
+    def test_parse_driver_info_invalid_snmp_security(self):
+        self.node.driver_info['irmc_snmp_version'] = 'v3'
+        self.node.driver_info['irmc_snmp_security'] = 100
+        self.assertRaises(exception.InvalidParameterValue,
+                          irmc_common.parse_driver_info, self.node)
+
+    def test_parse_driver_info_empty_snmp_security(self):
+        self.node.driver_info['irmc_snmp_version'] = 'v3'
+        self.node.driver_info['irmc_snmp_security'] = ''
+        self.assertRaises(exception.InvalidParameterValue,
+                          irmc_common.parse_driver_info, self.node)
 
 
 class IRMCCommonMethodsTestCase(db_base.DbTestCase):
@@ -166,3 +200,15 @@ class IRMCCommonMethodsTestCase(db_base.DbTestCase):
             auth_method=self.info['irmc_auth_method'],
             client_timeout=self.info['irmc_client_timeout'])
         self.assertEqual('get_report', returned_mock_scci_get_report)
+
+    def test_out_range_port(self):
+        self.assertRaises(ValueError, cfg.CONF.set_override,
+                          'port', 60, 'irmc', enforce_type=True)
+
+    def test_out_range_auth_method(self):
+        self.assertRaises(ValueError, cfg.CONF.set_override,
+                          'auth_method', 'fake', 'irmc', enforce_type=True)
+
+    def test_out_range_sensor_method(self):
+        self.assertRaises(ValueError, cfg.CONF.set_override,
+                          'sensor_method', 'fake', 'irmc', enforce_type=True)

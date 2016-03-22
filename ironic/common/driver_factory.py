@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import collections
+
 from oslo_concurrency import lockutils
 from oslo_config import cfg
 from oslo_log import log
@@ -21,6 +23,7 @@ from stevedore import dispatch
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LI
+from ironic.drivers import base as driver_base
 
 
 LOG = log.getLogger(__name__)
@@ -43,6 +46,34 @@ CONF = cfg.CONF
 CONF.register_opts(driver_opts)
 
 EM_SEMAPHORE = 'extension_manager'
+
+
+def build_driver_for_task(task, driver_name=None):
+    """Builds a composable driver for a given task.
+
+    Starts with a `BareDriver` object, and attaches implementations of the
+    various driver interfaces to it. Currently these all come from the
+    monolithic driver singleton, but later will come from separate
+    driver factories and configurable via the database.
+
+    :param task: The task containing the node to build a driver for.
+    :param driver_name: The name of the monolithic driver to use as a base,
+                        if different than task.node.driver.
+    :returns: A driver object for the task.
+    :raises: DriverNotFound if node.driver could not be
+             found in the "ironic.drivers" namespace.
+    """
+    node = task.node
+    driver = driver_base.BareDriver()
+    _attach_interfaces_to_driver(driver, node, driver_name=driver_name)
+    return driver
+
+
+def _attach_interfaces_to_driver(driver, node, driver_name=None):
+    driver_singleton = get_driver(driver_name or node.driver)
+    for iface in driver_singleton.all_interfaces:
+        impl = getattr(driver_singleton, iface, None)
+        setattr(driver, iface, impl)
 
 
 def get_driver(driver_name):
@@ -69,7 +100,12 @@ def get_driver(driver_name):
 def drivers():
     """Get all drivers as a dict name -> driver object."""
     factory = DriverFactory()
-    return {name: factory[name].obj for name in factory.names}
+    # NOTE(jroll) I don't think this needs to be ordered, but
+    # ConductorManager.init_host seems to depend on this behavior (or at
+    # least the unit tests for it do), and it can't hurt much to keep it
+    # that way.
+    return collections.OrderedDict((name, factory[name].obj)
+                                   for name in factory.names)
 
 
 class DriverFactory(object):

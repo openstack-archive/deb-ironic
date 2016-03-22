@@ -16,21 +16,17 @@ VM, and so on), then Ironic may be thought of as a *hypervisor API* gluing
 together multiple drivers, each of which implement some portion of that
 functionality with respect to physical hardware.
 
-The developer documentation provided here is continually kept up-to-date based
+The documentation provided here is continually kept up-to-date based
 on the latest code, and may not represent the state of the project at any
 specific prior release.
 
 For information on any current or prior version of Ironic, see `the release
-notes`_ and `the wiki pages`_.
+notes`_.
 
-.. _the release notes: releasenotes/index.html
-.. _the wiki pages: https://wiki.openstack.org/wiki/Ironic/ReleaseNotes
+.. _the release notes: http://docs.openstack.org/releasenotes/ironic/
 
-Admin Guide
-===========
-
-Overview
---------
+Administrator's Guide
+=====================
 
 .. toctree::
   :maxdepth: 1
@@ -43,20 +39,20 @@ Overview
   deploy/drivers
   deploy/cleaning
   deploy/troubleshooting
+  Release Notes <http://docs.openstack.org/releasenotes/ironic/>
 
-Commands
---------
+Commands and API References
+===========================
 
 .. toctree::
   :maxdepth: 1
 
   cmds/ironic-dbsync
+  webapi/v1
+  dev/drivers
 
-Developer Guide
-===============
-
-Introduction
-------------
+Developer's Guide
+=================
 
 .. toctree::
   :maxdepth: 1
@@ -64,24 +60,10 @@ Introduction
   dev/architecture
   dev/states
   dev/contributing
-
-.. toctree::
+  dev/code-contribution-guide
   dev/dev-quickstart
   dev/vendor-passthru
-
-.. toctree::
-  :maxdepth: 1
-
   dev/faq
-
-API References
---------------
-
-.. toctree::
-  :maxdepth: 1
-
-  webapi/v1
-  dev/drivers
 
 Indices and tables
 ==================

@@ -121,6 +121,7 @@ class AgentAndSSHDriver(base.BaseDriver):
         self.raid = agent.AgentRAID()
         self.inspect = inspector.Inspector.create_if_enabled(
             'AgentAndSSHDriver')
+        self.console = ssh.ShellinaboxConsole()
 
 
 class AgentAndVirtualBoxDriver(base.BaseDriver):
@@ -191,6 +192,8 @@ class AgentAndUcsDriver(base.BaseDriver):
         self.deploy = agent.AgentDeploy()
         self.management = ucs_mgmt.UcsManagement()
         self.vendor = agent.AgentVendorInterface()
+        self.inspect = inspector.Inspector.create_if_enabled(
+            'AgentAndUcsDriver')
 
 
 class AgentAndCIMCDriver(base.BaseDriver):
@@ -214,6 +217,8 @@ class AgentAndCIMCDriver(base.BaseDriver):
         self.deploy = agent.AgentDeploy()
         self.management = cimc_mgmt.CIMCManagement()
         self.vendor = agent.AgentVendorInterface()
+        self.inspect = inspector.Inspector.create_if_enabled(
+            'AgentAndCIMCDriver')
 
 
 class AgentAndWakeOnLanDriver(base.BaseDriver):

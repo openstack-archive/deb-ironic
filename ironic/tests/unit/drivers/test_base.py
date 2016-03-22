@@ -15,7 +15,7 @@
 
 import json
 
-import eventlet
+from futurist import periodics
 import mock
 
 from ironic.common import exception
@@ -85,36 +85,137 @@ class PassthruDecoratorTestCase(base.TestCase):
                             inst2.driver_routes['driver_noexception']['func'])
 
 
-@mock.patch.object(eventlet.greenthread, 'spawn_n', autospec=True,
-                   side_effect=lambda func, *args, **kw: func(*args, **kw))
 class DriverPeriodicTaskTestCase(base.TestCase):
-    def test(self, spawn_mock):
+    def test(self):
         method_mock = mock.MagicMock(spec_set=[])
-        function_mock = mock.MagicMock(spec_set=[])
 
         class TestClass(object):
             @driver_base.driver_periodic_task(spacing=42)
             def method(self, foo, bar=None):
                 method_mock(foo, bar=bar)
 
-        @driver_base.driver_periodic_task(spacing=100, parallel=False)
-        def function():
-            function_mock()
-
         obj = TestClass()
         self.assertEqual(42, obj.method._periodic_spacing)
-        self.assertTrue(obj.method._periodic_task)
-        self.assertEqual('ironic.tests.unit.drivers.test_base.method',
-                         obj.method._periodic_name)
-        self.assertEqual('ironic.tests.unit.drivers.test_base.function',
-                         function._periodic_name)
+        self.assertTrue(periodics.is_periodic(obj.method))
 
         obj.method(1, bar=2)
         method_mock.assert_called_once_with(1, bar=2)
-        self.assertEqual(1, spawn_mock.call_count)
-        function()
-        function_mock.assert_called_once_with()
-        self.assertEqual(1, spawn_mock.call_count)
+
+
+class CleanStepDecoratorTestCase(base.TestCase):
+
+    def setUp(self):
+        super(CleanStepDecoratorTestCase, self).setUp()
+        method_mock = mock.MagicMock()
+        del method_mock._is_clean_step
+        del method_mock._clean_step_priority
+        del method_mock._clean_step_abortable
+        del method_mock._clean_step_argsinfo
+        self.method = method_mock
+
+    def test__validate_argsinfo(self):
+        # None, empty dict
+        driver_base._validate_argsinfo(None)
+        driver_base._validate_argsinfo({})
+
+        # Only description specified
+        driver_base._validate_argsinfo({'arg1': {'description': 'desc1'}})
+
+        # Multiple args
+        driver_base._validate_argsinfo({'arg1': {'description': 'desc1',
+                                                 'required': True},
+                                        'arg2': {'description': 'desc2'}})
+
+    def test__validate_argsinfo_not_dict(self):
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'argsinfo.+dictionary',
+                                driver_base._validate_argsinfo, 'not-a-dict')
+
+    def test__validate_argsinfo_arg_not_dict(self):
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'Argument.+dictionary',
+                                driver_base._validate_argsinfo,
+                                {'arg1': 'not-a-dict'})
+
+    def test__validate_argsinfo_arg_empty_dict(self):
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'description',
+                                driver_base._validate_argsinfo,
+                                {'arg1': {}})
+
+    def test__validate_argsinfo_arg_missing_description(self):
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'description',
+                                driver_base._validate_argsinfo,
+                                {'arg1': {'required': True}})
+
+    def test__validate_argsinfo_arg_description_invalid(self):
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'string',
+                                driver_base._validate_argsinfo,
+                                {'arg1': {'description': True}})
+
+    def test__validate_argsinfo_arg_required_invalid(self):
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'Boolean',
+                                driver_base._validate_argsinfo,
+                                {'arg1': {'description': 'desc1',
+                                          'required': 'maybe'}})
+
+    def test__validate_argsinfo_arg_unknown_key(self):
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'invalid',
+                                driver_base._validate_argsinfo,
+                                {'arg1': {'description': 'desc1',
+                                          'unknown': 'bad'}})
+
+    def test_clean_step_priority_only(self):
+        d = driver_base.clean_step(priority=10)
+        d(self.method)
+        self.assertTrue(self.method._is_clean_step)
+        self.assertEqual(10, self.method._clean_step_priority)
+        self.assertFalse(self.method._clean_step_abortable)
+        self.assertIsNone(self.method._clean_step_argsinfo)
+
+    def test_clean_step_all_args(self):
+        argsinfo = {'arg1': {'description': 'desc1',
+                             'required': True}}
+        d = driver_base.clean_step(priority=0, abortable=True,
+                                   argsinfo=argsinfo)
+        d(self.method)
+        self.assertTrue(self.method._is_clean_step)
+        self.assertEqual(0, self.method._clean_step_priority)
+        self.assertTrue(self.method._clean_step_abortable)
+        self.assertEqual(argsinfo, self.method._clean_step_argsinfo)
+
+    def test_clean_step_bad_priority(self):
+        d = driver_base.clean_step(priority='hi')
+        self.assertRaisesRegexp(exception.InvalidParameterValue, 'priority',
+                                d, self.method)
+        self.assertTrue(self.method._is_clean_step)
+        self.assertFalse(hasattr(self.method, '_clean_step_priority'))
+        self.assertFalse(hasattr(self.method, '_clean_step_abortable'))
+        self.assertFalse(hasattr(self.method, '_clean_step_argsinfo'))
+
+    def test_clean_step_bad_abortable(self):
+        d = driver_base.clean_step(priority=0, abortable='blue')
+        self.assertRaisesRegexp(exception.InvalidParameterValue, 'abortable',
+                                d, self.method)
+        self.assertTrue(self.method._is_clean_step)
+        self.assertEqual(0, self.method._clean_step_priority)
+        self.assertFalse(hasattr(self.method, '_clean_step_abortable'))
+        self.assertFalse(hasattr(self.method, '_clean_step_argsinfo'))
+
+    @mock.patch.object(driver_base, '_validate_argsinfo', spec_set=True,
+                       autospec=True)
+    def test_clean_step_bad_argsinfo(self, mock_valid):
+        mock_valid.side_effect = exception.InvalidParameterValue('bad')
+        d = driver_base.clean_step(priority=0, argsinfo=100)
+        self.assertRaises(exception.InvalidParameterValue, d, self.method)
+        self.assertTrue(self.method._is_clean_step)
+        self.assertEqual(0, self.method._clean_step_priority)
+        self.assertFalse(self.method._clean_step_abortable)
+        self.assertFalse(hasattr(self.method, '_clean_step_argsinfo'))
 
 
 class CleanStepTestCase(base.TestCase):

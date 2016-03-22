@@ -14,13 +14,27 @@
 
 """Ironic common internal object model"""
 
+from oslo_utils import versionutils
 from oslo_versionedobjects import base as object_base
 
+from ironic import objects
 from ironic.objects import fields as object_fields
 
 
 class IronicObjectRegistry(object_base.VersionedObjectRegistry):
-    pass
+    def registration_hook(self, cls, index):
+        # NOTE(jroll): blatantly stolen from nova
+        # NOTE(danms): This is called when an object is registered,
+        # and is responsible for maintaining ironic.objects.$OBJECT
+        # as the highest-versioned implementation of a given object.
+        version = versionutils.convert_version_to_tuple(cls.VERSION)
+        if not hasattr(objects, cls.obj_name()):
+            setattr(objects, cls.obj_name(), cls)
+        else:
+            cur_version = versionutils.convert_version_to_tuple(
+                getattr(objects, cls.obj_name()).VERSION)
+            if version >= cur_version:
+                setattr(objects, cls.obj_name(), cls)
 
 
 class IronicObject(object_base.VersionedObject):
@@ -59,6 +73,21 @@ class IronicObject(object_base.VersionedObject):
             if (self.obj_attr_is_set(field) and
                     self[field] != loaded_object[field]):
                 self[field] = loaded_object[field]
+
+    @staticmethod
+    def _from_db_object(obj, db_object):
+        """Converts a database entity to a formal object.
+
+        :param obj: An object of the class.
+        :param db_object: A DB model of the object
+        :return: The object of the class with the database entity added
+        """
+
+        for field in obj.fields:
+            obj[field] = db_object[field]
+
+        obj.obj_reset_changes()
+        return obj
 
 
 class IronicObjectIndirectionAPI(object_base.VersionedObjectIndirectionAPI):

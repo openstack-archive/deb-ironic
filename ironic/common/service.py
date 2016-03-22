@@ -33,16 +33,19 @@ from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LI
 from ironic.common import rpc
+from ironic import objects
 from ironic.objects import base as objects_base
 
 
 service_opts = [
     cfg.IntOpt('periodic_interval',
                default=60,
-               help=_('Seconds between running periodic tasks.')),
+               help=_('Default interval (in seconds) for running driver '
+                      'periodic tasks.'),
+               deprecated_for_removal=True),
     cfg.StrOpt('host',
                default=socket.getfqdn(),
-               help=_('Name of this node.  This can be an opaque identifier. '
+               help=_('Name of this node. This can be an opaque identifier. '
                       'It is not necessarily a hostname, FQDN, or IP address. '
                       'However, the node name must be valid within '
                       'an AMQP key, and if using ZeroMQ, a valid '
@@ -78,11 +81,7 @@ class RPCService(service.Service):
         self.rpcserver.start()
 
         self.handle_signal()
-        self.manager.init_host()
-        self.tg.add_dynamic_timer(
-            self.manager.periodic_tasks,
-            periodic_interval_max=CONF.periodic_interval,
-            context=admin_context)
+        self.manager.init_host(admin_context)
 
         LOG.info(_LI('Created RPC server for service %(service)s on host '
                      '%(host)s.'),
@@ -131,15 +130,16 @@ def prepare_service(argv=[]):
                                          'keystoneclient=INFO',
                                          'stevedore=INFO',
                                          'eventlet.wsgi.server=WARNING',
+                                         'iso8601=WARNING',
                                          'paramiko=WARNING',
                                          'requests=WARNING',
                                          'neutronclient=WARNING',
                                          'glanceclient=WARNING',
-                                         'ironic.openstack.common=WARNING',
                                          'urllib3.connectionpool=WARNING',
                                          ])
     config.parse_args(argv)
     log.setup(CONF, 'ironic')
+    objects.register_all()
 
 
 def process_launcher():
@@ -168,7 +168,8 @@ class WSGIService(service.ServiceBase):
         self.server = wsgi.Server(CONF, name, self.app,
                                   host=CONF.api.host_ip,
                                   port=CONF.api.port,
-                                  use_ssl=use_ssl)
+                                  use_ssl=use_ssl,
+                                  logger_name=name)
 
     def start(self):
         """Start serving this service using loaded configuration.

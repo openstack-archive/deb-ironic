@@ -22,6 +22,7 @@ import copy
 
 import mock
 from oslo_config import cfg
+import oslo_messaging as messaging
 from oslo_messaging import _utils as messaging_utils
 
 from ironic.common import boot_devices
@@ -52,6 +53,7 @@ class RPCAPITestCase(base.DbTestCase):
         self.fake_node = dbutils.get_test_node(driver='fake-driver')
         self.fake_node_obj = objects.Node._from_db_object(
             objects.Node(self.context), self.fake_node)
+        self.fake_portgroup = dbutils.get_test_portgroup()
 
     def test_serialized_instance_has_uuid(self):
         self.assertTrue('uuid' in self.fake_node)
@@ -317,6 +319,15 @@ class RPCAPITestCase(base.DbTestCase):
                           node_id=self.fake_node['uuid'],
                           target_raid_config='config')
 
+    def test_do_node_clean(self):
+        clean_steps = [{'step': 'upgrade_firmware', 'interface': 'deploy'},
+                       {'step': 'upgrade_bmc', 'interface': 'management'}]
+        self._test_rpcapi('do_node_clean',
+                          'call',
+                          version='1.32',
+                          node_id=self.fake_node['uuid'],
+                          clean_steps=clean_steps)
+
     def test_object_action(self):
         self._test_rpcapi('object_action',
                           'call',
@@ -342,3 +353,43 @@ class RPCAPITestCase(base.DbTestCase):
                           version='1.31',
                           objinst='fake-object',
                           object_versions={'fake-object': '1.0'})
+
+    @mock.patch.object(messaging.RPCClient, 'can_send_version', autospec=True)
+    def test_object_action_invalid_version(self, mock_send):
+        rpcapi = conductor_rpcapi.ConductorAPI(topic='fake-topic')
+        mock_send.return_value = False
+        self.assertRaises(NotImplementedError,
+                          rpcapi.object_action, self.context,
+                          objinst='fake-object', objmethod='foo',
+                          args=tuple(), kwargs=dict())
+
+    @mock.patch.object(messaging.RPCClient, 'can_send_version', autospec=True)
+    def test_object_class_action_versions_invalid_version(self, mock_send):
+        rpcapi = conductor_rpcapi.ConductorAPI(topic='fake-topic')
+        mock_send.return_value = False
+        self.assertRaises(NotImplementedError,
+                          rpcapi.object_class_action_versions, self.context,
+                          objname='fake-object', objmethod='foo',
+                          object_versions={'fake-object': '1.0'},
+                          args=tuple(), kwargs=dict())
+
+    @mock.patch.object(messaging.RPCClient, 'can_send_version', autospec=True)
+    def test_object_backport_versions_invalid_version(self, mock_send):
+        rpcapi = conductor_rpcapi.ConductorAPI(topic='fake-topic')
+        mock_send.return_value = False
+        self.assertRaises(NotImplementedError,
+                          rpcapi.object_backport_versions, self.context,
+                          objinst='fake-object',
+                          object_versions={'fake-object': '1.0'})
+
+    def test_update_portgroup(self):
+        self._test_rpcapi('update_portgroup',
+                          'call',
+                          version='1.33',
+                          portgroup_obj=self.fake_portgroup)
+
+    def test_destroy_portgroup(self):
+        self._test_rpcapi('destroy_portgroup',
+                          'call',
+                          version='1.33',
+                          portgroup=self.fake_portgroup)

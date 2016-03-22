@@ -30,13 +30,16 @@ Install prerequisites (for python 2.7):
 
     sudo yum install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc graphviz gcc libjpeg-turbo-devel
 
+  If using RHEL and yum reports "No package python-pip available" and "No
+  package git-review available", use the EPEL software repository.
+  Instructions can be found at `<http://fedoraproject.org/wiki/EPEL/FAQ#howtouse>`_.
+
 - Fedora 22 or higher::
 
     sudo dnf install python-devel openssl-devel python-pip mysql-devel libxml2-devel libxslt-devel postgresql-devel git git-review libffi-devel gettext ipmitool psmisc graphviz gcc libjpeg-turbo-devel
 
-  If using RHEL and yum reports "No package python-pip available" and "No
-  package git-review available", use the EPEL software repository.
-  Instructions can be found at `<http://fedoraproject.org/wiki/EPEL/FAQ#howtouse>`_.
+  Additionally, if using Fedora 23, ``redhat-rpm-config`` package should be
+  installed so that development virtualenv can be built successfully.
 
 - openSUSE/SLE 12::
 
@@ -47,15 +50,18 @@ Install prerequisites (for python 2.7):
   `<http://software.opensuse.org/download.html?project=graphics&package=graphviz-plugins>`_.
 
 
-Using Python 3.4:
+To use Python 3.4, follow the instructions above to install prerequisites and
+additionally install the following packages:
 
-  Follow the instructions above to install prerequisites and on:
+- On Ubuntu/Debian::
 
-  - Fedora 21/RHEL7/CentOS7::
+    sudo apt-get install python3-dev
+
+- On Fedora 21/RHEL7/CentOS7::
 
     sudo yum install python3-devel
 
-  - Fedora 22 higher::
+- On Fedora 22 and higher::
 
     sudo dnf install python3-devel
 
@@ -324,9 +330,9 @@ If you make some code changes and want to test their effects, install
 again with "python setup.py develop", stop the services with Ctrl-C,
 and restart them.
 
-================================
+==============================
 Deploying Ironic with DevStack
-================================
+==============================
 
 DevStack may be configured to deploy Ironic, setup Nova to use the Ironic
 driver and provide hardware resources (network, baremetal compute nodes)
@@ -367,10 +373,8 @@ and uses the ``pxe_ssh`` driver by default::
     SWIFT_HASH=password
     SWIFT_TEMPURL_KEY=password
 
-    # Enable Ironic API and Ironic Conductor
-    enable_service ironic
-    enable_service ir-api
-    enable_service ir-cond
+    # Enable Ironic plugin
+    enable_plugin ironic git://git.openstack.org/openstack/ironic
 
     # Enable Neutron which is required by Ironic and disable nova-network.
     disable_service n-net
@@ -404,6 +408,7 @@ and uses the ``pxe_ssh`` driver by default::
     IRONIC_VM_COUNT=3
     IRONIC_VM_SSH_PORT=22
     IRONIC_BAREMETAL_BASIC_OPS=True
+    DEFAULT_INSTANCE_TYPE=baremetal
     IRONIC_DEPLOY_DRIVER_ISCSI_WITH_IPA=True
 
     # Enable Ironic drivers.
@@ -439,6 +444,16 @@ and uses the ``pxe_ssh`` driver by default::
     IRONIC_VM_LOG_DIR=$HOME/ironic-bm-logs
 
     END
+
+.. note::
+    When running QEMU as non-root user (e.g. ``qemu`` on Fedora or ``libvirt-qemu`` on Ubuntu),
+    make sure ``IRONIC_VM_LOG_DIR`` points to a directory where QEMU will be able to write.
+    You can verify this with, for example::
+
+      # on Fedora
+      sudo -u qemu touch $HOME/ironic-bm-logs/test.log
+      # on Ubuntu
+      sudo -u libvirt-qemu touch $HOME/ironic-bm-logs/test.log
 
 Run stack.sh::
 

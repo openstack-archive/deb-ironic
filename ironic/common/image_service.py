@@ -21,7 +21,6 @@ import os
 import shutil
 
 from oslo_config import cfg
-from oslo_log import log as logging
 from oslo_utils import importutils
 import requests
 import sendfile
@@ -34,7 +33,6 @@ from ironic.common.i18n import _
 from ironic.common import keystone
 from ironic.common import utils
 
-LOG = logging.getLogger(__name__)
 
 IMAGE_CHUNK_SIZE = 1024 * 1024  # 1mb
 
@@ -53,6 +51,7 @@ glance_opts = [
                 help=_('Default glance port.')),
     cfg.StrOpt('glance_protocol',
                default='http',
+               choices=['http', 'https'],
                help=_('Default protocol to use when connecting to glance. '
                       'Set to https for SSL.')),
     cfg.ListOpt('glance_api_servers',
@@ -69,9 +68,9 @@ glance_opts = [
                       'glance.')),
     cfg.StrOpt('auth_strategy',
                default='keystone',
+               choices=['keystone', 'noauth'],
                help=_('Authentication strategy to use when connecting to '
-                      'glance. Only "keystone" and "noauth" are currently '
-                      'supported by ironic.')),
+                      'glance.')),
 ]
 
 CONF.register_opts(glance_opts, group='glance')

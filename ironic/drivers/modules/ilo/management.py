@@ -17,16 +17,17 @@ iLO Management Interface
 
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_utils import excutils
 from oslo_utils import importutils
+import six
 
 from ironic.common import boot_devices
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LI
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LI, _LW
 from ironic.conductor import task_manager
 from ironic.drivers import base
 from ironic.drivers.modules.ilo import common as ilo_common
+from ironic.drivers.modules.ilo import firmware_processor
 from ironic.drivers.modules import ipmitool
 
 LOG = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ MANAGEMENT_PROPERTIES.update(ilo_common.CLEAN_PROPERTIES)
 
 clean_step_opts = [
     cfg.IntOpt('clean_priority_reset_ilo',
-               default=1,
+               default=0,
                help=_('Priority for reset_ilo clean step.')),
     cfg.IntOpt('clean_priority_reset_bios_to_default',
                default=10,
@@ -301,3 +302,133 @@ class IloManagement(base.ManagementInterface):
         :raises: NodeCleaningFailure, on failure to execute step.
         """
         return _execute_ilo_clean_step(task.node, 'clear_secure_boot_keys')
+
+    @base.clean_step(priority=0, abortable=False, argsinfo={
+        'ilo_license_key': {
+            'description': (
+                'The HPE iLO Advanced license key to activate enterprise '
+                'features.'
+            ),
+            'required': True
+        }
+    })
+    def activate_license(self, task, **kwargs):
+        """Activates iLO Advanced license.
+
+        :param task: a TaskManager object.
+        :raises: InvalidParameterValue, if any of the arguments are invalid.
+        :raises: NodeCleaningFailure, on failure to execute clean step.
+        """
+        ilo_license_key = kwargs.get('ilo_license_key')
+        node = task.node
+
+        if not isinstance(ilo_license_key, six.string_types):
+            msg = (_("Value of 'ilo_license_key' must be a string instead of "
+                     "'%(value)s'. Step 'activate_license' is not executed "
+                     "for %(node)s.")
+                   % {'value': ilo_license_key, 'node': node.uuid})
+            LOG.error(msg)
+            raise exception.InvalidParameterValue(msg)
+
+        LOG.debug("Activating iLO license for node %(node)s ...",
+                  {'node': node.uuid})
+        _execute_ilo_clean_step(node, 'activate_license', ilo_license_key)
+        LOG.info(_LI("iLO license activated for node %(node)s."),
+                 {'node': node.uuid})
+
+    @base.clean_step(priority=0, abortable=False, argsinfo={
+        'firmware_update_mode': {
+            'description': (
+                'This argument indicates the mode (or mechanism) of '
+                'Out-of-Band (OOB) firmware update procedure. '
+                'Currently, the only supported value is `ilo`.'
+            ),
+            'required': True
+        },
+        'firmware_images': {
+            'description': (
+                'This argument represents the ordered list of dictionaries of '
+                'firmware image url, its checksum (md5) and component type. '
+                'The firmware images will be applied (in the order given) '
+                'one by one on the baremetal server. The different types of '
+                'firmware url schemes supported are: '
+                '`file`, `http`, `https` & `swift`. '
+                'And the different firmware components that can be updated '
+                'are: '
+                '`ilo`, `cpld`, `power_pic`, `bios` & `chassis`.'
+            ),
+            'required': True
+        }
+    })
+    @firmware_processor.verify_firmware_update_args
+    def update_firmware(self, task, **kwargs):
+        """Updates the firmware.
+
+        :param task: a TaskManager object.
+        :raises: InvalidParameterValue if update firmware mode is not 'ilo'.
+                 Even applicable for invalid input cases.
+        :raises: NodeCleaningFailure, on failure to execute step.
+        """
+        node = task.node
+        fw_location_objs_n_components = []
+        firmware_images = kwargs['firmware_images']
+        # Note(deray): Processing of firmware images happens here. As part
+        # of processing checksum validation is also done for the firmware file.
+        # Processing of firmware file essentially means downloading the file
+        # on the conductor, validating the checksum of the downloaded content,
+        # extracting the raw firmware file from its compact format, if it is,
+        # and hosting the file on a web server or a swift store based on the
+        # need of the baremetal server iLO firmware update method.
+        try:
+            for firmware_image_info in firmware_images:
+                url, checksum, component = (
+                    firmware_processor.get_and_validate_firmware_image_info(
+                        firmware_image_info))
+                LOG.debug("Processing of firmware file: %(firmware_file)s on "
+                          "node: %(node)s ... in progress",
+                          {'firmware_file': url, 'node': node.uuid})
+
+                fw_processor = firmware_processor.FirmwareProcessor(url)
+                fw_location_obj = fw_processor.process_fw_on(node, checksum)
+                fw_location_objs_n_components.append(
+                    (fw_location_obj, component))
+
+                LOG.debug("Processing of firmware file: %(firmware_file)s on "
+                          "node: %(node)s ... done",
+                          {'firmware_file': url, 'node': node.uuid})
+        except exception.IronicException as ilo_exc:
+            # delete all the files extracted so far from the extracted list
+            # and re-raise the exception
+            for fw_loc_obj_n_comp_tup in fw_location_objs_n_components:
+                fw_loc_obj_n_comp_tup[0].remove()
+            LOG.error(_LE("Processing of firmware image: %(firmware_image)s "
+                          "on node: %(node)s ... failed"),
+                      {'firmware_image': firmware_image_info,
+                       'node': node.uuid})
+            raise exception.NodeCleaningFailure(node=node.uuid, reason=ilo_exc)
+
+        # Updating of firmware images happen here.
+        try:
+            for fw_location_obj, component in fw_location_objs_n_components:
+                fw_location = fw_location_obj.fw_image_location
+                LOG.debug("Firmware update for %(firmware_file)s on "
+                          "node: %(node)s ... in progress",
+                          {'firmware_file': fw_location, 'node': node.uuid})
+
+                _execute_ilo_clean_step(
+                    node, 'update_firmware', fw_location, component)
+
+                LOG.debug("Firmware update for %(firmware_file)s on "
+                          "node: %(node)s ... done",
+                          {'firmware_file': fw_location, 'node': node.uuid})
+        except exception.NodeCleaningFailure:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_LE("Firmware update for %(firmware_file)s on "
+                              "node: %(node)s ... failed"),
+                          {'firmware_file': fw_location, 'node': node.uuid})
+        finally:
+            for fw_loc_obj_n_comp_tup in fw_location_objs_n_components:
+                fw_loc_obj_n_comp_tup[0].remove()
+
+        LOG.info(_LI("All Firmware operations completed successfully for "
+                     "node: %s."), node.uuid)

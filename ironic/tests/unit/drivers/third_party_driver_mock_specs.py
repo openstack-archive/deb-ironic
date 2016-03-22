@@ -16,6 +16,23 @@
 """This module provides mock 'specs' for third party modules that can be used
 when needing to mock those third party modules"""
 
+# python-dracclient
+DRACCLIENT_SPEC = (
+    'client',
+    'constants',
+    'exceptions'
+)
+
+DRACCLIENT_CLIENT_MOD_SPEC = (
+    'DRACClient',
+)
+
+DRACCLIENT_CONSTANTS_MOD_SPEC = (
+    'POWER_OFF',
+    'POWER_ON',
+    'REBOOT'
+)
+
 # iboot
 IBOOT_SPEC = (
     'iBootInterface',
@@ -31,6 +48,7 @@ IRONIC_INSPECTOR_CLIENT_SPEC = (
 PROLIANTUTILS_SPEC = (
     'exception',
     'ilo',
+    'utils',
 )
 
 # pyghmi
@@ -101,6 +119,7 @@ SCCICLIENT_IRMC_SCCI_SPEC = (
     'get_sensor_data',
     'get_virtual_cd_set_params_cmd',
     'get_virtual_fd_set_params_cmd',
+    'get_essential_properties',
 )
 
 ONEVIEWCLIENT_SPEC = (

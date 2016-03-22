@@ -29,6 +29,7 @@ from ironic.drivers.modules.cimc import management as cimc_mgmt
 from ironic.drivers.modules.cimc import power as cimc_power
 from ironic.drivers.modules.drac import management as drac_mgmt
 from ironic.drivers.modules.drac import power as drac_power
+from ironic.drivers.modules.drac import vendor_passthru as drac_vendor
 from ironic.drivers.modules import fake
 from ironic.drivers.modules import iboot
 from ironic.drivers.modules.ilo import inspect as ilo_inspect
@@ -37,6 +38,7 @@ from ironic.drivers.modules.ilo import power as ilo_power
 from ironic.drivers.modules import inspector
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
+from ironic.drivers.modules.irmc import inspect as irmc_inspect
 from ironic.drivers.modules.irmc import management as irmc_management
 from ironic.drivers.modules.irmc import power as irmc_power
 from ironic.drivers.modules import iscsi_deploy
@@ -104,6 +106,7 @@ class FakeSSHDriver(base.BaseDriver):
         self.power = ssh.SSHPower()
         self.deploy = fake.FakeDeploy()
         self.management = ssh.SSHManagement()
+        self.console = ssh.ShellinaboxConsole()
 
 
 class FakeIPMINativeDriver(base.BaseDriver):
@@ -177,14 +180,15 @@ class FakeDracDriver(base.BaseDriver):
     """Fake Drac driver."""
 
     def __init__(self):
-        if not importutils.try_import('pywsman'):
+        if not importutils.try_import('dracclient'):
             raise exception.DriverLoadError(
                 driver=self.__class__.__name__,
-                reason=_('Unable to import pywsman library'))
+                reason=_('Unable to import python-dracclient library'))
 
         self.power = drac_power.DracPower()
         self.deploy = fake.FakeDeploy()
         self.management = drac_mgmt.DracManagement()
+        self.vendor = drac_vendor.DracVendorPassthru()
 
 
 class FakeSNMPDriver(base.BaseDriver):
@@ -210,6 +214,7 @@ class FakeIRMCDriver(base.BaseDriver):
         self.power = irmc_power.IRMCPower()
         self.deploy = fake.FakeDeploy()
         self.management = irmc_management.IRMCManagement()
+        self.inspect = irmc_inspect.IRMCInspect()
 
 
 class FakeVirtualBoxDriver(base.BaseDriver):

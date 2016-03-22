@@ -32,6 +32,15 @@ always requests the newest supported API version.
 API Versions History
 --------------------
 
+**1.16**
+    Add ability to filter nodes by driver.
+
+**1.15**
+
+    Add ability to do manual cleaning when a node is in the manageable
+    provision state via PUT v1/nodes/<identifier>/states/provision,
+    target:clean, clean_steps:[...].
+
 **1.14**
 
     Make the following endpoints discoverable via Ironic API:
@@ -45,7 +54,7 @@ API Versions History
 
 **1.12**
 
-    This API version adds the following the following abilities:
+    This API version adds the following abilities:
 
     * Get/set ``node.target_raid_config`` and to get
       ``node.raid_config``.
@@ -55,10 +64,10 @@ API Versions History
 
     Newly registered nodes begin in the ``enroll`` provision state by default,
     instead of ``available``. To get them to the ``available`` state,
-    the ``manage`` action must first be ran, to verify basic hardware control.
-    On success the node moves to ``manageable`` provision state, then the
-    ``provide`` action must be run, which will clean the node and
-    make it available.
+    the ``manage`` action must first be run to verify basic hardware control.
+    On success the node moves to ``manageable`` provision state. Then the
+    ``provide`` action must be run. Automated cleaning of the node is done and
+    the node is made ``available``.
 
 **1.10**
 

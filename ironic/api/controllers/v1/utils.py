@@ -38,6 +38,19 @@ JSONPATCH_EXCEPTIONS = (jsonpatch.JsonPatchException,
                         KeyError)
 
 
+# Minimum API version to use for certain verbs
+MIN_VERB_VERSIONS = {
+    # v1.4 added the MANAGEABLE state and two verbs to move nodes into
+    # and out of that state. Reject requests to do this in older versions
+    states.VERBS['manage']: versions.MINOR_4_MANAGEABLE_STATE,
+    states.VERBS['provide']: versions.MINOR_4_MANAGEABLE_STATE,
+
+    states.VERBS['inspect']: versions.MINOR_6_INSPECT_STATE,
+    states.VERBS['abort']: versions.MINOR_13_ABORT_VERB,
+    states.VERBS['clean']: versions.MINOR_15_MANUAL_CLEAN,
+}
+
+
 def validate_limit(limit):
     if limit is None:
         return CONF.api.max_limit
@@ -68,7 +81,7 @@ def apply_jsonpatch(doc, patch):
 
 def get_patch_value(patch, path):
     for p in patch:
-        if p['path'] == path:
+        if p['path'] == path and p['op'] != 'remove':
             return p['value']
 
 
@@ -199,6 +212,12 @@ def check_allow_specify_fields(fields):
         raise exception.NotAcceptable()
 
 
+def check_allow_management_verbs(verb):
+    min_version = MIN_VERB_VERSIONS.get(verb)
+    if min_version is not None and pecan.request.version.minor < min_version:
+        raise exception.NotAcceptable()
+
+
 def check_for_invalid_state_and_allow_filter(provision_state):
     """Check if filtering nodes by provision state is allowed.
 
@@ -212,6 +231,20 @@ def check_for_invalid_state_and_allow_filter(provision_state):
         if provision_state not in valid_states:
             raise exception.InvalidParameterValue(
                 _('Provision state "%s" is not valid') % provision_state)
+
+
+def check_allow_specify_driver(driver):
+    """Check if filtering nodes by driver is allowed.
+
+    Version 1.16 of the API allows filter nodes by driver.
+    """
+    if (driver is not None and pecan.request.version.minor <
+            versions.MINOR_16_DRIVER_FILTER):
+        raise exception.NotAcceptable(_(
+            "Request not acceptable. The minimal required API version "
+            "should be %(base)s.%(opr)s") %
+            {'base': versions.BASE_VERSION,
+             'opr': versions.MINOR_16_DRIVER_FILTER})
 
 
 def initial_node_provision_state():

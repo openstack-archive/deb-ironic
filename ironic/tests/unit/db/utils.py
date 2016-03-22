@@ -224,6 +224,7 @@ def get_test_node(**kw):
         'inspection_started_at': kw.get('inspection_started_at'),
         'raid_config': kw.get('raid_config'),
         'target_raid_config': kw.get('target_raid_config'),
+        'tags': kw.get('tags', []),
     }
 
 
@@ -253,6 +254,12 @@ def get_test_port(**kw):
         'extra': kw.get('extra', {}),
         'created_at': kw.get('created_at'),
         'updated_at': kw.get('updated_at'),
+        'local_link_connection': kw.get('local_link_connection',
+                                        {'switch_id': '0a:1b:2c:3d:4e:5f',
+                                         'port_id': 'Ethernet3/1',
+                                         'switch_info': 'switch1'}),
+        'portgroup_id': kw.get('portgroup_id'),
+        'pxe_enabled': kw.get('pxe_enabled', True),
     }
 
 
@@ -344,3 +351,56 @@ def get_test_oneview_driver_info():
     return {
         'server_hardware_uri': 'fake_sh_uri',
     }
+
+
+def get_test_portgroup(**kw):
+    return {
+        'id': kw.get('id', 654),
+        'uuid': kw.get('uuid', '6eb02b44-18a3-4659-8c0b-8d2802581ae4'),
+        'name': kw.get('name', 'fooname'),
+        'node_id': kw.get('node_id', 123),
+        'address': kw.get('address', '52:54:00:cf:2d:31'),
+        'extra': kw.get('extra', {}),
+        'created_at': kw.get('created_at'),
+        'updated_at': kw.get('updated_at'),
+    }
+
+
+def create_test_portgroup(**kw):
+    """Create test portgroup entry in DB and return Portgroup DB object.
+
+    Function to be used to create test Portgroup objects in the database.
+
+    :param kw: kwargs with overriding values for port's attributes.
+    :returns: Test Portgroup DB object.
+
+    """
+    portgroup = get_test_portgroup(**kw)
+    # Let DB generate ID if it isn't specified explicitly
+    if 'id' not in kw:
+        del portgroup['id']
+    dbapi = db_api.get_instance()
+    return dbapi.create_portgroup(portgroup)
+
+
+def get_test_node_tag(**kw):
+    return {
+        "tag": kw.get("tag", "tag1"),
+        "node_id": kw.get("node_id", "123"),
+        'created_at': kw.get('created_at'),
+        'updated_at': kw.get('updated_at'),
+    }
+
+
+def create_test_node_tag(**kw):
+    """Create test node tag entry in DB and return NodeTag DB object.
+
+    Function to be used to create test NodeTag objects in the database.
+
+    :param kw: kwargs with overriding values for tag's attributes.
+    :returns: Test NodeTag DB object.
+
+    """
+    tag = get_test_node_tag(**kw)
+    dbapi = db_api.get_instance()
+    return dbapi.add_node_tag(tag['node_id'], tag['tag'])

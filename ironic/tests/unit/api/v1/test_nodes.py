@@ -695,6 +695,38 @@ class TestListNodes(test_api_base.BaseApiTest):
         self.assertEqual(http_client.NOT_ACCEPTABLE, response.status_code)
         self.assertTrue(response.json['error_message'])
 
+    def test_get_nodes_by_driver(self):
+        node = obj_utils.create_test_node(self.context,
+                                          uuid=uuidutils.generate_uuid(),
+                                          driver='pxe_ssh')
+        node1 = obj_utils.create_test_node(self.context,
+                                           uuid=uuidutils.generate_uuid(),
+                                           driver='fake')
+
+        data = self.get_json('/nodes?driver=pxe_ssh',
+                             headers={api_base.Version.string: "1.16"})
+        uuids = [n['uuid'] for n in data['nodes']]
+        self.assertIn(node.uuid, uuids)
+        self.assertNotIn(node1.uuid, uuids)
+        data = self.get_json('/nodes?driver=fake',
+                             headers={api_base.Version.string: "1.16"})
+        uuids = [n['uuid'] for n in data['nodes']]
+        self.assertIn(node1.uuid, uuids)
+        self.assertNotIn(node.uuid, uuids)
+
+    def test_get_nodes_by_invalid_driver(self):
+        data = self.get_json('/nodes?driver=test',
+                             headers={api_base.Version.string: "1.16"})
+        self.assertEqual(0, len(data['nodes']))
+
+    def test_get_nodes_by_driver_invalid_api_version(self):
+        response = self.get_json(
+            '/nodes?driver=fake',
+            headers={api_base.Version.string: str(api_v1.MIN_VER)},
+            expect_errors=True)
+        self.assertEqual(http_client.NOT_ACCEPTABLE, response.status_code)
+        self.assertTrue(response.json['error_message'])
+
     def test_get_console_information(self):
         node = obj_utils.create_test_node(self.context)
         expected_console_info = {'test': 'test-data'}
@@ -1276,6 +1308,18 @@ class TestPatch(test_api_base.BaseApiTest):
         self.assertEqual(http_client.CONFLICT, response.status_code)
         self.assertTrue(response.json['error_message'])
 
+    @mock.patch.object(api_node.NodesController, '_check_name_acceptable')
+    def test_patch_name_remove_ok(self, cna_mock):
+        self.mock_update_node.return_value = self.node
+        response = self.patch_json('/nodes/%s' % self.node.uuid,
+                                   [{'path': '/name',
+                                     'op': 'remove'}],
+                                   headers={api_base.Version.string:
+                                            "1.5"})
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(http_client.OK, response.status_code)
+        self.assertFalse(cna_mock.called)
+
     @mock.patch.object(api_utils, 'get_rpc_node')
     def test_patch_update_drive_console_enabled(self, mock_rpc_node):
         self.node.console_enabled = True
@@ -1682,7 +1726,7 @@ class TestDelete(test_api_base.BaseApiTest):
         response = self.delete('/nodes/%s/maintenance' % node.uuid)
         self.assertEqual(http_client.ACCEPTED, response.status_int)
         self.assertEqual(b'', response.body)
-        self.assertEqual(False, node.maintenance)
+        self.assertFalse(node.maintenance)
         self.assertIsNone(node.maintenance_reason)
         mock_get.assert_called_once_with(mock.ANY, node.uuid)
         mock_update.assert_called_once_with(mock.ANY, mock.ANY,
@@ -1700,7 +1744,7 @@ class TestDelete(test_api_base.BaseApiTest):
                                headers={api_base.Version.string: "1.5"})
         self.assertEqual(http_client.ACCEPTED, response.status_int)
         self.assertEqual(b'', response.body)
-        self.assertEqual(False, node.maintenance)
+        self.assertFalse(node.maintenance)
         self.assertIsNone(node.maintenance_reason)
         mock_get.assert_called_once_with(mock.ANY, node.name)
         mock_update.assert_called_once_with(mock.ANY, mock.ANY,
@@ -1924,13 +1968,6 @@ class TestPut(test_api_base.BaseApiTest):
                             expect_errors=True)
         self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
 
-    def test_manage_raises_error_before_1_2(self):
-        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
-                            {'target': states.VERBS['manage']},
-                            headers={},
-                            expect_errors=True)
-        self.assertEqual(http_client.NOT_ACCEPTABLE, ret.status_code)
-
     @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
     def test_provide_from_manage(self, mock_dpa):
         self.node.provision_state = states.MANAGEABLE
@@ -1982,13 +2019,6 @@ class TestPut(test_api_base.BaseApiTest):
             self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
         self.assertEqual(0, mock_dpa.call_count)
 
-    def test_abort_unsupported(self):
-        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
-                            {'target': states.VERBS['abort']},
-                            headers={api_base.Version.string: "1.12"},
-                            expect_errors=True)
-        self.assertEqual(406, ret.status_code)
-
     @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
     def test_abort_cleanwait(self, mock_dpa):
         self.node.provision_state = states.CLEANWAIT
@@ -1997,7 +2027,7 @@ class TestPut(test_api_base.BaseApiTest):
         ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
                             {'target': states.VERBS['abort']},
                             headers={api_base.Version.string: "1.13"})
-        self.assertEqual(202, ret.status_code)
+        self.assertEqual(http_client.ACCEPTED, ret.status_code)
         self.assertEqual(b'', ret.body)
         mock_dpa.assert_called_once_with(mock.ANY, self.node.uuid,
                                          states.VERBS['abort'],
@@ -2011,7 +2041,58 @@ class TestPut(test_api_base.BaseApiTest):
                             {'target': states.VERBS['abort']},
                             headers={api_base.Version.string: "1.13"},
                             expect_errors=True)
-        self.assertEqual(400, ret.status_code)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
+
+    def test_provision_with_cleansteps_not_clean(self):
+        self.node.provision_state = states.MANAGEABLE
+        self.node.save()
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['provide'],
+                             'clean_steps': 'foo'},
+                            headers={api_base.Version.string: "1.4"},
+                            expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
+
+    def test_clean_no_cleansteps(self):
+        self.node.provision_state = states.MANAGEABLE
+        self.node.save()
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['clean']},
+                            headers={api_base.Version.string: "1.15"},
+                            expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_node_clean')
+    @mock.patch.object(api_node, '_check_clean_steps')
+    def test_clean_check_steps_fail(self, mock_check, mock_rpcapi):
+        self.node.provision_state = states.MANAGEABLE
+        self.node.save()
+        mock_check.side_effect = exception.InvalidParameterValue('bad')
+        clean_steps = [{"step": "upgrade_firmware", "interface": "deploy"}]
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['clean'],
+                             'clean_steps': clean_steps},
+                            headers={api_base.Version.string: "1.15"},
+                            expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
+        mock_check.assert_called_once_with(clean_steps)
+        self.assertFalse(mock_rpcapi.called)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_node_clean')
+    @mock.patch.object(api_node, '_check_clean_steps')
+    def test_clean(self, mock_check, mock_rpcapi):
+        self.node.provision_state = states.MANAGEABLE
+        self.node.save()
+        clean_steps = [{"step": "upgrade_firmware", "interface": "deploy"}]
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['clean'],
+                             'clean_steps': clean_steps},
+                            headers={api_base.Version.string: "1.15"})
+        self.assertEqual(http_client.ACCEPTED, ret.status_code)
+        self.assertEqual(b'', ret.body)
+        mock_check.assert_called_once_with(clean_steps)
+        mock_rpcapi.assert_called_once_with(mock.ANY, self.node.uuid,
+                                            clean_steps, 'test-topic')
 
     def test_set_console_mode_enabled(self):
         with mock.patch.object(rpcapi.ConductorAPI,
@@ -2107,7 +2188,7 @@ class TestPut(test_api_base.BaseApiTest):
         ret = self.put_json(
             '/nodes/%s/states/raid' % self.node.uuid, raid_config,
             headers={api_base.Version.string: "1.12"})
-        self.assertEqual(204, ret.status_code)
+        self.assertEqual(http_client.NO_CONTENT, ret.status_code)
         self.assertEqual(b'', ret.body)
         set_raid_config_mock.assert_called_once_with(
             mock.ANY, mock.ANY, self.node.uuid, raid_config, topic=mock.ANY)
@@ -2120,7 +2201,7 @@ class TestPut(test_api_base.BaseApiTest):
             '/nodes/%s/states/raid' % self.node.uuid, raid_config,
             headers={api_base.Version.string: "1.5"},
             expect_errors=True)
-        self.assertEqual(406, ret.status_code)
+        self.assertEqual(http_client.NOT_ACCEPTABLE, ret.status_code)
         self.assertFalse(set_raid_config_mock.called)
 
     @mock.patch.object(rpcapi.ConductorAPI, 'set_target_raid_config',
@@ -2134,7 +2215,7 @@ class TestPut(test_api_base.BaseApiTest):
             '/nodes/%s/states/raid' % self.node.uuid, raid_config,
             headers={api_base.Version.string: "1.12"},
             expect_errors=True)
-        self.assertEqual(404, ret.status_code)
+        self.assertEqual(http_client.NOT_FOUND, ret.status_code)
         self.assertTrue(ret.json['error_message'])
         set_raid_config_mock.assert_called_once_with(
             mock.ANY, mock.ANY, self.node.uuid, raid_config, topic=mock.ANY)
@@ -2149,7 +2230,7 @@ class TestPut(test_api_base.BaseApiTest):
             '/nodes/%s/states/raid' % self.node.uuid, raid_config,
             headers={api_base.Version.string: "1.12"},
             expect_errors=True)
-        self.assertEqual(400, ret.status_code)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
         self.assertTrue(ret.json['error_message'])
         set_raid_config_mock.assert_called_once_with(
             mock.ANY, mock.ANY, self.node.uuid, raid_config, topic=mock.ANY)
@@ -2227,7 +2308,7 @@ class TestPut(test_api_base.BaseApiTest):
                             request_body, headers=headers)
         self.assertEqual(http_client.ACCEPTED, ret.status_code)
         self.assertEqual(b'', ret.body)
-        self.assertEqual(True, self.node.maintenance)
+        self.assertTrue(self.node.maintenance)
         self.assertEqual(reason, self.node.maintenance_reason)
         mock_get.assert_called_once_with(mock.ANY, node_ident)
         mock_update.assert_called_once_with(mock.ANY, mock.ANY,
@@ -2258,3 +2339,59 @@ class TestPut(test_api_base.BaseApiTest):
                                                          mock_get):
         self._test_set_node_maintenance_mode(mock_update, mock_get, None,
                                              self.node.name, is_by_name=True)
+
+
+class TestCheckCleanSteps(base.TestCase):
+    def test__check_clean_steps_not_list(self):
+        clean_steps = {"step": "upgrade_firmware", "interface": "deploy"}
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'list',
+                                api_node._check_clean_steps, clean_steps)
+
+    def test__check_clean_steps_step_not_dict(self):
+        clean_steps = ['clean step']
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'dictionary',
+                                api_node._check_clean_steps, clean_steps)
+
+    def test__check_clean_steps_step_key_invalid(self):
+        clean_steps = [{"unknown": "upgrade_firmware", "interface": "deploy"}]
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'Unrecognized',
+                                api_node._check_clean_steps, clean_steps)
+
+    def test__check_clean_steps_step_missing_interface(self):
+        clean_steps = [{"step": "upgrade_firmware"}]
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'interface',
+                                api_node._check_clean_steps, clean_steps)
+
+    def test__check_clean_steps_step_missing_step_value(self):
+        clean_steps = [{"step": None, "interface": "deploy"}]
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'step',
+                                api_node._check_clean_steps, clean_steps)
+
+    def test__check_clean_steps_step_interface_value_invalid(self):
+        clean_steps = [{"step": "upgrade_firmware", "interface": "not"}]
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                '"interface" value must be one of',
+                                api_node._check_clean_steps, clean_steps)
+
+    def test__check_clean_steps_step_args_value_invalid(self):
+        clean_steps = [{"step": "upgrade_firmware", "interface": "deploy",
+                        "args": "invalid args"}]
+        self.assertRaisesRegexp(exception.InvalidParameterValue,
+                                'args',
+                                api_node._check_clean_steps, clean_steps)
+
+    def test__check_clean_steps_valid(self):
+        clean_steps = [{"step": "upgrade_firmware", "interface": "deploy"}]
+        api_node._check_clean_steps(clean_steps)
+
+        step1 = {"step": "upgrade_firmware", "interface": "deploy",
+                 "args": {"arg1": "value1", "arg2": "value2"}}
+        api_node._check_clean_steps([step1])
+
+        step2 = {"step": "configure raid", "interface": "raid"}
+        api_node._check_clean_steps([step1, step2])

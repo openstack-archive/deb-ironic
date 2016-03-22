@@ -94,6 +94,7 @@ raised in the background thread.):
 
 """
 
+import futurist
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
@@ -103,6 +104,8 @@ import six
 
 from ironic.common import driver_factory
 from ironic.common import exception
+from ironic.common.i18n import _
+from ironic.common.i18n import _LE
 from ironic.common.i18n import _LW
 from ironic.common import states
 from ironic import objects
@@ -204,9 +207,12 @@ class TaskManager(object):
             else:
                 self._debug_timer.restart()
                 self.node = objects.Node.get(context, node_id)
+
             self.ports = objects.Port.list_by_node_id(context, self.node.id)
-            self.driver = driver_factory.get_driver(driver_name or
-                                                    self.node.driver)
+            self.portgroups = objects.Portgroup.list_by_node_id(context,
+                                                                self.node.id)
+            self.driver = driver_factory.build_driver_for_task(
+                self, driver_name=driver_name)
 
             # NOTE(deva): this handles the Juno-era NOSTATE state
             #             and should be deleted after Kilo is released
@@ -236,7 +242,7 @@ class TaskManager(object):
                                              self.node_id)
             LOG.debug("Node %(node)s successfully reserved for %(purpose)s "
                       "(took %(time).2f seconds)",
-                      {'node': self.node_id, 'purpose': self._purpose,
+                      {'node': self.node.uuid, 'purpose': self._purpose,
                        'time': self._debug_timer.elapsed()})
             self._debug_timer.restart()
 
@@ -313,11 +319,38 @@ class TaskManager(object):
         self.node = None
         self.driver = None
         self.ports = None
+        self.portgroups = None
         self.fsm = None
 
-    def _thread_release_resources(self, t):
-        """Thread.link() callback to release resources."""
-        self.release_resources()
+    def _write_exception(self, future):
+        """Set node last_error if exception raised in thread."""
+        node = self.node
+        # do not rewrite existing error
+        if node and node.last_error is None:
+            method = self._spawn_args[0].__name__
+            try:
+                exc = future.exception()
+            except futurist.CancelledError:
+                LOG.exception(_LE("Execution of %(method)s for node %(node)s "
+                                  "was canceled."), {'method': method,
+                                                     'node': node.uuid})
+            else:
+                if exc is not None:
+                    msg = _("Async execution of %(method)s failed with error: "
+                            "%(error)s") % {'method': method,
+                                            'error': six.text_type(exc)}
+                    node.last_error = msg
+                    try:
+                        node.save()
+                    except exception.NodeNotFound:
+                        pass
+
+    def _thread_release_resources(self, fut):
+        """Thread callback to release resources."""
+        try:
+            self._write_exception(fut)
+        finally:
+            self.release_resources()
 
     def process_event(self, event, callback=None, call_args=None,
                       call_kwargs=None, err_handler=None, target_state=None):
@@ -379,15 +412,15 @@ class TaskManager(object):
             #     for some reason, this is true.
             # All of the above are asserted in tests such that we'll
             # catch if eventlet ever changes this behavior.
-            thread = None
+            fut = None
             try:
-                thread = self._spawn_method(*self._spawn_args,
-                                            **self._spawn_kwargs)
+                fut = self._spawn_method(*self._spawn_args,
+                                         **self._spawn_kwargs)
 
                 # NOTE(comstud): Trying to use a lambda here causes
                 # the callback to not occur for some reason. This
                 # also makes it easier to test.
-                thread.link(self._thread_release_resources)
+                fut.add_done_callback(self._thread_release_resources)
                 # Don't unlock! The unlock will occur when the
                 # thread finshes.
                 return
@@ -404,9 +437,9 @@ class TaskManager(object):
                                     {'method': self._on_error_method.__name__,
                                     'node': self.node.uuid})
 
-                    if thread is not None:
-                        # This means the link() failed for some
+                    if fut is not None:
+                        # This means the add_done_callback() failed for some
                         # reason. Nuke the thread.
-                        thread.cancel()
+                        fut.cancel()
                     self.release_resources()
         self.release_resources()

@@ -36,6 +36,7 @@ import subprocess
 import tempfile
 import time
 
+from ironic_lib import utils as ironic_utils
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -76,6 +77,7 @@ REQUIRED_PROPERTIES = {
 }
 OPTIONAL_PROPERTIES = {
     'ipmi_password': _("password. Optional."),
+    'ipmi_port': _("remote IPMI RMCP port. Optional."),
     'ipmi_priv_level': _("privilege level; default is ADMINISTRATOR. One of "
                          "%s. Optional.") % ', '.join(VALID_PRIV_LEVELS),
     'ipmi_username': _("username; default is NULL user. Optional."),
@@ -255,6 +257,7 @@ def _parse_driver_info(node):
     address = info.get('ipmi_address')
     username = info.get('ipmi_username')
     password = six.text_type(info.get('ipmi_password', ''))
+    dest_port = info.get('ipmi_port')
     port = info.get('ipmi_terminal_port')
     priv_level = info.get('ipmi_priv_level', 'ADMINISTRATOR')
     bridging_type = info.get('ipmi_bridging', 'no')
@@ -266,6 +269,13 @@ def _parse_driver_info(node):
     protocol_version = str(info.get('ipmi_protocol_version', '2.0'))
     force_boot_device = info.get('ipmi_force_boot_device', False)
 
+    if not username:
+        LOG.warning(_LW('ipmi_username is not defined or empty for node %s: '
+                        'NULL user will be utilized.') % node.uuid)
+    if not password:
+        LOG.warning(_LW('ipmi_password is not defined or empty for node %s: '
+                        'NULL password will be utilized.') % node.uuid)
+
     if protocol_version not in VALID_PROTO_VERSIONS:
         valid_versions = ', '.join(VALID_PROTO_VERSIONS)
         raise exception.InvalidParameterValue(_(
@@ -275,6 +285,9 @@ def _parse_driver_info(node):
 
     if port is not None:
         port = utils.validate_network_port(port, 'ipmi_terminal_port')
+
+    if dest_port is not None:
+        dest_port = utils.validate_network_port(dest_port, 'ipmi_port')
 
     # check if ipmi_bridging has proper value
     if bridging_type == 'no':
@@ -325,6 +338,7 @@ def _parse_driver_info(node):
 
     return {
         'address': address,
+        'dest_port': dest_port,
         'username': username,
         'password': password,
         'port': port,
@@ -361,6 +375,11 @@ def _exec_ipmitool(driver_info, command):
             driver_info['address'],
             '-L', driver_info['priv_level']
             ]
+
+    if driver_info['dest_port']:
+        args.append('-p')
+        args.append(driver_info['dest_port'])
+
     if driver_info['username']:
         args.append('-U')
         args.append(driver_info['username'])
@@ -632,9 +651,10 @@ def send_raw(task, raw_bytes):
 
     :param task: a TaskManager instance.
     :param raw_bytes: a string of raw bytes to send, e.g. '0x00 0x01'
+    :returns: a tuple with stdout and stderr.
     :raises: IPMIFailure on an error from ipmitool.
     :raises: MissingParameterValue if a required parameter is missing.
-    :raises:  InvalidParameterValue when an invalid value is specified.
+    :raises: InvalidParameterValue when an invalid value is specified.
 
     """
     node_uuid = task.node.uuid
@@ -650,6 +670,36 @@ def send_raw(task, raw_bytes):
     except (exception.PasswordFileFailedToCreate,
             processutils.ProcessExecutionError) as e:
         LOG.exception(_LE('IPMI "raw bytes" failed for node %(node_id)s '
+                      'with error: %(error)s.'),
+                      {'node_id': node_uuid, 'error': e})
+        raise exception.IPMIFailure(cmd=cmd)
+
+    return out, err
+
+
+def dump_sdr(task, file_path):
+    """Dump SDR data to a file.
+
+    :param task: a TaskManager instance.
+    :param file_path: the path to SDR dump file.
+    :raises: IPMIFailure on an error from ipmitool.
+    :raises: MissingParameterValue if a required parameter is missing.
+    :raises: InvalidParameterValue when an invalid value is specified.
+
+    """
+    node_uuid = task.node.uuid
+    LOG.debug('Dump SDR data for node %(node)s to file %(name)s',
+              {'name': file_path, 'node': node_uuid})
+    driver_info = _parse_driver_info(task.node)
+    cmd = 'sdr dump %s' % file_path
+
+    try:
+        out, err = _exec_ipmitool(driver_info, cmd)
+        LOG.debug('dump SDR returned stdout: %(stdout)s, stderr:'
+                  ' %(stderr)s', {'stdout': out, 'stderr': err})
+    except (exception.PasswordFileFailedToCreate,
+            processutils.ProcessExecutionError) as e:
+        LOG.exception(_LE('IPMI "sdr dump" failed for node %(node_id)s '
                       'with error: %(error)s.'),
                       {'node_id': node_uuid, 'error': e})
         raise exception.IPMIFailure(cmd=cmd)
@@ -1115,21 +1165,19 @@ class IPMIShellinaboxConsole(base.ConsoleInterface):
                                                     ipmi_cmd)
         except (exception.ConsoleError, exception.ConsoleSubprocessFailed):
             with excutils.save_and_reraise_exception():
-                utils.unlink_without_raise(path)
+                ironic_utils.unlink_without_raise(path)
 
     def stop_console(self, task):
         """Stop the remote console session for the node.
 
         :param task: a task from TaskManager
-        :raises: InvalidParameterValue if required ipmi parameters are missing
         :raises: ConsoleError if unable to stop the console
         """
-        driver_info = _parse_driver_info(task.node)
         try:
-            console_utils.stop_shellinabox_console(driver_info['uuid'])
+            console_utils.stop_shellinabox_console(task.node.uuid)
         finally:
-            utils.unlink_without_raise(
-                _console_pwfile_path(driver_info['uuid']))
+            ironic_utils.unlink_without_raise(
+                _console_pwfile_path(task.node.uuid))
 
     def get_console(self, task):
         """Get the type and connection information about the console."""

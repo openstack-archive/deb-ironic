@@ -50,8 +50,8 @@ COMMON_PROPERTIES.update(OPTIONAL_PROPERTIES)
 opts = [
     cfg.StrOpt('protocol',
                default='http',
-               help=_('Protocol used for AMT endpoint, '
-                      'support http/https')),
+               choices=['http', 'https'],
+               help=_('Protocol used for AMT endpoint')),
     cfg.IntOpt('awake_interval',
                default=60,
                min=0,

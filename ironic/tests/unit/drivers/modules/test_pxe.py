@@ -19,6 +19,7 @@ import os
 import shutil
 import tempfile
 
+from ironic_lib import utils as ironic_utils
 import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils as json
@@ -30,7 +31,6 @@ from ironic.common import exception
 from ironic.common.glance_service import base_image_service
 from ironic.common import pxe_utils
 from ironic.common import states
-from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import pxe
@@ -183,11 +183,13 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
     @mock.patch.object(pxe_utils, '_build_pxe_config', autospec=True)
     def _test_build_pxe_config_options(self, build_pxe_mock,
                                        whle_dsk_img=False,
-                                       ipxe_enabled=False):
+                                       ipxe_enabled=False,
+                                       ipxe_timeout=0):
         self.config(pxe_append_params='test_param', group='pxe')
         # NOTE: right '/' should be removed from url string
         self.config(api_url='http://192.168.122.184:6385', group='conductor')
         self.config(disk_devices='sda', group='pxe')
+        self.config(ipxe_timeout=ipxe_timeout, group='pxe')
 
         driver_internal_info = self.node.driver_internal_info
         driver_internal_info['is_whole_disk_image'] = whle_dsk_img
@@ -223,6 +225,8 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
             ramdisk = 'no_ramdisk'
             kernel = 'no_kernel'
 
+        ipxe_timeout_in_ms = ipxe_timeout * 1000
+
         expected_options = {
             'ari_path': ramdisk,
             'deployment_ari_path': deploy_ramdisk,
@@ -230,6 +234,7 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
             'aki_path': kernel,
             'deployment_aki_path': deploy_kernel,
             'tftp_server': tftp_server,
+            'ipxe_timeout': ipxe_timeout_in_ms,
         }
 
         image_info = {'deploy_kernel': ('deploy_kernel',
@@ -268,6 +273,11 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
         self._test_build_pxe_config_options(whle_dsk_img=False,
                                             ipxe_enabled=False)
 
+    def test__build_pxe_config_options_ipxe_and_ipxe_timeout(self):
+        self._test_build_pxe_config_options(whle_dsk_img=True,
+                                            ipxe_enabled=True,
+                                            ipxe_timeout=120)
+
     @mock.patch.object(pxe_utils, '_build_pxe_config', autospec=True)
     def test__build_pxe_config_options_whole_disk_image(self,
                                                         build_pxe_mock,
@@ -303,6 +313,7 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
             'tftp_server': tftp_server,
             'aki_path': 'no_kernel',
             'ari_path': 'no_ramdisk',
+            'ipxe_timeout': 0,
         }
 
         image_info = {'deploy_kernel': ('deploy_kernel',
@@ -345,7 +356,8 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
             'pxe_append_params': 'my-pxe-append-params',
             'tftp_server': 'my-tftp-server',
             'aki_path': 'no_kernel',
-            'ari_path': 'no_ramdisk'}
+            'ari_path': 'no_ramdisk',
+            'ipxe_timeout': 0}
         self.assertEqual(expected_options, options)
 
     @mock.patch.object(deploy_utils, 'fetch_images', autospec=True)
@@ -486,7 +498,7 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
         self.assertFalse(mock_log.called)
 
 
-@mock.patch.object(utils, 'unlink_without_raise', autospec=True)
+@mock.patch.object(ironic_utils, 'unlink_without_raise', autospec=True)
 @mock.patch.object(pxe_utils, 'clean_up_pxe_config', autospec=True)
 @mock.patch.object(pxe, 'TFTPImageCache', autospec=True)
 class CleanUpPxeEnvTestCase(db_base.DbTestCase):
@@ -580,20 +592,6 @@ class PXEBootTestCase(db_base.DbTestCase):
                                   shared=True) as task:
             task.node['instance_info'] = json.dumps(info)
             self.assertRaises(exception.MissingParameterValue,
-                              task.driver.boot.validate, task)
-
-    @mock.patch.object(base_image_service.BaseImageService, '_show',
-                       autospec=True)
-    def test_validate_fail_invalid_config_uefi_ipxe(self, mock_glance):
-        properties = {'capabilities': 'boot_mode:uefi,cap2:value2'}
-        mock_glance.return_value = {'properties': {'kernel_id': 'fake-kernel',
-                                                   'ramdisk_id': 'fake-initr'}}
-        self.config(ipxe_enabled=True, group='pxe')
-        self.config(http_url='dummy_url', group='deploy')
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=True) as task:
-            task.node.properties = properties
-            self.assertRaises(exception.InvalidParameterValue,
                               task.driver.boot.validate, task)
 
     def test_validate_fail_invalid_config_uefi_whole_disk_image(self):

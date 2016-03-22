@@ -24,20 +24,23 @@ import inspect
 import json
 import os
 
-import eventlet
+from futurist import periodics
+from oslo_config import cfg
 from oslo_log import log as logging
-from oslo_service import periodic_task
 from oslo_utils import excutils
 import six
 
 from ironic.common import exception
-from ironic.common.i18n import _LE, _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import raid
 
 LOG = logging.getLogger(__name__)
 
 RAID_CONFIG_SCHEMA = os.path.join(os.path.dirname(__file__),
                                   'raid_config_schema.json')
+
+
+CONF = cfg.CONF
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -128,6 +131,14 @@ class BaseDriver(object):
     def __init__(self):
         pass
 
+    @property
+    def all_interfaces(self):
+        return self.core_interfaces + self.standard_interfaces + ['vendor']
+
+    @property
+    def non_vendor_interfaces(self):
+        return self.core_interfaces + self.standard_interfaces
+
     def get_properties(self):
         """Get the properties of the driver.
 
@@ -135,13 +146,21 @@ class BaseDriver(object):
         """
 
         properties = {}
-        for iface_name in (self.core_interfaces +
-                           self.standard_interfaces +
-                           ['vendor']):
+        for iface_name in self.all_interfaces:
             iface = getattr(self, iface_name, None)
             if iface:
                 properties.update(iface.get_properties())
         return properties
+
+
+class BareDriver(BaseDriver):
+    """A bare driver object which will have interfaces attached later.
+
+    Any composable interfaces should be added as class attributes of this
+    class, as well as appended to core_interfaces or standard_interfaces here.
+    """
+    def __init__(self):
+        pass
 
 
 class BaseInterface(object):
@@ -182,6 +201,10 @@ class BaseInterface(object):
 
         :param task: A TaskManager object, useful for interfaces overriding
             this function
+        :raises NodeCleaningFailure: if there is a problem getting the steps
+            from the driver. For example, when a node (using an agent driver)
+            has just been enrolled and the agent isn't alive yet to be queried
+            for the available clean steps.
         :returns: A list of clean step dictionaries
         """
         return self.clean_steps
@@ -980,6 +1003,60 @@ class RAIDInterface(BaseInterface):
         return raid.get_logical_disk_properties(self.raid_schema)
 
 
+def _validate_argsinfo(argsinfo):
+    """Validate args info.
+
+    This method validates args info, so that the values are the expected
+    data types and required values are specified.
+
+    :param argsinfo: a dictionary of keyword arguments where key is the name of
+        the argument and value is a dictionary as follows::
+
+            ‘description’: <description>. Required. This should include
+                           possible values.
+            ‘required’: Boolean. Optional; default is False. True if this
+                        argument is required.  If so, it must be specified in
+                        the clean request; false if it is optional.
+    :raises InvalidParameterValue if any of the arguments are invalid
+    """
+    if not argsinfo:
+        return
+
+    if not isinstance(argsinfo, dict):
+        raise exception.InvalidParameterValue(
+            _('"argsinfo" must be a dictionary instead of "%s"') %
+            argsinfo)
+    for (arg, info) in argsinfo.items():
+        if not isinstance(info, dict):
+            raise exception.InvalidParameterValue(
+                _('Argument "%(arg)s" must be a dictionary instead of '
+                  '"%(val)s".') % {'arg': arg, 'val': info})
+        has_description = False
+        for (key, value) in info.items():
+            if key == 'description':
+                if not isinstance(value, six.string_types):
+                    raise exception.InvalidParameterValue(
+                        _('For argument "%(arg)s", "description" must be a '
+                          'string value instead of "%(value)s".') %
+                        {'arg': arg, 'value': value})
+                has_description = True
+            elif key == 'required':
+                if not isinstance(value, bool):
+                    raise exception.InvalidParameterValue(
+                        _('For argument "%(arg)s", "required" must be a '
+                          'Boolean value instead of "%(value)s".') %
+                        {'arg': arg, 'value': value})
+            else:
+                raise exception.InvalidParameterValue(
+                    _('Argument "%(arg)s" has an invalid key named "%(key)s". '
+                      'It must be "description" or "required".')
+                    % {'key': key, 'arg': arg})
+        if not has_description:
+            raise exception.InvalidParameterValue(
+                _('Argument "%(arg)s" is missing a "description".') %
+                {'arg': arg})
+
+
 def clean_step(priority, abortable=False, argsinfo=None):
     """Decorator for cleaning steps.
 
@@ -1017,7 +1094,7 @@ def clean_step(priority, abortable=False, argsinfo=None):
             def example_cleaning(self, task):
                 # do some cleaning
 
-            @base.clean_step(abortable=True, argsinfo=
+            @base.clean_step(priority=0, abortable=True, argsinfo=
                              {'size': {'description': 'size of widget (MB)',
                                        'required': True}})
             def advanced_clean(self, task, **kwargs):
@@ -1029,59 +1106,70 @@ def clean_step(priority, abortable=False, argsinfo=None):
     :param argsinfo: a dictionary of keyword arguments where key is the name of
         the argument and value is a dictionary as follows::
 
-            ‘description’: <description>. This should include possible values.
-            ‘required’: Boolean. True if this argument is required. If so, it
-                        must be specified in the clean request; false if it is
-                        optional.
+            ‘description’: <description>. Required. This should include
+                           possible values.
+            ‘required’: Boolean. Optional; default is False. True if this
+                        argument is required.  If so, it must be specified in
+                        the clean request; false if it is optional.
+    :raises InvalidParameterValue if any of the arguments are invalid
     """
     def decorator(func):
         func._is_clean_step = True
-        func._clean_step_priority = priority
-        func._clean_step_abortable = abortable
+        if isinstance(priority, int):
+            func._clean_step_priority = priority
+        else:
+            raise exception.InvalidParameterValue(
+                _('"priority" must be an integer value instead of "%s"')
+                % priority)
+
+        if isinstance(abortable, bool):
+            func._clean_step_abortable = abortable
+        else:
+            raise exception.InvalidParameterValue(
+                _('"abortable" must be a Boolean value instead of "%s"')
+                % abortable)
+
+        _validate_argsinfo(argsinfo)
         func._clean_step_argsinfo = argsinfo
         return func
     return decorator
 
 
-def driver_periodic_task(parallel=True, **other):
+def driver_periodic_task(**kwargs):
     """Decorator for a driver-specific periodic task.
 
+    Deprecated, please use futurist directly.
     Example::
 
+        from futurist import periodics
+
         class MyDriver(base.BaseDriver):
-            @base.driver_periodic_task(spacing=42)
+            @periodics.periodic(spacing=42)
             def task(self, manager, context):
                 # do some job
 
-    :param parallel: If True (default), this task is run in a separate thread.
-            If False, this task will be run in the conductor's periodic task
-            loop, rather than a separate greenthread. This parameter is
-            deprecated and will be ignored starting with Mitaka cycle.
-    :param other: arguments to pass to @periodic_task.periodic_task
+    :param kwargs: arguments to pass to @periodics.periodic
     """
-    # TODO(dtantsur): drop all this magic once
-    # https://review.openstack.org/#/c/134303/ lands
-    semaphore = eventlet.semaphore.BoundedSemaphore()
+    LOG.warning(_LW('driver_periodic_task decorator is deprecated, please '
+                    'use futurist.periodics.periodic directly'))
+    # Previously we accepted more arguments, make a backward compatibility
+    # layer for out-of-tree drivers.
+    new_kwargs = {}
+    for arg in ('spacing', 'enabled', 'run_immediately'):
+        try:
+            new_kwargs[arg] = kwargs.pop(arg)
+        except KeyError:
+            pass
 
-    def decorator2(func):
-        @six.wraps(func)
-        def wrapper(*args, **kwargs):
-            if parallel:
-                def _internal():
-                    with semaphore:
-                        func(*args, **kwargs)
+    # NOTE(jroll) this is here to avoid a circular import when a module
+    # imports ironic.common.service. Normally I would balk at this, but this
+    # option is deprecared for removal and this code only runs at startup.
+    CONF.import_opt('periodic_interval', 'ironic.common.service')
+    new_kwargs.setdefault('spacing', CONF.periodic_interval)
 
-                eventlet.greenthread.spawn_n(_internal)
-            else:
-                LOG.warning(_LW(
-                    'Using periodic tasks with parallel=False is deprecated, '
-                    '"parallel" argument will be ignored starting with '
-                    'the Mitaka release'))
-                func(*args, **kwargs)
+    if kwargs:
+        LOG.warning(_LW('The following arguments are not supported by '
+                        'futurist.periodics.periodic and are ignored: %s'),
+                    ', '.join(kwargs))
 
-        # NOTE(dtantsur): name should be unique
-        other.setdefault('name', '%s.%s' % (func.__module__, func.__name__))
-        decorator = periodic_task.periodic_task(**other)
-        return decorator(wrapper)
-
-    return decorator2
+    return periodics.periodic(**new_kwargs)

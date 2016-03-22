@@ -10,8 +10,8 @@ iLO drivers enable to take advantage of features of iLO management engine in
 HPE ProLiant servers.  iLO drivers are targeted for HPE ProLiant Gen 8 systems
 and above which have `iLO 4 management engine <http://www8.hp.com/us/en/products/servers/ilo>`_.
 
-For more detailed iLO driver document of Juno, Kilo and Liberty releases, and
-up-to-date information (like tested platforms, known issues, etc), please check the
+For more details, please refer the iLO driver document of Juno, Kilo and Liberty releases,
+and for up-to-date information (like tested platforms, known issues, etc), please check the
 `iLO driver wiki page <https://wiki.openstack.org/wiki/Ironic/Drivers/iLODrivers>`_.
 
 Currently there are 3 iLO drivers:
@@ -42,14 +42,147 @@ Prerequisites
   which contains set of modules for managing HPE ProLiant hardware.
 
   Install ``proliantutils`` module on the ironic conductor node. Minimum
-  version required is 2.1.5.::
+  version required is 2.1.7.::
 
-   $ pip install "proliantutils>=2.1.5"
+   $ pip install "proliantutils>=2.1.7"
 
 * ``ipmitool`` command must be present on the service node(s) where
   ``ironic-conductor`` is running. On most distros, this is provided as part
-  of the ``ipmitool`` package.
+  of the ``ipmitool`` package. Refer to `Hardware Inspection Support`_ for more
+  information on recommended version.
 
+Different Configuration for ilo drivers
+=======================================
+
+Glance Configuration
+^^^^^^^^^^^^^^^^^^^^
+
+1. `Configure Glance image service with its storage backend as Swift
+   <http://docs.openstack.org/developer/glance/configuring.html#configuring-the-swift-storage-backend>`_.
+
+2. Set a temp-url key for Glance user in Swift. For example, if you have
+   configured Glance with user ``glance-swift`` and tenant as ``service``,
+   then run the below command::
+
+    swift --os-username=service:glance-swift post -m temp-url-key:mysecretkeyforglance
+
+3. Fill the required parameters in the ``[glance]`` section   in
+   ``/etc/ironic/ironic.conf``. Normally you would be required to fill in the
+   following details.::
+
+    [glance]
+    swift_temp_url_key=mysecretkeyforglance
+    swift_endpoint_url=https://10.10.1.10:8080
+    swift_api_version=v1
+    swift_account=AUTH_51ea2fb400c34c9eb005ca945c0dc9e1
+    swift_container=glance
+
+  The details can be retrieved by running the below command:
+
+  .. code-block:: bash
+
+   $ swift --os-username=service:glance-swift stat -v | grep -i url
+
+   StorageURL:     http://10.10.1.10:8080/v1/AUTH_51ea2fb400c34c9eb005ca945c0dc9e1
+   Meta Temp-Url-Key: mysecretkeyforglance
+
+
+4. Swift must be accessible with the same admin credentials configured in
+   Ironic. For example, if Ironic is configured with the below credentials in
+   ``/etc/ironic/ironic.conf``.::
+
+    [keystone_authtoken]
+    admin_password = password
+    admin_user = ironic
+    admin_tenant_name = service
+
+   Ensure ``auth_version`` in ``keystone_authtoken`` to 2.
+
+   Then, the below command should work.:
+
+   .. code-block:: bash
+
+    $ swift --os-username ironic --os-password password --os-tenant-name service --auth-version 2 stat
+
+                         Account: AUTH_22af34365a104e4689c46400297f00cb
+                      Containers: 2
+                         Objects: 18
+                           Bytes: 1728346241
+    Objects in policy "policy-0": 18
+      Bytes in policy "policy-0": 1728346241
+               Meta Temp-Url-Key: mysecretkeyforglance
+                     X-Timestamp: 1409763763.84427
+                      X-Trans-Id: tx51de96a28f27401eb2833-005433924b
+                    Content-Type: text/plain; charset=utf-8
+                   Accept-Ranges: bytes
+
+5. Restart the Ironic conductor service.::
+
+    $ service ironic-conductor restart
+
+Web server configuration on conductor
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* The HTTP(S) web server can be configured in many ways. For apache
+  web server on Ubuntu, refer `here <https://help.ubuntu.com/lts/serverguide/httpd.html>`_
+
+* Following config variables need to be set in
+  ``/etc/ironic/ironic.conf``:
+
+  * ``use_web_server_for_images`` in ``[ilo]`` section::
+
+     [ilo]
+     use_web_server_for_images = True
+
+  * ``http_url`` and ``http_root`` in ``[deploy]`` section::
+
+     [deploy]
+     # Ironic compute node's http root path. (string value)
+     http_root=/httpboot
+
+     # Ironic compute node's HTTP server URL. Example:
+     # http://192.1.2.3:8080 (string value)
+     http_url=http://192.168.0.2:8080
+
+``use_web_server_for_images``: If the variable is set to ``false``, ``iscsi_ilo``
+and ``agent_ilo`` uses swift containers to host the intermediate floppy
+image and the boot ISO. If the variable is set to ``true``, these drivers
+uses the local web server for hosting the intermediate files. The default value
+for ``use_web_server_for_images`` is False.
+
+``http_url``: The value for this variable is prefixed with the generated
+intermediate files to generate a URL which is attached in the virtual media.
+
+``http_root``: It is the directory location to which ironic conductor copies
+the intermediate floppy image and the boot ISO.
+
+.. note::
+   HTTPS is strongly recommended over HTTP web server configuration for security
+   enhancement. The ``iscsi_ilo`` and ``agent_ilo`` will send the instance's
+   configdrive over an encrypted channel if web server is HTTPS enabled.
+
+Enable driver
+=============
+
+1. Build a deploy ISO (and kernel and ramdisk) image, see :ref:`BuildingDibBasedDeployRamdisk`
+
+2. See `Glance Configuration`_ for configuring glance image service with its storage
+   backend as ``swift``.
+
+3. Upload this image to Glance.::
+
+    glance image-create --name deploy-ramdisk.iso --disk-format iso --container-format bare < deploy-ramdisk.iso
+
+4. Add the driver name to the list of ``enabled_drivers`` in
+   ``/etc/ironic/ironic.conf``.  For example, for `iscsi_ilo` driver::
+
+    enabled_drivers = fake,pxe_ssh,pxe_ipmitool,iscsi_ilo
+
+   Similarly it can be added for ``agent_ilo`` and ``pxe_ilo`` drivers.
+
+5. Restart the ironic conductor service.::
+
+    $ service ironic-conductor restart
 
 Drivers
 =======
@@ -68,11 +201,17 @@ Target Users
 ~~~~~~~~~~~~
 
 * Users who do not want to use PXE/TFTP protocol on their data centres.
-* Current PXE driver passes management info in clear-text to the
-  bare metal node. ``iscsi_ilo`` driver enhances the security
-  by passing management info over encrypted management network. This
-  driver may be used by users who have concerns on PXE drivers security
-  issues and want to have a security enhanced PXE-less deployment mechanism.
+
+* Users who have concerns with PXE protocol's security issues and want to have a
+  security enhanced PXE-less deployment mechanism.
+
+  The PXE driver passes management information in clear-text to the
+  bare metal node.  However, if swift proxy server has an HTTPS
+  endpoint (See :ref:`EnableHTTPSinSwift` for more information), the
+  ``iscsi_ilo`` driver provides enhanced security by passing
+  management information to and from swift endpoint over HTTPS.  The
+  management information, deploy ramdisk and boot images for the instance will
+  be retrieved over encrypted management network via iLO virtual media.
 
 Tested Platforms
 ~~~~~~~~~~~~~~~~
@@ -100,8 +239,9 @@ Features
 * UEFI Boot Support
 * UEFI Secure Boot Support
 * Passing management information via secure, encrypted management network
-  (virtual media) if swift proxy server has an HTTPs endpoint. Provisioning
-  is done using iSCSI over data network, so this driver has the  benefit
+  (virtual media) if swift proxy server has an HTTPS endpoint. See
+  :ref:`EnableHTTPSinSwift` for more info.  User image provisioning is done
+  using iSCSI over data network, so this driver has the benefit
   of security enhancement with the same performance. It segregates management
   info from data channel.
 * Support for out-of-band cleaning operations.
@@ -109,6 +249,9 @@ Features
 * HW Sensors
 * Works well for machines with resource constraints (lesser amount of memory).
 * Support for out-of-band hardware inspection.
+* Swiftless deploy for intermediate images
+* HTTP(S) Based Deploy.
+* iLO drivers with standalone ironic.
 
 Requirements
 ~~~~~~~~~~~~
@@ -123,103 +266,14 @@ Requirements
 
 Deploy Process
 ~~~~~~~~~~~~~~
-* Admin configures the ProLiant bare metal node for iscsi_ilo driver. The
-  ironic node configured will have the ``ilo_deploy_iso`` property in its
-  ``driver_info``.  This will contain the glance UUID of the ISO
-  deploy ramdisk image.
-* Ironic gets a request to deploy a glance image on the bare metal node.
-* ``iscsi_ilo`` driver powers off the bare metal node.
-* The driver generates a swift-temp-url for the deploy ramdisk image
-  and attaches it as virtual media CDROM on the iLO.
-* The driver creates a small FAT32 image containing parameters to
-  the deploy ramdisk. This image is uploaded to swift and its swift-temp-url
-  is attached as virtual media Floppy on the iLO.
-* The driver sets the node to boot one-time from CDROM.
-* The driver powers on the bare metal node.
-* The deploy kernel/ramdisk is booted on the bare metal node.  The ramdisk
-  exposes the local disk over iSCSI and requests ironic conductor to complete
-  the deployment.
-* The driver on the ironic conductor writes the glance image to the
-  bare metal node's disk.
-* The driver bundles the boot kernel/ramdisk for the glance deploy
-  image into an ISO and then uploads it to swift. This ISO image will be used
-  for booting the deployed instance.
-* The driver reboots the node.
-* On the first and subsequent reboots ``iscsi_ilo`` driver attaches this boot
-  ISO image in swift as virtual media CDROM and then sets iLO to boot from it.
+
+Refer to `Netboot with glance and swift`_ for the deploy process of partition image
+and `Localboot with glance and swift`_ for the deploy process of whole disk image.
 
 Configuring and Enabling the driver
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-1. Build a deploy ISO image, see :ref:`BuildingDibBasedDeployRamdisk`
-
-2. Upload this image to glance.::
-
-    glance image-create --name deploy-ramdisk.iso --disk-format iso --container-format bare < deploy-ramdisk.iso
-
-3. Configure glance image service with its storage backend as swift. See
-   `here <http://docs.openstack.org/developer/glance/configuring.html#configuring-the-swift-storage-backend>`_
-   for configuration instructions.
-
-4. Set a temp-url key for glance user in swift. For example, if you have
-   configured glance with user ``glance-swift`` and tenant as ``service``,
-   then run the below command::
-
-    swift --os-username=service:glance-swift post -m temp-url-key:mysecretkeyforglance
-
-5. Fill the required parameters in the ``[glance]`` section   in
-   ``/etc/ironic/ironic.conf``. Normally you would be required to fill in the
-   following details.::
-
-    [glance]
-    swift_temp_url_key=mysecretkeyforglance
-    swift_endpoint_url=http://10.10.1.10:8080
-    swift_api_version=v1
-    swift_account=AUTH_51ea2fb400c34c9eb005ca945c0dc9e1
-    swift_container=glance
-
-  The details can be retrieved by running the below command:::
-
-   $ swift --os-username=service:glance-swift stat -v | grep -i url
-   StorageURL:     http://10.10.1.10:8080/v1/AUTH_51ea2fb400c34c9eb005ca945c0dc9e1
-   Meta Temp-Url-Key: mysecretkeyforglance
-
-
-6. Swift must be accessible with the same admin credentials configured in
-   ironic. For example, if ironic is configured with the below credentials in
-   ``/etc/ironic/ironic.conf``.::
-
-    [keystone_authtoken]
-    admin_password = password
-    admin_user = ironic
-    admin_tenant_name = service
-
-   Ensure ``auth_version`` in ``keystone_authtoken`` to 2.
-
-   Then, the below command should work.::
-
-    $ swift --os-username ironic --os-password password --os-tenant-name service --auth-version 2 stat
-                         Account: AUTH_22af34365a104e4689c46400297f00cb
-                      Containers: 2
-                         Objects: 18
-                           Bytes: 1728346241
-    Objects in policy "policy-0": 18
-      Bytes in policy "policy-0": 1728346241
-               Meta Temp-Url-Key: mysecretkeyforglance
-                     X-Timestamp: 1409763763.84427
-                      X-Trans-Id: tx51de96a28f27401eb2833-005433924b
-                    Content-Type: text/plain; charset=utf-8
-                   Accept-Ranges: bytes
-
-
-7. Add ``iscsi_ilo`` to the list of ``enabled_drivers`` in
-   ``/etc/ironic/ironic.conf``.  For example:::
-
-    enabled_drivers = fake,pxe_ssh,pxe_ipmitool,iscsi_ilo
-
-8. Restart the ironic conductor service.::
-
-    $ service ironic-conductor restart
+Refer to `Glance Configuration`_ and `Enable driver`_.
 
 Registering ProLiant node in ironic
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -259,6 +313,18 @@ Hardware Inspection
 ~~~~~~~~~~~~~~~~~~~
 Refer to `Hardware Inspection Support`_ for more information.
 
+Swiftless deploy for intermediate deploy and boot images
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Refer to `Swiftless deploy for intermediate images`_ for more information.
+
+HTTP(S) Based Deploy
+~~~~~~~~~~~~~~~~~~~~
+Refer to `HTTP(S) Based Deploy Support`_ for more information.
+
+iLO drivers with standalone ironic
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Refer to `Support for iLO drivers with Standalone Ironic`_ for more information.
+
 agent_ilo driver
 ^^^^^^^^^^^^^^^^
 
@@ -274,6 +340,16 @@ https://wiki.openstack.org/wiki/Ironic-python-agent.
 Target Users
 ~~~~~~~~~~~~
 * Users who do not want to use PXE/TFTP protocol on their data centres.
+* Users who have concerns on PXE based agent driver's security and
+  want to have a security enhanced PXE-less deployment mechanism.
+
+  The PXE based agent drivers pass management information in clear-text to
+  the bare metal node.  However, if swift proxy server has an HTTPS
+  endpoint (See :ref:`EnableHTTPSinSwift` for more information),
+  the ``agent_ilo`` driver provides enhanced security by passing authtoken
+  and management information to and from swift endpoint over HTTPS.  The
+  management information and deploy ramdisk will be retrieved over encrypted
+  management network via iLO.
 
 Tested Platforms
 ~~~~~~~~~~~~~~~~
@@ -303,6 +379,9 @@ Features
 * Support to use default in-band cleaning operations supported by
   Ironic Python Agent. For more details, see :ref:`InbandvsOutOfBandCleaning`.
 * Support for out-of-band hardware inspection.
+* Swiftless deploy for intermediate images.
+* HTTP(S) Based Deploy.
+* iLO drivers with standalone ironic.
 
 Requirements
 ~~~~~~~~~~~~
@@ -316,98 +395,13 @@ Requirements
 
 Deploy Process
 ~~~~~~~~~~~~~~
-* Admin configures the ProLiant bare metal node for ``agent_ilo`` driver. The
-  ironic node configured will have the ``ilo_deploy_iso`` property in its
-  ``driver_info``.  This will contain the glance UUID of the ISO deploy agent
-  image containing the agent.
-* Ironic gets a request to deploy a glance image on the bare metal node.
-* Driver powers off the bare metal node.
-* Driver generates a swift-temp-url for the deploy agent image
-  and attaches it as virtual media CDROM on the iLO.
-* Driver creates a small FAT32 image containing parameters to
-  the agent ramdisk. This image is uploaded to swift and its swift-temp-url
-  is attached as virtual media Floppy on the iLO.
-* Driver sets the node to boot one-time from CDROM.
-* Driver powers on the bare metal node.
-* The deploy kernel/ramdisk containing the agent is booted on the bare metal
-  node.  The agent ramdisk talks to the ironic conductor, downloads the image
-  directly from swift and writes the node's disk.
-* Driver sets the node to permanently boot from disk and then reboots
-  the node.
+
+Refer to `Localboot with glance and swift`_ for details.
 
 Configuring and Enabling the driver
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-1. Build a deploy ISO image, see :ref:`BuildingDibBasedDeployRamdisk`.
-
-2. Upload the IPA ramdisk image to glance.::
-
-    glance image-create --name ipa-ramdisk.iso --disk-format iso --container-format bare < ipa-coreos.iso
-
-3. Configure glance image service with its storage backend as swift. See
-   `here <http://docs.openstack.org/developer/glance/configuring.html#configuring-the-swift-storage-backend>`_
-   for configuration instructions.
-
-4. Set a temp-url key for glance user in swift. For example, if you have
-   configured glance with user ``glance-swift`` and tenant as ``service``,
-   then run the below command::
-
-    swift --os-username=service:glance-swift post -m temp-url-key:mysecretkeyforglance
-
-5. Fill the required parameters in the ``[glance]`` section   in
-   ``/etc/ironic/ironic.conf``. Normally you would be required to fill in the
-   following details.::
-
-    [glance]
-    swift_temp_url_key=mysecretkeyforglance
-    swift_endpoint_url=http://10.10.1.10:8080
-    swift_api_version=v1
-    swift_account=AUTH_51ea2fb400c34c9eb005ca945c0dc9e1
-    swift_container=glance
-
-  The details can be retrieved by running the below command:::
-
-   $ swift --os-username=service:glance-swift stat -v | grep -i url
-   StorageURL:     http://10.10.1.10:8080/v1/AUTH_51ea2fb400c34c9eb005ca945c0dc9e1
-   Meta Temp-Url-Key: mysecretkeyforglance
-
-
-6. Swift must be accessible with the same admin credentials configured in
-   ironic. For example, if Ironic is configured with the below credentials in
-   ``/etc/ironic/ironic.conf``.::
-
-    [keystone_authtoken]
-    admin_password = password
-    admin_user = ironic
-    admin_tenant_name = service
-
-   Ensure ``auth_version`` in ``keystone_authtoken`` to 2.
-
-   Then, the below command should work.::
-
-    $ swift --os-username ironic --os-password password --os-tenant-name service --auth-version 2 stat
-                         Account: AUTH_22af34365a104e4689c46400297f00cb
-                      Containers: 2
-                         Objects: 18
-                           Bytes: 1728346241
-    Objects in policy "policy-0": 18
-      Bytes in policy "policy-0": 1728346241
-               Meta Temp-Url-Key: mysecretkeyforglance
-                     X-Timestamp: 1409763763.84427
-                      X-Trans-Id: tx51de96a28f27401eb2833-005433924b
-                    Content-Type: text/plain; charset=utf-8
-                   Accept-Ranges: bytes
-
-
-7. Add ``agent_ilo`` to the list of ``enabled_drivers`` in
-   ``/etc/ironic/ironic.conf``.  For example:::
-
-    enabled_drivers = fake,pxe_ssh,pxe_ipmitool,agent_ilo
-
-8. Restart the ironic conductor service.::
-
-    $ service ironic-conductor restart
-
+Refer to `Glance Configuration`_ and `Enable driver`_.
 
 Registering ProLiant node in ironic
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -447,6 +441,18 @@ Hardware Inspection
 ~~~~~~~~~~~~~~~~~~~
 Refer to `Hardware Inspection Support`_ for more information.
 
+Swiftless deploy for intermediate deploy and boot images
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Refer to `Swiftless deploy for intermediate images`_ for more information.
+
+HTTP(S) Based Deploy
+~~~~~~~~~~~~~~~~~~~~
+Refer to `HTTP(S) Based Deploy Support`_ for more information.
+
+iLO drivers with standalone ironic
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Refer to `Support for iLO drivers with Standalone Ironic`_ for more information.
+
 pxe_ilo driver
 ^^^^^^^^^^^^^^
 
@@ -485,6 +491,7 @@ Features
 * Support for out-of-band hardware inspection.
 * Supports UEFI Boot mode
 * Supports UEFI Secure Boot
+* HTTP(S) Based Deploy.
 
 Requirements
 ~~~~~~~~~~~~
@@ -500,12 +507,12 @@ Configuring and Enabling the driver
     glance image-create --name deploy-ramdisk.kernel --disk-format aki --container-format aki < deploy-ramdisk.kernel
     glance image-create --name deploy-ramdisk.initramfs --disk-format ari --container-format ari < deploy-ramdisk.initramfs
 
-7. Add ``pxe_ilo`` to the list of ``enabled_drivers`` in
+3. Add ``pxe_ilo`` to the list of ``enabled_drivers`` in
    ``/etc/ironic/ironic.conf``.  For example:::
 
     enabled_drivers = fake,pxe_ssh,pxe_ipmitool,pxe_ilo
 
-8. Restart the ironic conductor service.::
+4. Restart the ironic conductor service.::
 
     service ironic-conductor restart
 
@@ -548,6 +555,14 @@ Hardware Inspection
 ~~~~~~~~~~~~~~~~~~~
 Refer to `Hardware Inspection Support`_ for more information.
 
+HTTP(S) Based Deploy
+~~~~~~~~~~~~~~~~~~~~
+Refer to `HTTP(S) Based Deploy Support`_ for more information.
+
+iLO drivers with standalone ironic
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Refer to `Support for iLO drivers with Standalone Ironic`_ for more information.
+
 Functionalities across drivers
 ==============================
 
@@ -560,12 +575,16 @@ mode (Legacy BIOS or UEFI).
 * ``iscsi_ilo``
 * ``agent_ilo``
 
-The boot modes can be configured in ironic in the following way:
+* When boot mode capability is not configured:
 
-* When boot mode capability is not configured, these drivers preserve the
-  current boot mode of the bare metal ProLiant server. If operator/user
-  doesn't care about boot modes for servers, then the boot mode capability
-  need not be configured.
+  - If the pending boot mode is set on the node then iLO drivers use that boot
+    mode for provisioning the baremetal ProLiant servers.
+
+  - If the pending boot mode is not set on the node then iLO drivers use 'uefi'
+    boot mode for UEFI capable servers and "bios" when UEFI is not supported.
+
+* When boot mode capability is configured, the driver sets the pending boot
+  mode to the configured value.
 
 * Only one boot mode (either ``uefi`` or ``bios``) can be configured for
   the node.
@@ -625,7 +644,8 @@ To enable ``secure_boot`` on a node add it to ``capabilities`` as below::
 
  ironic node-update <node-uuid> add properties/capabilities='secure_boot:true'
 
-Alternatively use `Hardware Inspection`_ to populate the secure boot capability.
+Alternatively see `Hardware Inspection Support`_ to know how to
+automatically populate the secure boot capability.
 
 Nodes having ``secure_boot`` set to ``true`` may be requested by adding an
 ``extra_spec`` to the nova flavor::
@@ -694,16 +714,16 @@ The following iLO drivers support node cleaning -
 * ``iscsi_ilo``
 * ``agent_ilo``
 
-Supported Cleaning Operations
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+For more information on node cleaning, see :ref:`cleaning`
 
-* The cleaning operations supported are:
+Supported **Automated** Cleaning Operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-  -``reset_ilo``:
-    Resets the iLO. By default, enabled with priority 1.
+* The automated cleaning operations supported are:
+
   -``reset_bios_to_default``:
-    Resets system ROM sttings to default. By default, enabled with priority 10.
-    This clean step is supported only on Gen9 and above servers.
+    Resets system ROM settings to default. By default, enabled with priority
+    10. This clean step is supported only on Gen9 and above servers.
   -``reset_secure_boot_keys_to_default``:
     Resets secure boot keys to manufacturer's defaults. This step is supported
     only on Gen9 and above servers. By default, enabled with priority 20 .
@@ -713,28 +733,55 @@ Supported Cleaning Operations
   -``clear_secure_boot_keys``:
     Clears all secure boot keys. This step is supported only on Gen9 and above
     servers. By default, this step is disabled.
+  -``reset_ilo``:
+    Resets the iLO. By default, this step is disabled.
 
 * For in-band cleaning operations supported by ``agent_ilo`` driver, see
   :ref:`InbandvsOutOfBandCleaning`.
 
-* All the cleaning steps have an explicit configuration option for priority.
-  In order to disable or change the priority of the clean steps, respective
-  configuration option for priority should be updated in ironic.conf.
+* All the automated cleaning steps have an explicit configuration option for
+  priority. In order to disable or change the priority of the automated clean
+  steps, respective configuration option for priority should be updated in
+  ironic.conf.
 
 * Updating clean step priority to 0, will disable that particular clean step
-  and will not run during cleaning.
+  and will not run during automated cleaning.
 
-* Configuration Options for the clean steps are listed under ``[ilo]`` section in
-  ironic.conf ::
+* Configuration Options for the automated clean steps are listed under
+  ``[ilo]`` section in ironic.conf ::
 
-  - clean_priority_reset_ilo=1
+  - clean_priority_reset_ilo=0
   - clean_priority_reset_bios_to_default=10
   - clean_priority_reset_secure_boot_keys_to_default=20
   - clean_priority_clear_secure_boot_keys=0
   - clean_priority_reset_ilo_credential=30
   - clean_priority_erase_devices=10
 
-For more information on node cleaning, see :ref:`cleaning`
+For more information on node automated cleaning, see :ref:`automated_cleaning`
+
+Supported **Manual** Cleaning Operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* The manual cleaning operations supported are:
+
+  -``activate_license``:
+    Activates the iLO Advanced license. This is an out-of-band manual cleaning
+    step associated with ``management`` interface. See
+    `Activating iLO Advanced license as manual clean step`_ for user guidance
+    on usage. Please note that this operation cannot be performed using virtual
+    media based drivers like ``iscsi_ilo`` and ``agent_ilo`` as they need this
+    type of advanced license already active to use virtual media to boot into
+    to start cleaning operation. Virtual media is an advanced feature. If an
+    advanced license is already active and the user wants to overwrite the
+    current license key, for example in case of a multi-server activation key
+    delivered with a flexible-quantity kit or after completing an Activation
+    Key Agreement (AKA), then these drivers can still be used for executing
+    this cleaning step.
+
+* iLO with firmware version 1.5 is minimally required to support all the
+  operations.
+
+For more information on node manual cleaning, see :ref:`manual_cleaning`
 
 Hardware Inspection Support
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -749,8 +796,6 @@ The following iLO drivers support hardware inspection:
 
    * The RAID needs to be pre-configured prior to inspection otherwise
      proliantutils returns 0 for disk size.
-   * The iLO firmware version needs to be 2.10 or above for nic_capacity to be
-     discovered.
 
 The inspection process will discover the following essential properties
 (properties required for scheduling deployment):
@@ -779,6 +824,14 @@ Inspection can also discover the following extra capabilities for iLO drivers:
 
 * ``nic_capacity``: the max speed of the embedded NIC adapter.
 
+  .. note::
+
+     * The capability ``nic_capacity`` can only be discovered if ipmitool
+       version >= 1.8.15 is used on the conductor. The latest version can be
+       downloaded from `here <http://sourceforge.net/projects/ipmitool/>`__.
+     * The iLO firmware version needs to be 2.10 or above for nic_capacity to be
+       discovered.
+
 The operator can specify these capabilities in nova flavor for node to be selected
 for scheduling::
 
@@ -791,3 +844,429 @@ for scheduling::
   nova flavor-key my-baremetal-flavor set capabilities:ilo_firmware_version="<in> 2.10"
 
   nova flavor-key my-baremetal-flavor set capabilities:secure_boot="true"
+
+Swiftless deploy for intermediate images
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``iscsi_ilo`` and ``agent_ilo`` drivers can deploy and boot the server
+with and without ``swift`` being used for hosting the intermediate
+temporary floppy image (holding metadata for deploy kernel and ramdisk)
+and the boot ISO (which is required for ``iscsi_ilo`` only). A local HTTP(S)
+web server on each conductor node needs to be configured. Refer
+`Web server configuration on conductor`_ for more information. The HTTPS
+web server needs to be enabled (instead of HTTP web server) in order to
+send management information and images in encrypted channel over HTTPS.
+
+.. note::
+    This feature assumes that the user inputs are on Glance which uses swift
+    as backend. If swift dependency has to be eliminated, please refer to
+    `HTTP(S) Based Deploy Support`_ also.
+
+Deploy Process
+~~~~~~~~~~~~~~
+
+Refer to `Netboot in swiftless deploy for intermediate images`_ for partition
+image support and refer to `Localboot in swiftless deploy for intermediate images`_
+for whole disk image support.
+
+HTTP(S) Based Deploy Support
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The user input for the images given in ``driver_info`` like ``ilo_deploy_iso``,
+``deploy_kernel`` and ``deploy_ramdisk`` and in ``instance_info`` like
+``image_source``, ``kernel``, ``ramdisk`` and ``ilo_boot_iso`` may also be given as
+HTTP(S) URLs.
+
+The HTTP(S) web server can be configured in many ways. For the Apache
+web server on Ubuntu, refer `here <https://help.ubuntu.com/lts/serverguide/httpd.html>`_.
+The web server may reside on a different system than the conductor nodes, but its URL
+must be reachable by the conductor and the bare metal nodes.
+
+Deploy Process
+~~~~~~~~~~~~~~
+
+Refer to `Netboot with HTTP(S) based deploy`_ for partition image boot and refer to
+`Localboot with HTTP(S) based deploy`_ for whole disk image boot.
+
+
+Support for iLO drivers with Standalone Ironic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It is possible to use ironic as standalone services without other
+OpenStack services. iLO drivers can be used in standalone ironic.
+This feature is referred to as ``iLO drivers with standalone ironic`` in this document and is
+supported by following drivers:
+
+* ``pxe_ilo``
+* ``iscsi_ilo``
+* ``agent_ilo``
+
+Configuration
+~~~~~~~~~~~~~
+The HTTP(S) web server needs to be configured as described in `HTTP(S) Based Deploy Support`_
+and `Web server configuration on conductor`_ needs to be configured for hosting
+intermediate images on conductor as described in
+`Swiftless deploy for intermediate images`_.
+
+Deploy Process
+~~~~~~~~~~~~~~
+``iscsi_ilo`` supports both netboot and localboot, while ``agent_ilo`` supports
+only localboot. Refer to `Netboot in standalone ironic`_ and
+`Localboot in standalone ironic`_ for details of deploy process
+for netboot and localboot respectively. For ``pxe_ilo``, the deploy process
+is same as native ``pxe_ipmitool`` driver.
+
+Deploy Process
+==============
+
+Netboot with glance and swift
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. seqdiag::
+   :scale: 80
+
+   diagram {
+      Glance; Conductor; Baremetal; Swift; IPA; iLO;
+      activation = none;
+      span_height = 1;
+      edge_length = 250;
+      default_note_color = white;
+      default_fontsize = 14;
+
+      Conductor -> iLO [label = "Powers off the node"];
+      Conductor -> Glance [label = "Download user image"];
+      Conductor -> Glance [label = "Get the metadata for deploy ISO"];
+      Conductor -> Conductor [label = "Generates swift tempURL for deploy ISO"];
+      Conductor -> Conductor [label = "Creates the FAT32 image containing Ironic API URL and driver name"];
+      Conductor -> Swift [label = "Uploads the FAT32 image"];
+      Conductor -> Conductor [label = "Generates swift tempURL for FAT32 image"];
+      Conductor -> iLO [label = "Attaches the FAT32 image swift tempURL as virtual media floppy"];
+      Conductor -> iLO [label = "Attaches the deploy ISO swift tempURL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets one time boot to CDROM"];
+      Conductor -> iLO [label = "Reboot the node"];
+      iLO -> Swift [label = "Downloads deploy ISO"];
+      Baremetal -> iLO [label = "Boots deploy kernel/ramdisk from iLO virtual media CDROM"];
+      IPA -> Conductor [label = "Lookup node"];
+      Conductor -> IPA [label = "Provides node UUID"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> IPA [label = "Exposes the disk over iSCSI"];
+      Conductor -> Conductor [label = "Connects to bare metal's disk over iSCSI and writes image"];
+      Conductor -> Conductor [label = "Generates the boot ISO"];
+      Conductor -> Swift [label = "Uploads the boot ISO"];
+      Conductor -> Conductor [label = "Generates swift tempURL for boot ISO"];
+      Conductor -> iLO [label = "Attaches boot ISO swift tempURL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets boot device to CDROM"];
+      Conductor -> IPA [label = "Power off the node"];
+      Conductor -> iLO [label = "Power on the node"];
+      iLO -> Swift [label = "Downloads boot ISO"];
+      iLO -> Baremetal [label = "Boots the instance kernel/ramdisk from iLO virtual media CDROM"];
+      Baremetal -> Baremetal [label = "Instance kernel finds root partition and continues booting from disk"];
+   }
+
+Localboot with glance and swift
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. seqdiag::
+   :scale: 80
+
+   diagram {
+      Glance; Conductor; Baremetal; Swift; IPA; iLO;
+      activation = none;
+      span_height = 1;
+      edge_length = 250;
+      default_note_color = white;
+      default_fontsize = 14;
+
+      Conductor -> iLO [label = "Powers off the node"];
+      Conductor -> Glance [label = "Get the metadata for deploy ISO"];
+      Glance -> Conductor [label = "Returns the metadata for deploy ISO"];
+      Conductor -> Conductor [label = "Generates swift tempURL for deploy ISO"];
+      Conductor -> Conductor [label = "Creates the FAT32 image containing ironic API URL and driver name"];
+      Conductor -> Swift [label = "Uploads the FAT32 image"];
+      Conductor -> Conductor [label = "Generates swift tempURL for FAT32 image"];
+      Conductor -> iLO [label = "Attaches the FAT32 image swift tempURL as virtual media floppy"];
+      Conductor -> iLO [label = "Attaches the deploy ISO swift tempURL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets one time boot to CDROM"];
+      Conductor -> iLO [label = "Reboot the node"];
+      iLO -> Swift [label = "Downloads deploy ISO"];
+      Baremetal -> iLO [label = "Boots deploy kernel/ramdisk from iLO virtual media CDROM"];
+      IPA -> Conductor [label = "Lookup node"];
+      Conductor -> IPA [label = "Provides node UUID"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> IPA [label = "Sends the user image HTTP(S) URL"];
+      IPA -> Swift [label = "Retrieves the user image on bare metal"];
+      IPA -> IPA [label = "Writes user image to disk"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> Baremetal [label = "Sets boot device to disk"];
+      Conductor -> IPA [label = "Power off the node"];
+      Conductor -> iLO [label = "Power on the node"];
+      Baremetal -> Baremetal [label = "Boot user image from disk"];
+   }
+
+Netboot in swiftless deploy for intermediate images
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. seqdiag::
+   :scale: 80
+
+   diagram {
+      Glance; Conductor; Baremetal; ConductorWebserver; IPA; iLO;
+      activation = none;
+      span_height = 1;
+      edge_length = 250;
+      default_note_color = white;
+      default_fontsize = 14;
+
+      Conductor -> iLO [label = "Powers off the node"];
+      Conductor -> Glance [label = "Download user image"];
+      Conductor -> Glance [label = "Get the metadata for deploy ISO"];
+      Conductor -> Conductor [label = "Generates swift tempURL for deploy ISO"];
+      Conductor -> Conductor [label = "Creates the FAT32 image containing Ironic API URL and driver name"];
+      Conductor -> ConductorWebserver [label = "Uploads the FAT32 image"];
+      Conductor -> iLO [label = "Attaches the FAT32 image URL as virtual media floppy"];
+      Conductor -> iLO [label = "Attaches the deploy ISO swift tempURL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets one time boot to CDROM"];
+      Conductor -> iLO [label = "Reboot the node"];
+      iLO -> Swift [label = "Downloads deploy ISO"];
+      Baremetal -> iLO [label = "Boots deploy kernel/ramdisk from iLO virtual media CDROM"];
+      IPA -> Conductor [label = "Lookup node"];
+      Conductor -> IPA [label = "Provides node UUID"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> IPA [label = "Exposes the disk over iSCSI"];
+      Conductor -> Conductor [label = "Connects to bare metal's disk over iSCSI and writes image"];
+      Conductor -> Conductor [label = "Generates the boot ISO"];
+      Conductor -> ConductorWebserver [label = "Uploads the boot ISO"];
+      Conductor -> iLO [label = "Attaches boot ISO URL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets boot device to CDROM"];
+      Conductor -> IPA [label = "Power off the node"];
+      Conductor -> iLO [label = "Power on the node"];
+      iLO -> ConductorWebserver [label = "Downloads boot ISO"];
+      iLO -> Baremetal [label = "Boots the instance kernel/ramdisk from iLO virtual media CDROM"];
+      Baremetal -> Baremetal [label = "Instance kernel finds root partition and continues booting from disk"];
+   }
+
+
+Localboot in swiftless deploy for intermediate images
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. seqdiag::
+   :scale: 80
+
+   diagram {
+      Glance; Conductor; Baremetal; ConductorWebserver; IPA; iLO;
+      activation = none;
+      span_height = 1;
+      edge_length = 250;
+      default_note_color = white;
+      default_fontsize = 14;
+
+      Conductor -> iLO [label = "Powers off the node"];
+      Conductor -> Glance [label = "Get the metadata for deploy ISO"];
+      Glance -> Conductor [label = "Returns the metadata for deploy ISO"];
+      Conductor -> Conductor [label = "Generates swift tempURL for deploy ISO"];
+      Conductor -> Conductor [label = "Creates the FAT32 image containing Ironic API URL and driver name"];
+      Conductor -> ConductorWebserver [label = "Uploads the FAT32 image"];
+      Conductor -> iLO [label = "Attaches the FAT32 image URL as virtual media floppy"];
+      Conductor -> iLO [label = "Attaches the deploy ISO swift tempURL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets one time boot to CDROM"];
+      Conductor -> iLO [label = "Reboot the node"];
+      iLO -> Swift [label = "Downloads deploy ISO"];
+      Baremetal -> iLO [label = "Boots deploy kernel/ramdisk from iLO virtual media CDROM"];
+      IPA -> Conductor [label = "Lookup node"];
+      Conductor -> IPA [label = "Provides node UUID"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> IPA [label = "Sends the user image HTTP(S) URL"];
+      IPA -> Swift [label = "Retrieves the user image on bare metal"];
+      IPA -> IPA [label = "Writes user image to disk"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> Baremetal [label = "Sets boot device to disk"];
+      Conductor -> IPA [label = "Power off the node"];
+      Conductor -> Baremetal [label = "Power on the node"];
+      Baremetal -> Baremetal [label = "Boot user image from disk"];
+   }
+
+Netboot with HTTP(S) based deploy
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. seqdiag::
+   :scale: 80
+
+   diagram {
+      Webserver; Conductor; Baremetal; Swift; IPA; iLO;
+      activation = none;
+      span_height = 1;
+      edge_length = 250;
+      default_note_color = white;
+      default_fontsize = 14;
+
+      Conductor -> iLO [label = "Powers off the node"];
+      Conductor -> Webserver [label = "Download user image"];
+      Conductor -> Conductor [label = "Creates the FAT32 image containing Ironic API URL and driver name"];
+      Conductor -> Swift [label = "Uploads the FAT32 image"];
+      Conductor -> Conductor [label = "Generates swift tempURL for FAT32 image"];
+      Conductor -> iLO [label = "Attaches the FAT32 image swift tempURL as virtual media floppy"];
+      Conductor -> iLO [label = "Attaches the deploy ISO URL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets one time boot to CDROM"];
+      Conductor -> iLO [label = "Reboot the node"];
+      iLO -> Webserver [label = "Downloads deploy ISO"];
+      Baremetal -> iLO [label = "Boots deploy kernel/ramdisk from iLO virtual media CDROM"];
+      IPA -> Conductor [label = "Lookup node"];
+      Conductor -> IPA [label = "Provides node UUID"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> IPA [label = "Exposes the disk over iSCSI"];
+      Conductor -> Conductor [label = "Connects to bare metal's disk over iSCSI and writes image"];
+      Conductor -> Conductor [label = "Generates the boot ISO"];
+      Conductor -> Swift [label = "Uploads the boot ISO"];
+      Conductor -> Conductor [label = "Generates swift tempURL for boot ISO"];
+      Conductor -> iLO [label = "Attaches boot ISO swift tempURL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets boot device to CDROM"];
+      Conductor -> IPA [label = "Power off the node"];
+      Conductor -> iLO [label = "Power on the node"];
+      iLO -> Swift [label = "Downloads boot ISO"];
+      iLO -> Baremetal [label = "Boots the instance kernel/ramdisk from iLO virtual media CDROM"];
+      Baremetal -> Baremetal [label = "Instance kernel finds root partition and continues booting from disk"];
+   }
+
+Localboot with HTTP(S) based deploy
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. seqdiag::
+   :scale: 80
+
+   diagram {
+      Webserver; Conductor; Baremetal; Swift; IPA; iLO;
+      activation = none;
+      span_height = 1;
+      edge_length = 250;
+      default_note_color = white;
+      default_fontsize = 14;
+
+      Conductor -> iLO [label = "Powers off the node"];
+      Conductor -> Conductor [label = "Creates the FAT32 image containing ironic API URL and driver name"];
+      Conductor -> Swift [label = "Uploads the FAT32 image"];
+      Conductor -> Conductor [label = "Generates swift tempURL for FAT32 image"];
+      Conductor -> iLO [label = "Attaches the FAT32 image swift tempURL as virtual media floppy"];
+      Conductor -> iLO [label = "Attaches the deploy ISO URL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets one time boot to CDROM"];
+      Conductor -> iLO [label = "Reboot the node"];
+      iLO -> Webserver [label = "Downloads deploy ISO"];
+      Baremetal -> iLO [label = "Boots deploy kernel/ramdisk from iLO virtual media CDROM"];
+      IPA -> Conductor [label = "Lookup node"];
+      Conductor -> IPA [label = "Provides node UUID"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> IPA [label = "Sends the user image HTTP(S) URL"];
+      IPA -> Webserver [label = "Retrieves the user image on bare metal"];
+      IPA -> IPA [label = "Writes user image to disk"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> Baremetal [label = "Sets boot device to disk"];
+      Conductor -> IPA [label = "Power off the node"];
+      Conductor -> Baremetal [label = "Power on the node"];
+      Baremetal -> Baremetal [label = "Boot user image from disk"];
+   }
+
+Netboot in standalone ironic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. seqdiag::
+   :scale: 80
+
+   diagram {
+      Webserver; Conductor; Baremetal; ConductorWebserver; IPA; iLO;
+      activation = none;
+      span_height = 1;
+      edge_length = 250;
+      default_note_color = white;
+      default_fontsize = 14;
+
+      Conductor -> iLO [label = "Powers off the node"];
+      Conductor -> Webserver [label = "Download user image"];
+      Conductor -> Conductor [label = "Creates the FAT32 image containing Ironic API URL and driver name"];
+      Conductor -> ConductorWebserver[label = "Uploads the FAT32 image"];
+      Conductor -> iLO [label = "Attaches the FAT32 image URL as virtual media floppy"];
+      Conductor -> iLO [label = "Attaches the deploy ISO URL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets one time boot to CDROM"];
+      Conductor -> iLO [label = "Reboot the node"];
+      iLO -> Webserver [label = "Downloads deploy ISO"];
+      Baremetal -> iLO [label = "Boots deploy kernel/ramdisk from iLO virtual media CDROM"];
+      IPA -> Conductor [label = "Lookup node"];
+      Conductor -> IPA [label = "Provides node UUID"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> IPA [label = "Exposes the disk over iSCSI"];
+      Conductor -> Conductor [label = "Connects to bare metal's disk over iSCSI and writes image"];
+      Conductor -> Conductor [label = "Generates the boot ISO"];
+      Conductor -> ConductorWebserver [label = "Uploads the boot ISO"];
+      Conductor -> iLO [label = "Attaches boot ISO URL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets boot device to CDROM"];
+      Conductor -> IPA [label = "Power off the node"];
+      Conductor -> iLO [label = "Power on the node"];
+      iLO -> ConductorWebserver [label = "Downloads boot ISO"];
+      iLO -> Baremetal [label = "Boots the instance kernel/ramdisk from iLO virtual media CDROM"];
+      Baremetal -> Baremetal [label = "Instance kernel finds root partition and continues booting from disk"];
+   }
+
+Localboot in standalone ironic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. seqdiag::
+   :scale: 80
+
+   diagram {
+      Webserver; Conductor; Baremetal; ConductorWebserver; IPA; iLO;
+      activation = none;
+      span_height = 1;
+      edge_length = 250;
+      default_note_color = white;
+      default_fontsize = 14;
+
+      Conductor -> iLO [label = "Powers off the node"];
+      Conductor -> Conductor [label = "Creates the FAT32 image containing Ironic API URL and driver name"];
+      Conductor -> ConductorWebserver [label = "Uploads the FAT32 image"];
+      Conductor -> Conductor [label = "Generates URL for FAT32 image"];
+      Conductor -> iLO [label = "Attaches the FAT32 image URL as virtual media floppy"];
+      Conductor -> iLO [label = "Attaches the deploy ISO URL as virtual media CDROM"];
+      Conductor -> iLO [label = "Sets one time boot to CDROM"];
+      Conductor -> iLO [label = "Reboot the node"];
+      iLO -> Webserver [label = "Downloads deploy ISO"];
+      Baremetal -> iLO [label = "Boots deploy kernel/ramdisk from iLO virtual media CDROM"];
+      IPA -> Conductor [label = "Lookup node"];
+      Conductor -> IPA [label = "Provides node UUID"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> IPA [label = "Sends the user image HTTP(S) URL"];
+      IPA -> Webserver [label = "Retrieves the user image on bare metal"];
+      IPA -> IPA [label = "Writes user image to disk"];
+      IPA -> Conductor [label = "Heartbeat"];
+      Conductor -> Baremetal [label = "Sets boot device to disk"];
+      Conductor -> IPA [label = "Power off the node"];
+      Conductor -> Baremetal [label = "Power on the node"];
+      Baremetal -> Baremetal [label = "Boot user image from disk"];
+   }
+
+Activating iLO Advanced license as manual clean step
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+iLO drivers can activate the iLO Advanced license key as a manual cleaning
+step. Any manual cleaning step can only be initiated when a node is in the
+``manageable`` state. Once the manual cleaning is finished, the node will be
+put in the ``manageable`` state again. User can follow steps from
+:ref:`manual_cleaning` to initiate manual cleaning operation on a node.
+
+An example of a manual clean step to activate license as the only clean step
+could be::
+
+    'clean_steps': [{
+        'interface': 'management',
+        'step': 'activate_license',
+        'args': {
+            'ilo_license_key': 'ABC12-XXXXX-XXXXX-XXXXX-YZ345'
+        }
+    }]
+
+The different attributes of ``activate_license`` clean step are as follows:
+
+  .. csv-table::
+   :header: "Attribute", "Description"
+   :widths: 30, 120
+
+   "``interface``", "Interface of clean step, here ``management``"
+   "``step``", "Name of clean step, here ``activate_license``"
+   "``args``", "Keyword-argument entry (<name>: <value>) being passed to clean step"
+   "``args.ilo_license_key``", "The HPE iLO Advanced license key to activate enterprise features. This is mandatory."

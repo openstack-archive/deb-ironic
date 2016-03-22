@@ -38,6 +38,7 @@ from ironic.drivers.modules.ilo import vendor as ilo_vendor
 from ironic.drivers.modules import inspector
 from ironic.drivers.modules import ipminative
 from ironic.drivers.modules import ipmitool
+from ironic.drivers.modules.irmc import inspect as irmc_inspect
 from ironic.drivers.modules.irmc import management as irmc_management
 from ironic.drivers.modules.irmc import power as irmc_power
 from ironic.drivers.modules import iscsi_deploy
@@ -107,6 +108,7 @@ class PXEAndSSHDriver(base.BaseDriver):
         self.inspect = inspector.Inspector.create_if_enabled(
             'PXEAndSSHDriver')
         self.raid = agent.AgentRAID()
+        self.console = ssh.ShellinaboxConsole()
 
 
 class PXEAndIPMINativeDriver(base.BaseDriver):
@@ -263,6 +265,7 @@ class PXEAndIRMCDriver(base.BaseDriver):
         self.deploy = iscsi_deploy.ISCSIDeploy()
         self.management = irmc_management.IRMCManagement()
         self.vendor = iscsi_deploy.VendorPassthru()
+        self.inspect = irmc_inspect.IRMCInspect()
 
 
 class PXEAndVirtualBoxDriver(base.BaseDriver):
@@ -348,6 +351,8 @@ class PXEAndUcsDriver(base.BaseDriver):
         self.deploy = iscsi_deploy.ISCSIDeploy()
         self.management = ucs_mgmt.UcsManagement()
         self.vendor = iscsi_deploy.VendorPassthru()
+        self.inspect = inspector.Inspector.create_if_enabled(
+            'PXEAndUcsDriver')
 
 
 class PXEAndCIMCDriver(base.BaseDriver):
@@ -370,6 +375,8 @@ class PXEAndCIMCDriver(base.BaseDriver):
         self.deploy = iscsi_deploy.ISCSIDeploy()
         self.management = cimc_mgmt.CIMCManagement()
         self.vendor = iscsi_deploy.VendorPassthru()
+        self.inspect = inspector.Inspector.create_if_enabled(
+            'PXEAndCIMCDriver')
 
 
 class PXEAndWakeOnLanDriver(base.BaseDriver):

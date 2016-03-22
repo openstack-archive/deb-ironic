@@ -20,6 +20,7 @@ import os
 import shutil
 import tempfile
 
+from ironic_lib import utils as ironic_utils
 import mock
 from oslo_config import cfg
 import six
@@ -30,7 +31,6 @@ from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common import images
 from ironic.common import states
-from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
 from ironic.drivers.modules import deploy_utils
@@ -86,15 +86,6 @@ class IRMCDeployPrivateMethodsTestCase(db_base.DbTestCase):
         self.assertRaises(exception.InvalidParameterValue,
                           irmc_boot._parse_config_option)
         isdir_mock.assert_called_once_with('/non_existed_root')
-
-    @mock.patch.object(os.path, 'isdir', spec_set=True, autospec=True)
-    def test__parse_config_option_wrong_share_type(self, isdir_mock):
-        CONF.irmc.remote_image_share_type = 'NTFS'
-        isdir_mock.return_value = True
-
-        self.assertRaises(exception.InvalidParameterValue,
-                          irmc_boot._parse_config_option)
-        isdir_mock.assert_called_once_with('/remote_image_share_root')
 
     @mock.patch.object(os.path, 'isfile', spec_set=True, autospec=True)
     def test__parse_driver_info_in_share(self, isfile_mock):
@@ -620,7 +611,7 @@ class IRMCDeployPrivateMethodsTestCase(db_base.DbTestCase):
                 [mock.call(_get_floppy_image_name_mock(task.node)),
                  mock.call(_get_deploy_iso_name_mock(task.node))])
 
-    @mock.patch.object(utils, 'unlink_without_raise', spec_set=True,
+    @mock.patch.object(ironic_utils, 'unlink_without_raise', spec_set=True,
                        autospec=True)
     def test__remove_share_file(self, unlink_without_raise_mock):
         CONF.irmc.remote_image_share_name = '/'
@@ -1029,3 +1020,12 @@ class IRMCVirtualMediaBootTestCase(db_base.DbTestCase):
                 task, 'boot.iso')
             node_set_boot_device.assert_called_once_with(
                 task, boot_devices.CDROM, persistent=True)
+
+    def test_remote_image_share_type_values(self):
+        cfg.CONF.set_override('remote_image_share_type', 'cifs', 'irmc',
+                              enforce_type=True)
+        cfg.CONF.set_override('remote_image_share_type', 'nfs', 'irmc',
+                              enforce_type=True)
+        self.assertRaises(ValueError, cfg.CONF.set_override,
+                          'remote_image_share_type', 'fake', 'irmc',
+                          enforce_type=True)

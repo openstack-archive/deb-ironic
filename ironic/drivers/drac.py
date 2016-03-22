@@ -10,6 +10,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+
 """
 DRAC Driver for remote system management using Dell Remote Access Card.
 """
@@ -32,10 +33,10 @@ class PXEDracDriver(base.BaseDriver):
     """Drac driver using PXE for deploy."""
 
     def __init__(self):
-        if not importutils.try_import('pywsman'):
+        if not importutils.try_import('dracclient'):
             raise exception.DriverLoadError(
                 driver=self.__class__.__name__,
-                reason=_('Unable to import pywsman library'))
+                reason=_('Unable to import python-dracclient library'))
 
         self.power = power.DracPower()
         self.boot = pxe.PXEBoot()
@@ -51,6 +52,8 @@ class PXEDracDriver(base.BaseDriver):
                         'commit_bios_config': self.drac_vendor,
                         'abandon_bios_config': self.drac_vendor,
                         }
-        self.vendor = utils.MixinVendorInterface(self.mapping)
+        self.driver_passthru_mapping = {'lookup': self.iscsi_vendor}
+        self.vendor = utils.MixinVendorInterface(self.mapping,
+                                                 self.driver_passthru_mapping)
         self.inspect = inspector.Inspector.create_if_enabled(
             'PXEDracDriver')

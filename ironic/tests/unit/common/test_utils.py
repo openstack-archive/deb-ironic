@@ -43,18 +43,6 @@ class BareMetalUtilsTestCase(base.TestCase):
         s = utils.random_alnum(100)
         self.assertEqual(100, len(s))
 
-    def test_unlink(self):
-        with mock.patch.object(os, "unlink", autospec=True) as unlink_mock:
-            unlink_mock.return_value = None
-            utils.unlink_without_raise("/fake/path")
-            unlink_mock.assert_called_once_with("/fake/path")
-
-    def test_unlink_ENOENT(self):
-        with mock.patch.object(os, "unlink", autospec=True) as unlink_mock:
-            unlink_mock.side_effect = OSError(errno.ENOENT)
-            utils.unlink_without_raise("/fake/path")
-            unlink_mock.assert_called_once_with("/fake/path")
-
     def test_create_link(self):
         with mock.patch.object(os, "symlink", autospec=True) as symlink_mock:
             symlink_mock.return_value = None
@@ -273,12 +261,68 @@ class GenericUtilsTestCase(base.TestCase):
                                                                       mock.ANY)
                 fake_context_manager.__enter__.assert_called_once_with()
 
-    def test_hash_file(self):
+    @mock.patch.object(utils, 'hashlib', autospec=True)
+    def test__get_hash_object(self, hashlib_mock):
+        algorithms_available = ('md5', 'sha1', 'sha224',
+                                'sha256', 'sha384', 'sha512')
+        hashlib_mock.algorithms_guaranteed = algorithms_available
+        hashlib_mock.algorithms = algorithms_available
+        # | WHEN |
+        utils._get_hash_object('md5')
+        utils._get_hash_object('sha1')
+        utils._get_hash_object('sha224')
+        utils._get_hash_object('sha256')
+        utils._get_hash_object('sha384')
+        utils._get_hash_object('sha512')
+        # | THEN |
+        calls = [mock.call.md5(), mock.call.sha1(), mock.call.sha224(),
+                 mock.call.sha256(), mock.call.sha384(), mock.call.sha512()]
+        hashlib_mock.assert_has_calls(calls)
+
+    def test__get_hash_object_throws_for_invalid_or_unsupported_hash_name(
+            self):
+        # | WHEN | & | THEN |
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils._get_hash_object,
+                          'hickory-dickory-dock')
+
+    def test_hash_file_for_md5(self):
+        # | GIVEN |
         data = b'Mary had a little lamb, its fleece as white as snow'
-        flo = six.BytesIO(data)
-        h1 = utils.hash_file(flo)
-        h2 = hashlib.sha1(data).hexdigest()
-        self.assertEqual(h1, h2)
+        file_like_object = six.BytesIO(data)
+        expected = hashlib.md5(data).hexdigest()
+        # | WHEN |
+        actual = utils.hash_file(file_like_object)  # using default, 'md5'
+        # | THEN |
+        self.assertEqual(expected, actual)
+
+    def test_hash_file_for_sha1(self):
+        # | GIVEN |
+        data = b'Mary had a little lamb, its fleece as white as snow'
+        file_like_object = six.BytesIO(data)
+        expected = hashlib.sha1(data).hexdigest()
+        # | WHEN |
+        actual = utils.hash_file(file_like_object, 'sha1')
+        # | THEN |
+        self.assertEqual(expected, actual)
+
+    def test_hash_file_for_sha512(self):
+        # | GIVEN |
+        data = b'Mary had a little lamb, its fleece as white as snow'
+        file_like_object = six.BytesIO(data)
+        expected = hashlib.sha512(data).hexdigest()
+        # | WHEN |
+        actual = utils.hash_file(file_like_object, 'sha512')
+        # | THEN |
+        self.assertEqual(expected, actual)
+
+    def test_hash_file_throws_for_invalid_or_unsupported_hash(self):
+        # | GIVEN |
+        data = b'Mary had a little lamb, its fleece as white as snow'
+        file_like_object = six.BytesIO(data)
+        # | WHEN | & | THEN |
+        self.assertRaises(exception.InvalidParameterValue, utils.hash_file,
+                          file_like_object, 'hickory-dickory-dock')
 
     def test_is_valid_boolstr(self):
         self.assertTrue(utils.is_valid_boolstr('true'))
@@ -443,56 +487,48 @@ class GenericUtilsTestCase(base.TestCase):
                          utils.unix_file_modification_datetime('foo'))
         mtime_mock.assert_called_once_with('foo')
 
+    def test_is_valid_no_proxy(self):
 
-class MkfsTestCase(base.TestCase):
+        # Valid values for 'no_proxy'
+        valid_no_proxy = [
+            ('a' * 63 + '.' + '0' * 63 + '.c.' + 'd' * 61 + '.' + 'e' * 61),
+            ('A' * 63 + '.' + '0' * 63 + '.C.' + 'D' * 61 + '.' + 'E' * 61),
+            ('.' + 'a' * 62 + '.' + '0' * 62 + '.c.' + 'd' * 61 + '.' +
+             'e' * 61),
+            ',,example.com:3128,',
+            '192.168.1.1',  # IP should be valid
+        ]
+        # Test each one individually, so if failure easier to determine which
+        # one failed.
+        for no_proxy in valid_no_proxy:
+            self.assertTrue(
+                utils.is_valid_no_proxy(no_proxy),
+                msg="'no_proxy' value should be valid: {}".format(no_proxy))
+        # Test valid when joined together
+        self.assertTrue(utils.is_valid_no_proxy(','.join(valid_no_proxy)))
+        # Test valid when joined together with whitespace
+        self.assertTrue(utils.is_valid_no_proxy(' , '.join(valid_no_proxy)))
+        # empty string should also be valid
+        self.assertTrue(utils.is_valid_no_proxy(''))
 
-    @mock.patch.object(utils, 'execute', autospec=True)
-    def test_mkfs(self, execute_mock):
-        utils.mkfs('ext4', '/my/block/dev')
-        utils.mkfs('msdos', '/my/msdos/block/dev')
-        utils.mkfs('swap', '/my/swap/block/dev')
+        # Invalid values for 'no_proxy'
+        invalid_no_proxy = [
+            ('A' * 64 + '.' + '0' * 63 + '.C.' + 'D' * 61 + '.' +
+             'E' * 61),  # too long (> 253)
+            ('a' * 100),
+            'a..com',
+            ('.' + 'a' * 63 + '.' + '0' * 62 + '.c.' + 'd' * 61 + '.' +
+             'e' * 61),  # too long (> 251 after deleting .)
+            ('*.' + 'a' * 60 + '.' + '0' * 60 + '.c.' + 'd' * 61 + '.' +
+             'e' * 61),  # starts with *.
+            'c.-a.com',
+            'c.a-.com',
+        ]
 
-        expected = [mock.call('mkfs', '-t', 'ext4', '-F', '/my/block/dev',
-                              run_as_root=True,
-                              use_standard_locale=True),
-                    mock.call('mkfs', '-t', 'msdos', '/my/msdos/block/dev',
-                              run_as_root=True,
-                              use_standard_locale=True),
-                    mock.call('mkswap', '/my/swap/block/dev',
-                              run_as_root=True,
-                              use_standard_locale=True)]
-        self.assertEqual(expected, execute_mock.call_args_list)
-
-    @mock.patch.object(utils, 'execute', autospec=True)
-    def test_mkfs_with_label(self, execute_mock):
-        utils.mkfs('ext4', '/my/block/dev', 'ext4-vol')
-        utils.mkfs('msdos', '/my/msdos/block/dev', 'msdos-vol')
-        utils.mkfs('swap', '/my/swap/block/dev', 'swap-vol')
-
-        expected = [mock.call('mkfs', '-t', 'ext4', '-F', '-L', 'ext4-vol',
-                              '/my/block/dev', run_as_root=True,
-                              use_standard_locale=True),
-                    mock.call('mkfs', '-t', 'msdos', '-n', 'msdos-vol',
-                              '/my/msdos/block/dev', run_as_root=True,
-                              use_standard_locale=True),
-                    mock.call('mkswap', '-L', 'swap-vol',
-                              '/my/swap/block/dev', run_as_root=True,
-                              use_standard_locale=True)]
-        self.assertEqual(expected, execute_mock.call_args_list)
-
-    @mock.patch.object(utils, 'execute', autospec=True)
-    def test_mkfs_with_unsupported_fs(self, execute_mock):
-        execute_mock.side_effect = iter([processutils.ProcessExecutionError(
-            stderr=os.strerror(errno.ENOENT))])
-        self.assertRaises(exception.FileSystemNotSupported,
-                          utils.mkfs, 'foo', '/my/block/dev')
-
-    @mock.patch.object(utils, 'execute', autospec=True)
-    def test_mkfs_with_unexpected_error(self, execute_mock):
-        execute_mock.side_effect = iter([processutils.ProcessExecutionError(
-            stderr='fake')])
-        self.assertRaises(processutils.ProcessExecutionError, utils.mkfs,
-                          'ext4', '/my/block/dev', 'ext4-vol')
+        for no_proxy in invalid_no_proxy:
+            self.assertFalse(
+                utils.is_valid_no_proxy(no_proxy),
+                msg="'no_proxy' value should be invalid: {}".format(no_proxy))
 
 
 class TempFilesTestCase(base.TestCase):
@@ -622,17 +658,6 @@ class TempFilesTestCase(base.TestCase):
         self.assertRaises(exception.InsufficientDiskSpace,
                           utils._check_dir_free_space, "/fake/path")
         mock_stat.assert_called_once_with("/fake/path")
-
-
-class IsHttpUrlTestCase(base.TestCase):
-
-    def test_is_http_url(self):
-        self.assertTrue(utils.is_http_url('http://127.0.0.1'))
-        self.assertTrue(utils.is_http_url('https://127.0.0.1'))
-        self.assertTrue(utils.is_http_url('HTTP://127.1.2.3'))
-        self.assertTrue(utils.is_http_url('HTTPS://127.3.2.1'))
-        self.assertFalse(utils.is_http_url('Zm9vYmFy'))
-        self.assertFalse(utils.is_http_url('11111111'))
 
 
 class GetUpdatedCapabilitiesTestCase(base.TestCase):

@@ -32,7 +32,9 @@ class Port(base.IronicObject, object_base.VersionedObjectDictCompat):
     # Version 1.2: Add create() and destroy()
     # Version 1.3: Add list()
     # Version 1.4: Add list_by_node_id()
-    VERSION = '1.4'
+    # Version 1.5: Add list_by_portgroup_id() and new fields
+    #              local_link_connection, portgroup_id and pxe_enabled
+    VERSION = '1.5'
 
     dbapi = dbapi.get_instance()
 
@@ -42,16 +44,11 @@ class Port(base.IronicObject, object_base.VersionedObjectDictCompat):
         'node_id': object_fields.IntegerField(nullable=True),
         'address': object_fields.MACAddressField(nullable=True),
         'extra': object_fields.FlexibleDictField(nullable=True),
+        'local_link_connection': object_fields.FlexibleDictField(
+            nullable=True),
+        'portgroup_id': object_fields.IntegerField(nullable=True),
+        'pxe_enabled': object_fields.BooleanField()
     }
-
-    @staticmethod
-    def _from_db_object(port, db_port):
-        """Converts a database entity to a formal object."""
-        for field in port.fields:
-            port[field] = db_port[field]
-
-        port.obj_reset_changes()
-        return port
 
     @staticmethod
     def _from_db_object_list(db_objects, cls, context):
@@ -64,9 +61,12 @@ class Port(base.IronicObject, object_base.VersionedObjectDictCompat):
     # @object_base.remotable_classmethod
     @classmethod
     def get(cls, context, port_id):
-        """Find a port based on its id or uuid and return a Port object.
+        """Find a port.
 
-        :param port_id: the id *or* uuid of a port.
+        Find a port based on its id or uuid or MAC address and return a Port
+        object.
+
+        :param port_id: the id *or* uuid *or* MAC address of a port.
         :returns: a :class:`Port` object.
         :raises: InvalidIdentity
 
@@ -179,6 +179,31 @@ class Port(base.IronicObject, object_base.VersionedObjectDictCompat):
                                                   marker=marker,
                                                   sort_key=sort_key,
                                                   sort_dir=sort_dir)
+        return Port._from_db_object_list(db_ports, cls, context)
+
+    # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable
+    # methods can be used in the future to replace current explicit RPC calls.
+    # Implications of calling new remote procedures should be thought through.
+    # @object_base.remotable_classmethod
+    @classmethod
+    def list_by_portgroup_id(cls, context, portgroup_id, limit=None,
+                             marker=None, sort_key=None, sort_dir=None):
+        """Return a list of Port objects associated with a given portgroup ID.
+
+        :param context: Security context.
+        :param portgroup_id: the ID of the portgroup.
+        :param limit: maximum number of resources to return in a single result.
+        :param marker: pagination marker for large data sets.
+        :param sort_key: column to sort results by.
+        :param sort_dir: direction to sort. "asc" or "desc".
+        :returns: a list of :class:`Port` object.
+
+        """
+        db_ports = cls.dbapi.get_ports_by_portgroup_id(portgroup_id,
+                                                       limit=limit,
+                                                       marker=marker,
+                                                       sort_key=sort_key,
+                                                       sort_dir=sort_dir)
         return Port._from_db_object_list(db_ports, cls, context)
 
     # NOTE(xek): We don't want to enable RPC on this call just yet. Remotable

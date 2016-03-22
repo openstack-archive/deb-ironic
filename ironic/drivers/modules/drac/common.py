@@ -21,7 +21,9 @@ from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common import utils
 
-pywsman = importutils.try_import('pywsman')
+drac_client = importutils.try_import('dracclient.client')
+drac_constants = importutils.try_import('dracclient.constants')
+
 
 REQUIRED_PROPERTIES = {
     'drac_host': _('IP address or hostname of the DRAC card. Required.'),
@@ -74,6 +76,10 @@ def parse_driver_info(node):
     try:
         parsed_driver_info['drac_protocol'] = str(
             driver_info.get('drac_protocol', 'https'))
+
+        if parsed_driver_info['drac_protocol'] not in ['http', 'https']:
+            error_msgs.append(_("'drac_protocol' must be either 'http' or "
+                                "'https'."))
     except UnicodeEncodeError:
         error_msgs.append(_("'drac_protocol' contains non-ASCII symbol."))
 
@@ -89,22 +95,20 @@ def parse_driver_info(node):
     return parsed_driver_info
 
 
-def find_xml(doc, item, namespace, find_all=False):
-    """Find the first or all elements in an ElementTree object.
+def get_drac_client(node):
+    """Returns a DRACClient object from python-dracclient library.
 
-    :param doc: the element tree object.
-    :param item: the element name.
-    :param namespace: the namespace of the element.
-    :param find_all: Boolean value, if True find all elements, if False
-                     find only the first one. Defaults to False.
-    :returns: if find_all is False the element object will be returned
-              if found, None if not found. If find_all is True a list of
-              element objects will be returned or an empty list if no
-              elements were found.
-
+    :param node: an ironic node object.
+    :returns: a DRACClient object.
+    :raises: InvalidParameterValue if mandatory information is missing on the
+             node or on invalid input.
     """
-    query = ('.//{%(namespace)s}%(item)s' % {'namespace': namespace,
-                                             'item': item})
-    if find_all:
-        return doc.findall(query)
-    return doc.find(query)
+    driver_info = parse_driver_info(node)
+    client = drac_client.DRACClient(driver_info['drac_host'],
+                                    driver_info['drac_username'],
+                                    driver_info['drac_password'],
+                                    driver_info['drac_port'],
+                                    driver_info['drac_path'],
+                                    driver_info['drac_protocol'])
+
+    return client

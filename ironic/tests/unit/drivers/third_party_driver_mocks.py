@@ -28,6 +28,8 @@ Current list of mocked libraries:
 - pysnmp
 - scciclient
 - oneview_client
+- pywsman
+- python-dracclient
 """
 
 import sys
@@ -93,9 +95,15 @@ if not proliantutils:
     sys.modules['proliantutils.ilo'] = proliantutils.ilo
     sys.modules['proliantutils.ilo.client'] = proliantutils.ilo.client
     sys.modules['proliantutils.exception'] = proliantutils.exception
+    sys.modules['proliantutils.utils'] = proliantutils.utils
+    proliantutils.utils.process_firmware_image = mock.MagicMock()
     proliantutils.exception.IloError = type('IloError', (Exception,), {})
     command_exception = type('IloCommandNotSupportedError', (Exception,), {})
     proliantutils.exception.IloCommandNotSupportedError = command_exception
+    proliantutils.exception.InvalidInputError = type(
+        'InvalidInputError', (Exception,), {})
+    proliantutils.exception.ImageExtractionFailed = type(
+        'ImageExtractionFailed', (Exception,), {})
     if 'ironic.drivers.ilo' in sys.modules:
         six.moves.reload_module(sys.modules['ironic.drivers.ilo'])
 
@@ -125,18 +133,38 @@ if not oneview_client:
 
 
 # attempt to load the external 'pywsman' library, which is required by
-# the optional drivers.modules.drac and drivers.modules.amt module
+# the optional drivers.modules.amt module
 pywsman = importutils.try_import('pywsman')
 if not pywsman:
     pywsman = mock.MagicMock(spec_set=mock_specs.PYWSMAN_SPEC)
     sys.modules['pywsman'] = pywsman
     # Now that the external library has been mocked, if anything had already
     # loaded any of the drivers, reload them.
-    if 'ironic.drivers.modules.drac' in sys.modules:
-        six.moves.reload_module(sys.modules['ironic.drivers.modules.drac'])
     if 'ironic.drivers.modules.amt' in sys.modules:
         six.moves.reload_module(sys.modules['ironic.drivers.modules.amt'])
 
+# attempt to load the external 'python-dracclient' library, which is required
+# by the optional drivers.modules.drac module
+dracclient = importutils.try_import('dracclient')
+if not dracclient:
+    dracclient = mock.MagicMock(spec_set=mock_specs.DRACCLIENT_SPEC)
+    dracclient.client = mock.MagicMock(
+        spec_set=mock_specs.DRACCLIENT_CLIENT_MOD_SPEC)
+    dracclient.constants = mock.MagicMock(
+        spec_set=mock_specs.DRACCLIENT_CONSTANTS_MOD_SPEC,
+        POWER_OFF=mock.sentinel.POWER_OFF,
+        POWER_ON=mock.sentinel.POWER_ON,
+        REBOOT=mock.sentinel.REBOOT)
+    sys.modules['dracclient'] = dracclient
+    sys.modules['dracclient.client'] = dracclient.client
+    sys.modules['dracclient.constants'] = dracclient.constants
+    sys.modules['dracclient.exceptions'] = dracclient.exceptions
+    dracclient.exceptions.BaseClientException = type('BaseClientException',
+                                                     (Exception,), {})
+    # Now that the external library has been mocked, if anything had already
+    # loaded any of the drivers, reload them.
+    if 'ironic.drivers.modules.drac' in sys.modules:
+        six.moves.reload_module(sys.modules['ironic.drivers.modules.drac'])
 
 # attempt to load the external 'iboot' library, which is required by
 # the optional drivers.modules.iboot module

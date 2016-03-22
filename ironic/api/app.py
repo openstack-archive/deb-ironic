@@ -30,9 +30,15 @@ api_opts = [
     cfg.StrOpt(
         'auth_strategy',
         default='keystone',
-        help=_('Authentication strategy used by ironic-api: one of "keystone" '
-               'or "noauth". "noauth" should not be used in a production '
-               'environment because all authentication will be disabled.')),
+        choices=['noauth', 'keystone'],
+        help=_('Authentication strategy used by ironic-api. "noauth" should '
+               'not be used in a production environment because all '
+               'authentication will be disabled.')),
+    cfg.BoolOpt('debug_tracebacks_in_api',
+                default=False,
+                help=_('Return server tracebacks in the API response for any '
+                       'error responses. WARNING: this is insecure '
+                       'and should not be used in a production environment.')),
     cfg.BoolOpt('pecan_debug',
                 default=False,
                 help=_('Enable pecan debug mode. WARNING: this is insecure '
