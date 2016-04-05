@@ -19,8 +19,10 @@
 
 import futurist
 import mock
+from oslo_context import context as oslo_context
 from oslo_utils import uuidutils
 
+from ironic.common import context
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import fsm
@@ -625,6 +627,28 @@ class TaskManagerStateModelTestCases(tests_base.TestCase):
         self.assertNotEqual(target_provision_state,
                             self.node.target_provision_state)
 
+    def test_process_event_callback_stable_state(self):
+        callback = mock.Mock()
+        for state in states.STABLE_STATES:
+            self.node.provision_state = state
+            self.node.target_provision_state = 'target'
+            self.task.process_event = task_manager.TaskManager.process_event
+            self.task.process_event(self.task, 'fake', callback=callback)
+            # assert the target state is set when callback is passed
+            self.assertNotEqual(states.NOSTATE,
+                                self.task.node.target_provision_state)
+
+    def test_process_event_no_callback_stable_state(self):
+        for state in states.STABLE_STATES:
+            self.node.provision_state = state
+            self.node.target_provision_state = 'target'
+            self.task.process_event = task_manager.TaskManager.process_event
+            self.task.process_event(self.task, 'fake')
+            # assert the target state was cleared when moving to a
+            # stable state
+            self.assertEqual(states.NOSTATE,
+                             self.task.node.target_provision_state)
+
 
 @task_manager.require_exclusive_lock
 def _req_excl_lock_method(*args, **kwargs):
@@ -635,6 +659,7 @@ class ExclusiveLockDecoratorTestCase(tests_base.TestCase):
     def setUp(self):
         super(ExclusiveLockDecoratorTestCase, self).setUp()
         self.task = mock.Mock(spec=task_manager.TaskManager)
+        self.task.context = self.context
         self.args_task_first = (self.task, 1, 2)
         self.args_task_second = (1, self.task, 2)
         self.kwargs = dict(cat='meow', dog='wuff')
@@ -714,3 +739,20 @@ class ThreadExceptionTestCase(tests_base.TestCase):
         self.future_mock.exception.assert_called_once_with()
         self.assertIsNone(self.node.last_error)
         self.assertTrue(log_mock.called)
+
+
+@mock.patch.object(oslo_context, 'get_current')
+class TaskManagerContextTestCase(tests_base.TestCase):
+    def setUp(self):
+        super(TaskManagerContextTestCase, self).setUp()
+        self.context = mock.Mock(spec=context.RequestContext)
+
+    def test_thread_without_context(self, context_get_mock):
+        context_get_mock.return_value = False
+        task_manager.ensure_thread_contain_context(self.context)
+        self.assertTrue(self.context.update_store.called)
+
+    def test_thread_with_context(self, context_get_mock):
+        context_get_mock.return_value = True
+        task_manager.ensure_thread_contain_context(self.context)
+        self.assertFalse(self.context.update_store.called)

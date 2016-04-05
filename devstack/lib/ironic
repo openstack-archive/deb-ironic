@@ -153,6 +153,10 @@ IRONIC_DEPLOY_DRIVER_ISCSI_WITH_IPA=$(trueorfalse False IRONIC_DEPLOY_DRIVER_ISC
 # The path to the libvirt hooks directory, used if IRONIC_VM_LOG_ROTATE is True
 IRONIC_LIBVIRT_HOOKS_PATH=${IRONIC_LIBVIRT_HOOKS_PATH:-/etc/libvirt/hooks/}
 
+# The authentication strategy used by ironic-api. Valid values are:
+# keystone and noauth.
+IRONIC_AUTH_STRATEGY=${IRONIC_AUTH_STRATEGY:-keystone}
+
 # get_pxe_boot_file() - Get the PXE/iPXE boot file path
 function get_pxe_boot_file {
     local relpath=syslinux/pxelinux.0
@@ -334,7 +338,7 @@ function configure_ironic {
 # configure_ironic_api() - Is used by configure_ironic(). Performs
 # API specific configuration.
 function configure_ironic_api {
-    iniset $IRONIC_CONF_FILE DEFAULT auth_strategy keystone
+    iniset $IRONIC_CONF_FILE DEFAULT auth_strategy $IRONIC_AUTH_STRATEGY
     iniset $IRONIC_CONF_FILE oslo_policy policy_file $IRONIC_POLICY_JSON
 
     # TODO(Yuki Nishiwaki): This is a temporary work-around until Ironic is fixed(bug#1422632).
@@ -472,11 +476,13 @@ function create_ironic_accounts {
 
 # init_ironic() - Initialize databases, etc.
 function init_ironic {
-    # Save private network as cleaning network
-    local cleaning_network_uuid
-    cleaning_network_uuid=$(neutron net-list | grep private | get_field 1)
-    die_if_not_set $LINENO cleaning_network_uuid "Failed to get ironic cleaning network id"
-    iniset $IRONIC_CONF_FILE neutron cleaning_network_uuid ${cleaning_network_uuid}
+    if is_service_enabled neutron; then
+        # Save private network as cleaning network
+        local cleaning_network_uuid
+        cleaning_network_uuid=$(neutron net-list | grep private | get_field 1)
+        die_if_not_set $LINENO cleaning_network_uuid "Failed to get ironic cleaning network id"
+        iniset $IRONIC_CONF_FILE neutron cleaning_network_uuid ${cleaning_network_uuid}
+    fi
 
     # (Re)create  ironic database
     recreate_database ironic
@@ -595,6 +601,7 @@ function setup_qemu_log_hook {
 
     # Copy the qemu hook to the right directory
     sudo cp $IRONIC_DEVSTACK_FILES_DIR/hooks/qemu $IRONIC_LIBVIRT_HOOKS_PATH/qemu
+    sudo chmod -v +x $IRONIC_LIBVIRT_HOOKS_PATH/qemu
     sudo sed -e "
         s|%LOG_DIR%|$IRONIC_VM_LOG_DIR|g;
     " -i $IRONIC_LIBVIRT_HOOKS_PATH/qemu
@@ -663,6 +670,7 @@ function _clean_ncpu_failure {
 function enroll_nodes {
     local chassis_id
     chassis_id=$(ironic chassis-create -d "ironic test chassis" | grep " uuid " | get_field 2)
+    die_if_not_set $LINENO chassis_id "Failed to create chassis"
 
     if [[ "$IRONIC_IS_HARDWARE" == "False" ]]; then
         local ironic_node_cpu=$IRONIC_VM_SPECS_CPU

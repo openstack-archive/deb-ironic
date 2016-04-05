@@ -96,6 +96,7 @@ raised in the background thread.):
 
 import futurist
 from oslo_config import cfg
+from oslo_context import context as oslo_context
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import timeutils
@@ -134,6 +135,9 @@ def require_exclusive_lock(f):
             task = args[0]
         if task.shared:
             raise exception.ExclusiveLockRequired()
+        # NOTE(lintan): This is a workaround to set the context of async tasks,
+        # which should contain an exclusive lock.
+        ensure_thread_contain_context(task.context)
         return f(*args, **kwargs)
     return wrapper
 
@@ -151,8 +155,24 @@ def acquire(context, node_id, shared=False, driver_name=None,
     :returns: An instance of :class:`TaskManager`.
 
     """
+    # NOTE(lintan): This is a workaround to set the context of periodic tasks.
+    ensure_thread_contain_context(context)
     return TaskManager(context, node_id, shared=shared,
                        driver_name=driver_name, purpose=purpose)
+
+
+def ensure_thread_contain_context(context):
+    """Ensure threading contains context
+
+    For async/periodic tasks, the context of local thread is missing.
+    Set it with request context and this is useful to log the request_id
+    in log messages.
+
+    :param context: Request context
+    """
+    if oslo_context.get_current():
+        return
+    context.update_store()
 
 
 class TaskManager(object):
@@ -382,7 +402,14 @@ class TaskManager(object):
                                       self.node.target_provision_state)
 
         self.node.provision_state = self.fsm.current_state
-        self.node.target_provision_state = self.fsm.target_state
+
+        # NOTE(lucasagomes): If there's no extra processing
+        # (callback) and we've moved to a stable state, make sure the
+        # target_provision_state is cleared
+        if not callback and self.fsm.is_stable(self.node.provision_state):
+            self.node.target_provision_state = states.NOSTATE
+        else:
+            self.node.target_provision_state = self.fsm.target_state
 
         # set up the async worker
         if callback:

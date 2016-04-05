@@ -22,6 +22,7 @@ import time
 from oslo_config import cfg
 from oslo_log import log
 from oslo_utils import excutils
+from oslo_utils import strutils
 from oslo_utils import timeutils
 import retrying
 
@@ -81,6 +82,13 @@ LOG = log.getLogger(__name__)
 # raid interface. '<post-delete function>' is to be called after
 # completing 'delete_configuration' of raid interface.
 POST_CLEAN_STEP_HOOKS = {}
+
+VENDOR_PROPERTIES = {
+    'deploy_forces_oob_reboot': _(
+        'Whether Ironic should force a reboot of the Node via the out-of-band '
+        'channel after deployment is complete. Provides compatiblity with '
+        'older deploy ramdisks. Defaults to False. Optional.')
+}
 
 
 def _get_client():
@@ -178,9 +186,7 @@ class BaseAgentVendor(base.VendorInterface):
 
         :returns: dictionary of <property name>:<property description> entries.
         """
-        # NOTE(jroll) all properties are set by the driver,
-        #             not by the operator.
-        return {}
+        return VENDOR_PROPERTIES
 
     def validate(self, task, method, **kwargs):
         """Validate the driver-specific Node deployment info.
@@ -688,18 +694,38 @@ class BaseAgentVendor(base.VendorInterface):
             return task.driver.power.get_power_state(task)
 
         node = task.node
+        # Whether ironic should power off the node via out-of-band or
+        # in-band methods
+        oob_power_off = strutils.bool_from_string(
+            node.driver_info.get('deploy_forces_oob_reboot', False))
 
         try:
-            try:
-                self._client.power_off(node)
-                _wait_until_powered_off(task)
-            except Exception as e:
-                LOG.warning(
-                    _LW('Failed to soft power off node %(node_uuid)s '
-                        'in at least %(timeout)d seconds. Error: %(error)s'),
-                    {'node_uuid': node.uuid,
-                     'timeout': (wait * (attempts - 1)) / 1000,
-                     'error': e})
+            if not oob_power_off:
+                try:
+                    self._client.power_off(node)
+                    _wait_until_powered_off(task)
+                except Exception as e:
+                    LOG.warning(
+                        _LW('Failed to soft power off node %(node_uuid)s '
+                            'in at least %(timeout)d seconds. '
+                            'Error: %(error)s'),
+                        {'node_uuid': node.uuid,
+                         'timeout': (wait * (attempts - 1)) / 1000,
+                         'error': e})
+            else:
+                # Flush the file system prior to hard rebooting the node
+                result = self._client.sync(node)
+                error = result.get('faultstring')
+                if error:
+                    if 'Unknown command' in error:
+                        error = _('The version of the IPA ramdisk used in '
+                                  'the deployment do not support the '
+                                  'command "sync"')
+                    LOG.warning(_LW(
+                        'Failed to flush the file system prior to hard '
+                        'rebooting the node %(node)s. Error: %(error)s'),
+                        {'node': node.uuid, 'error': error})
+
             manager_utils.node_power_action(task, states.REBOOT)
         except Exception as e:
             msg = (_('Error rebooting node %(node)s after deploy. '
@@ -709,6 +735,30 @@ class BaseAgentVendor(base.VendorInterface):
 
         task.process_event('done')
         LOG.info(_LI('Deployment to node %s done'), task.node.uuid)
+
+    def prepare_instance_to_boot(self, task, root_uuid, efi_sys_uuid):
+        """Prepares instance to boot.
+
+        :param task: a TaskManager object containing the node
+        :param root_uuid: the UUID for root partition
+        :param efi_sys_uuid: the UUID for the efi partition
+        :raises: InvalidState if fails to prepare instance
+        """
+
+        node = task.node
+        if deploy_utils.get_boot_option(node) == "local":
+            # Install the boot loader
+            self.configure_local_boot(
+                task, root_uuid=root_uuid,
+                efi_system_part_uuid=efi_sys_uuid)
+        try:
+            task.driver.boot.prepare_instance(task)
+        except Exception as e:
+            LOG.error(_LE('Deploy failed for instance %(instance)s. '
+                          'Error: %(error)s'),
+                      {'instance': node.instance_uuid, 'error': e})
+            msg = _('Failed to continue agent deployment.')
+            self._log_and_raise_deployment_error(task, msg)
 
     def configure_local_boot(self, task, root_uuid=None,
                              efi_system_part_uuid=None):

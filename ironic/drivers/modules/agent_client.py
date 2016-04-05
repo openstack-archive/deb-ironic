@@ -67,9 +67,15 @@ class AgentClient(object):
         }
         LOG.debug('Executing agent command %(method)s for node %(node)s',
                   {'node': node.uuid, 'method': method})
-        response = self.session.post(url,
-                                     params=request_params,
-                                     data=body)
+
+        try:
+            response = self.session.post(url, params=request_params, data=body)
+        except requests.RequestException as e:
+            msg = (_('Error invoking agent command %(method)s for node '
+                     '%(node)s. Error: %(error)s') %
+                   {'method': method, 'node': node.uuid, 'error': e})
+            LOG.error(msg)
+            raise exception.IronicException(msg)
 
         # TODO(russellhaering): real error handling
         try:
@@ -161,11 +167,17 @@ class AgentClient(object):
         }
         return self._command(node=node,
                              method='clean.execute_clean_step',
-                             params=params,
-                             wait=False)
+                             params=params)
 
     def power_off(self, node):
         """Soft powers off the bare metal node by shutting down ramdisk OS."""
         return self._command(node=node,
                              method='standby.power_off',
                              params={})
+
+    def sync(self, node):
+        """Flush file system buffers forcing changed blocks to disk."""
+        return self._command(node=node,
+                             method='standby.sync',
+                             params={},
+                             wait=True)

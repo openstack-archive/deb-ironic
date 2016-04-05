@@ -118,6 +118,23 @@ class TestAgentClient(base.TestCase):
             data=body,
             params={'wait': 'false'})
 
+    def test__command_fail_post(self):
+        error = 'Boom'
+        self.client.session.post.side_effect = requests.RequestException(error)
+        method = 'foo.bar'
+        params = {}
+
+        self.client._get_command_url(self.node)
+        self.client._get_command_body(method, params)
+
+        e = self.assertRaises(exception.IronicException,
+                              self.client._command,
+                              self.node, method, params)
+        self.assertEqual('Error invoking agent command %(method)s for node '
+                         '%(node)s. Error: %(error)s' %
+                         {'method': method, 'node': self.node.uuid,
+                          'error': error}, str(e))
+
     def test_get_commands_status(self):
         with mock.patch.object(self.client.session, 'get',
                                autospec=True) as mock_get:
@@ -212,10 +229,16 @@ class TestAgentClient(base.TestCase):
                                        ports)
         self.client._command.assert_called_once_with(
             node=self.node, method='clean.execute_clean_step',
-            params=expected_params, wait=False)
+            params=expected_params)
 
     def test_power_off(self):
         self.client._command = mock.MagicMock(spec_set=[])
         self.client.power_off(self.node)
         self.client._command.assert_called_once_with(
             node=self.node, method='standby.power_off', params={})
+
+    def test_sync(self):
+        self.client._command = mock.MagicMock(spec_set=[])
+        self.client.sync(self.node)
+        self.client._command.assert_called_once_with(
+            node=self.node, method='standby.sync', params={}, wait=True)
