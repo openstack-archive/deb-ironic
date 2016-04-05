@@ -1,3 +1,2 @@
 adds-alembic.ini-in-MANIFEST.in.patch
 allow-any-pytz-version.patch
-Fix_sphinx_docs_build.patch
