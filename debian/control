@@ -82,7 +82,7 @@ Build-Depends-Indep: alembic (>= 0.8.0),
                      subunit,
                      testrepository,
                      websockify (>= 0.6.1),
-Standards-Version: 3.9.7
+Standards-Version: 3.9.8
 Vcs-Browser: https://anonscm.debian.org/cgit/openstack/ironic.git/
 Vcs-Git: https://anonscm.debian.org/git/openstack/ironic.git
 Homepage: https://github.com/openstack/ironic
