@@ -1,3 +1,3 @@
 version=3
 opts="uversionmangle=s/\.(b|rc)/~$1/" \
-https://github.com/openstack/ironic/tags .*/v(\d[\d\.]+)\.tar\.gz
+https://github.com/openstack/ironic/tags .*/(\d\d?\.[\d\.]+)\.tar\.gz

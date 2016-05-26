@@ -3,6 +3,7 @@ ironic (1:5.1.0-2) UNRELEASED; urgency=medium
   * Standards-Version is 3.9.8 now (no change)
   * Allow sudo for ironic-rootwrap
     (Thanks to Jan Sára for providing fix)
+  * Fixed d/watch to ignore old year-based versioning schema
 
  -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:23:03 +0200
 
