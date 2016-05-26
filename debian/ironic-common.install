@@ -1,3 +1,4 @@
+debian/ironic_sudoers etc/sudoers.d
 etc/ironic/policy.json
 etc/ironic/rootwrap.conf
 etc/ironic/rootwrap.d/*

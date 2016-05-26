@@ -1,6 +1,8 @@
 ironic (1:5.1.0-2) UNRELEASED; urgency=medium
 
   * Standards-Version is 3.9.8 now (no change)
+  * Allow to run ironic-rootwrap with sudo
+    (Thanks to Jan Sára for providing fix)
 
  -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:23:03 +0200
 
