@@ -1,8 +1,9 @@
-ironic (1:5.1.1-1) UNRELEASED; urgency=medium
+ironic (1:5.1.1-1) unstable; urgency=medium
 
+  * Team upload.
   * New upstream release
 
- -- Ondřej Nový <onovy@debian.org>  Tue, 21 Jun 2016 00:29:39 +0200
+ -- Ondřej Nový <onovy@debian.org>  Tue, 21 Jun 2016 00:37:13 +0200
 
 ironic (1:5.1.0-2) unstable; urgency=medium
 
