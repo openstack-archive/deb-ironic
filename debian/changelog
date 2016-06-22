@@ -1,3 +1,12 @@
+ironic (1:5.1.2-1) unstable; urgency=medium
+
+  * New upstream release:
+    - addresses CVE-2016-4985: Node information including credentials exposed
+      to unathenticated users. Includes upstream patch: Mask password on agent
+      lookup according to policy (Closes: #827886).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 22 Jun 2016 10:05:13 +0200
+
 ironic (1:5.1.1-1) unstable; urgency=medium
 
   * Team upload.
