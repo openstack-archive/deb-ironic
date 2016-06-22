@@ -1,4 +1,4 @@
-ironic (1:5.1.2-1) unstable; urgency=medium
+ironic (1:5.1.2-1) unstable; urgency=high
 
   * New upstream release:
     - addresses CVE-2016-4985: Node information including credentials exposed
