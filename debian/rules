@@ -24,9 +24,12 @@ override_dh_auto_build:
 override_dh_auto_install:
 	dh_auto_install -O--buildsystem=python_distutils
 	# TODO: replace this by generated conf file (see tox.ini)
-	install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
+	mkdir -p $(CURDIR)/debian/ironic-common/usr/share/ironic-common
+	bash tools/config/generate_sample.sh -b . -p ironic -o $(CURDIR)/debian/ironic-common/usr/share/ironic-common
+	mv  $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
+	#install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
 	sed -i 's|#connection=<None>|connection=sqlite:////var/lib/ironic/ironicdb|' $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
-	set -e && for pyvers in $(PYTHONS); do \
+	set -e ; for pyvers in $(PYTHONS); do \
 		cp -rf ironic/db/sqlalchemy/alembic $(CURDIR)/debian/tmp/usr/lib/python$$pyvers/dist-packages/ironic/db/sqlalchemy ; \
 	done
 

@@ -1,3 +1,10 @@
+ironic (1:5.1.2-2) unstable; urgency=medium
+
+  * Using upstream config generator shell script to generate ironic.conf,
+    instead of using (broken) sample file. (Closes: #828897)
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 29 Jun 2016 20:28:00 +0000
+
 ironic (1:5.1.2-1) unstable; urgency=high
 
   * New upstream release:
