@@ -47,7 +47,6 @@ import tempfile
 
 import eventlet
 from futurist import periodics
-from oslo_config import cfg
 from oslo_log import log
 import oslo_messaging as messaging
 from oslo_utils import excutils
@@ -67,6 +66,7 @@ from ironic.common import swift
 from ironic.conductor import base_manager
 from ironic.conductor import task_manager
 from ironic.conductor import utils
+from ironic.conf import CONF
 from ironic import objects
 from ironic.objects import base as objects_base
 
@@ -74,114 +74,6 @@ MANAGER_TOPIC = 'ironic.conductor_manager'
 
 LOG = log.getLogger(__name__)
 
-conductor_opts = [
-    cfg.StrOpt('api_url',
-               help=_('URL of Ironic API service. If not set ironic can '
-                      'get the current value from the keystone service '
-                      'catalog.')),
-    cfg.IntOpt('heartbeat_timeout',
-               default=60,
-               help=_('Maximum time (in seconds) since the last check-in '
-                      'of a conductor. A conductor is considered inactive '
-                      'when this time has been exceeded.')),
-    cfg.IntOpt('sync_power_state_interval',
-               default=60,
-               help=_('Interval between syncing the node power state to the '
-                      'database, in seconds.')),
-    cfg.IntOpt('check_provision_state_interval',
-               default=60,
-               help=_('Interval between checks of provision timeouts, '
-                      'in seconds.')),
-    cfg.IntOpt('deploy_callback_timeout',
-               default=1800,
-               help=_('Timeout (seconds) to wait for a callback from '
-                      'a deploy ramdisk. Set to 0 to disable timeout.')),
-    cfg.BoolOpt('force_power_state_during_sync',
-                default=True,
-                help=_('During sync_power_state, should the hardware power '
-                       'state be set to the state recorded in the database '
-                       '(True) or should the database be updated based on '
-                       'the hardware state (False).')),
-    cfg.IntOpt('power_state_sync_max_retries',
-               default=3,
-               help=_('During sync_power_state failures, limit the '
-                      'number of times Ironic should try syncing the '
-                      'hardware node power state with the node power state '
-                      'in DB')),
-    cfg.IntOpt('periodic_max_workers',
-               default=8,
-               help=_('Maximum number of worker threads that can be started '
-                      'simultaneously by a periodic task. Should be less '
-                      'than RPC thread pool size.')),
-    cfg.IntOpt('node_locked_retry_attempts',
-               default=3,
-               help=_('Number of attempts to grab a node lock.')),
-    cfg.IntOpt('node_locked_retry_interval',
-               default=1,
-               help=_('Seconds to sleep between node lock attempts.')),
-    cfg.BoolOpt('send_sensor_data',
-                default=False,
-                help=_('Enable sending sensor data message via the '
-                       'notification bus')),
-    cfg.IntOpt('send_sensor_data_interval',
-               default=600,
-               help=_('Seconds between conductor sending sensor data message'
-                      ' to ceilometer via the notification bus.')),
-    cfg.ListOpt('send_sensor_data_types',
-                default=['ALL'],
-                help=_('List of comma separated meter types which need to be'
-                       ' sent to Ceilometer. The default value, "ALL", is a '
-                       'special value meaning send all the sensor data.')),
-    cfg.IntOpt('sync_local_state_interval',
-               default=180,
-               help=_('When conductors join or leave the cluster, existing '
-                      'conductors may need to update any persistent '
-                      'local state as nodes are moved around the cluster. '
-                      'This option controls how often, in seconds, each '
-                      'conductor will check for nodes that it should '
-                      '"take over". Set it to a negative value to disable '
-                      'the check entirely.')),
-    cfg.BoolOpt('configdrive_use_swift',
-                default=False,
-                help=_('Whether to upload the config drive to Swift.')),
-    cfg.StrOpt('configdrive_swift_container',
-               default='ironic_configdrive_container',
-               help=_('Name of the Swift container to store config drive '
-                      'data. Used when configdrive_use_swift is True.')),
-    cfg.IntOpt('inspect_timeout',
-               default=1800,
-               help=_('Timeout (seconds) for waiting for node inspection. '
-                      '0 - unlimited.')),
-    # TODO(rloo): Remove support for deprecated name 'clean_nodes' in Newton
-    #             cycle.
-    cfg.BoolOpt('automated_clean',
-                default=True,
-                deprecated_name='clean_nodes',
-                help=_('Enables or disables automated cleaning. Automated '
-                       'cleaning is a configurable set of steps, '
-                       'such as erasing disk drives, that are performed on '
-                       'the node to ensure it is in a baseline state and '
-                       'ready to be deployed to. This is '
-                       'done after instance deletion as well as during '
-                       'the transition from a "manageable" to "available" '
-                       'state. When enabled, the particular steps '
-                       'performed to clean a node depend on which driver '
-                       'that node is managed by; see the individual '
-                       'driver\'s documentation for details. '
-                       'NOTE: The introduction of the cleaning operation '
-                       'causes instance deletion to take significantly '
-                       'longer. In an environment where all tenants are '
-                       'trusted (eg, because there is only one tenant), '
-                       'this option could be safely disabled.')),
-    cfg.IntOpt('clean_callback_timeout',
-               default=1800,
-               help=_('Timeout (seconds) to wait for a callback from the '
-                      'ramdisk doing the cleaning. If the timeout is reached '
-                      'the node will be put in the "clean failed" provision '
-                      'state. Set to 0 to disable timeout.')),
-]
-CONF = cfg.CONF
-CONF.register_opts(conductor_opts, 'conductor')
 SYNC_EXCLUDED_STATES = (states.DEPLOYWAIT, states.CLEANWAIT, states.ENROLL)
 
 
@@ -279,10 +171,9 @@ class ConductorManager(base_manager.BaseConductorManager):
                         http_method, info):
         """RPC method to encapsulate vendor action.
 
-        Synchronously validate driver specific info or get driver status,
-        and if successful invokes the vendor method. If the method mode
-        is 'async' the conductor will start background worker to perform
-        vendor action.
+        Synchronously validate driver specific info, and if successful invoke
+        the vendor method. If the method mode is 'async' the conductor will
+        start background worker to perform vendor action.
 
         :param context: an admin context.
         :param node_id: the id or uuid of a node.
@@ -295,7 +186,8 @@ class ConductorManager(base_manager.BaseConductorManager):
                  vendor interface or method is unsupported.
         :raises: NoFreeConductorWorker when there is no free worker to start
                  async task.
-        :raises: NodeLocked if node is locked by another conductor.
+        :raises: NodeLocked if the vendor passthru method requires an exclusive
+                 lock but the node is locked by another conductor
         :returns: A dictionary containing:
 
             :return: The response of the invoked vendor method
@@ -308,11 +200,11 @@ class ConductorManager(base_manager.BaseConductorManager):
 
         """
         LOG.debug("RPC vendor_passthru called for node %s." % node_id)
-        # NOTE(max_lobur): Even though not all vendor_passthru calls may
-        # require an exclusive lock, we need to do so to guarantee that the
-        # state doesn't unexpectedly change between doing a vendor.validate
-        # and vendor.vendor_passthru.
-        with task_manager.acquire(context, node_id, shared=False,
+        # NOTE(mariojv): Not all vendor passthru methods require an exclusive
+        # lock on a node, so we acquire a shared lock initially. If a method
+        # requires an exclusive lock, we'll acquire one after checking
+        # vendor_opts before starting validation.
+        with task_manager.acquire(context, node_id, shared=True,
                                   purpose='calling vendor passthru') as task:
             if not getattr(task.driver, 'vendor', None):
                 raise exception.UnsupportedDriverExtension(
@@ -333,6 +225,11 @@ class ConductorManager(base_manager.BaseConductorManager):
                 raise exception.InvalidParameterValue(
                     _('The method %(method)s does not support HTTP %(http)s') %
                     {'method': driver_method, 'http': http_method})
+
+            # Change shared lock to exclusive if a vendor method requires
+            # it. Vendor methods default to requiring an exclusive lock.
+            if vendor_opts['require_exclusive_lock']:
+                task.upgrade_lock()
 
             vendor_iface.validate(task, method=driver_method,
                                   http_method=http_method, **info)
@@ -612,6 +509,7 @@ class ConductorManager(base_manager.BaseConductorManager):
                     action='delete', node=task.node.uuid,
                     state=task.node.provision_state)
 
+    @task_manager.require_exclusive_lock
     def _do_node_tear_down(self, task):
         """Internal RPC method to tear down an existing node deployment."""
         node = task.node
@@ -687,26 +585,7 @@ class ConductorManager(base_manager.BaseConductorManager):
             # index of the first step in the list.
             return 0
 
-        ind = None
-        if 'clean_step_index' in node.driver_internal_info:
-            ind = node.driver_internal_info['clean_step_index']
-        else:
-            # TODO(rloo). driver_internal_info['clean_step_index'] was
-            # added in Mitaka. We need to maintain backwards compatibility
-            # so this uses the original code to get the index of the current
-            # step. This will be deleted in the Newton cycle.
-            try:
-                next_steps = node.driver_internal_info['clean_steps']
-                ind = next_steps.index(node.clean_step)
-            except (KeyError, ValueError):
-                msg = (_('Node %(node)s got an invalid last step for '
-                         '%(state)s: %(step)s.') %
-                       {'node': node.uuid, 'step': node.clean_step,
-                        'state': node.provision_state})
-                LOG.exception(msg)
-                utils.cleaning_error_handler(task, msg)
-                raise exception.NodeCleaningFailure(node=node.uuid,
-                                                    reason=msg)
+        ind = node.driver_internal_info.get('clean_step_index')
         if ind is None:
             return None
 
@@ -810,12 +689,7 @@ class ConductorManager(base_manager.BaseConductorManager):
             else:
                 target_state = None
 
-            # TODO(lucasagomes): CLEANING here for backwards compat
-            # with previous code, otherwise nodes in CLEANING when this
-            # is deployed would fail. Should be removed once the Mitaka
-            # release starts.
-            if node.provision_state not in (states.CLEANWAIT,
-                                            states.CLEANING):
+            if node.provision_state != states.CLEANWAIT:
                 raise exception.InvalidStateRequested(_(
                     'Cannot continue cleaning on %(node)s, node is in '
                     '%(state)s state, should be %(clean_state)s') %
@@ -861,11 +735,7 @@ class ConductorManager(base_manager.BaseConductorManager):
                           'to be done.', {'node': node.uuid,
                                           'step': step_name})
 
-            # TODO(lucasagomes): This conditional is here for backwards
-            # compat with previous code. Should be removed once the Mitaka
-            # release starts.
-            if node.provision_state == states.CLEANWAIT:
-                task.process_event('resume', target_state=target_state)
+            task.process_event('resume', target_state=target_state)
 
             task.set_spawn_error_hook(utils.spawn_cleaning_error_handler,
                                       task.node)
@@ -874,6 +744,7 @@ class ConductorManager(base_manager.BaseConductorManager):
                 self._do_next_clean_step,
                 task, next_step_index)
 
+    @task_manager.require_exclusive_lock
     def _do_node_clean(self, task, clean_steps=None):
         """Internal RPC method to perform cleaning of a node.
 
@@ -926,13 +797,6 @@ class ConductorManager(base_manager.BaseConductorManager):
             LOG.exception(msg)
             return utils.cleaning_error_handler(task, msg)
 
-        # TODO(lucasagomes): Should be removed once the Mitaka release starts
-        if prepare_result == states.CLEANING:
-            LOG.warning(_LW('Returning CLEANING for asynchronous prepare '
-                            'cleaning has been deprecated. Please use '
-                            'CLEANWAIT instead.'))
-            prepare_result = states.CLEANWAIT
-
         if prepare_result == states.CLEANWAIT:
             # Prepare is asynchronous, the deploy driver will need to
             # set node.driver_internal_info['clean_steps'] and
@@ -957,6 +821,7 @@ class ConductorManager(base_manager.BaseConductorManager):
         step_index = 0 if steps else None
         self._do_next_clean_step(task, step_index)
 
+    @task_manager.require_exclusive_lock
     def _do_next_clean_step(self, task, step_index):
         """Do cleaning, starting from the specified clean step.
 
@@ -1003,14 +868,6 @@ class ConductorManager(base_manager.BaseConductorManager):
                 utils.cleaning_error_handler(task, msg)
                 return
 
-            # TODO(lucasagomes): Should be removed once the Mitaka
-            # release starts
-            if result == states.CLEANING:
-                LOG.warning(_LW('Returning CLEANING for asynchronous clean '
-                                'steps has been deprecated. Please use '
-                                'CLEANWAIT instead.'))
-                result = states.CLEANWAIT
-
             # Check if the step is done or not. The step should return
             # states.CLEANWAIT if the step is still being executed, or
             # None if the step is done.
@@ -1041,8 +898,9 @@ class ConductorManager(base_manager.BaseConductorManager):
         try:
             task.driver.deploy.tear_down_cleaning(task)
         except Exception as e:
-            msg = (_('Failed to tear down from cleaning for node %s')
-                   % node.uuid)
+            msg = (_('Failed to tear down from cleaning for node %(node)s, '
+                     'reason: %(err)s')
+                   % {'node': node.uuid, 'err': e})
             LOG.exception(msg)
             return utils.cleaning_error_handler(task, msg,
                                                 tear_down_cleaning=False)
@@ -1052,6 +910,7 @@ class ConductorManager(base_manager.BaseConductorManager):
         # NOTE(rloo): No need to specify target prov. state; we're done
         task.process_event(event)
 
+    @task_manager.require_exclusive_lock
     def _do_node_verify(self, task):
         """Internal method to perform power credentials verification."""
         node = task.node
@@ -1083,6 +942,7 @@ class ConductorManager(base_manager.BaseConductorManager):
             node.target_provision_state = None
             node.save()
 
+    @task_manager.require_exclusive_lock
     def _do_node_clean_abort(self, task, step_name=None):
         """Internal method to abort an ongoing operation.
 
@@ -1153,6 +1013,16 @@ class ConductorManager(base_manager.BaseConductorManager):
                     'manage',
                     callback=self._spawn_worker,
                     call_args=(self._do_node_verify, task),
+                    err_handler=utils.provisioning_error_handler)
+                return
+
+            if (action == states.VERBS['adopt'] and
+                    node.provision_state in (states.MANAGEABLE,
+                states.ADOPTFAIL)):
+                task.process_event(
+                    'adopt',
+                    callback=self._spawn_worker,
+                    call_args=(self._do_adoption, task),
                     err_handler=utils.provisioning_error_handler)
                 return
 
@@ -1342,6 +1212,54 @@ class ConductorManager(base_manager.BaseConductorManager):
                 callback_method=utils.cleanup_after_timeout,
                 err_handler=utils.provisioning_error_handler)
 
+    @task_manager.require_exclusive_lock
+    def _do_adoption(self, task):
+        """Adopt the node.
+
+        Similar to node takeover, adoption performs a driver boot
+        validation and then triggers node takeover in order to make the
+        conductor responsible for the node. Upon completion of takeover,
+        the node is moved to ACTIVE state.
+
+        The goal of this method is to set the conditions for the node to
+        be managed by Ironic as an ACTIVE node without having performed
+        a deployment operation.
+
+        :param task: a TaskManager instance
+        """
+
+        node = task.node
+        LOG.debug('Conductor %(cdr)s attempting to adopt node %(node)s',
+                  {'cdr': self.host, 'node': node.uuid})
+
+        try:
+            # NOTE(TheJulia): A number of drivers expect to know if a
+            # whole disk image was used prior to their takeover logic
+            # being triggered, as such we need to populate the
+            # internal info based on the configuration the user has
+            # supplied.
+            iwdi = images.is_whole_disk_image(task.context,
+                                              task.node.instance_info)
+            node.driver_internal_info['is_whole_disk_image'] = iwdi
+            # Calling boot validate to ensure that sufficient information
+            # is supplied to allow the node to be able to boot if takeover
+            # writes items such as kernel/ramdisk data to disk.
+            task.driver.boot.validate(task)
+            # NOTE(TheJulia): While task.driver.boot.validate() is called
+            # above, and task.driver.power.validate() could be called, it
+            # is called as part of the transition from ENROLL to MANAGEABLE
+            # states. As such it is redundant to call here.
+            self._do_takeover(task)
+            LOG.info(_LI("Successfully adopted node %(node)s"),
+                     {'node': node.uuid})
+            task.process_event('done')
+        except Exception as err:
+            msg = (_('Error while attempting to adopt node %(node)s: '
+                     '%(err)s.') % {'node': node.uuid, 'err': err})
+            LOG.error(msg)
+            node.last_error = msg
+            task.process_event('fail')
+
     def _do_takeover(self, task):
         """Take over this node.
 
@@ -1391,13 +1309,10 @@ class ConductorManager(base_manager.BaseConductorManager):
                    'provision_state': states.CLEANWAIT,
                    'maintenance': False,
                    'provisioned_before': callback_timeout}
-        last_error = _("Timeout reached while cleaning the node. Please "
-                       "check if the ramdisk responsible for the cleaning is "
-                       "running on the node.")
         self._fail_if_in_state(context, filters, states.CLEANWAIT,
                                'provision_updated_at',
-                               last_error=last_error,
-                               keep_target_state=True)
+                               keep_target_state=True,
+                               callback_method=utils.cleanup_cleanwait_timeout)
 
     @periodics.periodic(spacing=CONF.conductor.sync_local_state_interval)
     def _sync_local_state(self, context):
@@ -1659,13 +1574,13 @@ class ConductorManager(base_manager.BaseConductorManager):
                 op = _('enabled') if enabled else _('disabled')
                 LOG.info(_LI("No console action was triggered because the "
                              "console is already %s"), op)
-                task.release_resources()
             else:
                 node.last_error = None
                 node.save()
                 task.spawn_after(self._spawn_worker,
                                  self._set_console_mode, task, enabled)
 
+    @task_manager.require_exclusive_lock
     def _set_console_mode(self, task, enabled):
         """Internal method to set console mode on a node."""
         node = task.node
@@ -1762,7 +1677,9 @@ class ConductorManager(base_manager.BaseConductorManager):
 
     @messaging.expected_exceptions(exception.NodeLocked,
                                    exception.FailedToUpdateMacOnPort,
-                                   exception.PortgroupMACAlreadyExists)
+                                   exception.PortgroupMACAlreadyExists,
+                                   exception.PortgroupNotEmpty,
+                                   exception.InvalidState)
     def update_portgroup(self, context, portgroup_obj):
         """Update a portgroup.
 
@@ -1773,6 +1690,11 @@ class ConductorManager(base_manager.BaseConductorManager):
                  failed.
         :raises: PortgroupMACAlreadyExists if the update is setting a MAC which
                  is registered on another portgroup already.
+        :raises: InvalidState if portgroup-node association is updated while
+                 node not in a MANAGEABLE or ENROLL or INSPECTING state or not
+                 in MAINTENANCE mode.
+        :raises: PortgroupNotEmpty if there are ports associated with this
+                 portgroup.
         """
         portgroup_uuid = portgroup_obj.uuid
         LOG.debug("RPC update_portgroup called for portgroup %s.",
@@ -1782,15 +1704,49 @@ class ConductorManager(base_manager.BaseConductorManager):
                                   portgroup_obj.node_id,
                                   purpose=lock_purpose) as task:
             node = task.node
+
+            if 'node_id' in portgroup_obj.obj_what_changed():
+                # NOTE(zhenguo): If portgroup update is modifying the
+                # portgroup-node association then node should be in
+                # MANAGEABLE/INSPECTING/ENROLL provisioning state or in
+                # maintenance mode, otherwise InvalidState is raised.
+                allowed_update_states = [states.ENROLL,
+                                         states.INSPECTING,
+                                         states.MANAGEABLE]
+                if (node.provision_state not in allowed_update_states
+                    and not node.maintenance):
+                    action = _("Portgroup %(portgroup)s can not be associated "
+                               "to node %(node)s unless the node is in a "
+                               "%(allowed)s state or in maintenance mode.")
+
+                    raise exception.InvalidState(
+                        action % {'portgroup': portgroup_uuid,
+                                  'node': node.uuid,
+                                  'allowed': ', '.join(allowed_update_states)})
+
+                # NOTE(zhenguo): If portgroup update is modifying the
+                # portgroup-node association then there should not be
+                # any Port associated to the PortGroup, otherwise
+                # PortgroupNotEmpty exception is raised.
+                associated_ports = self.dbapi.get_ports_by_portgroup_id(
+                    portgroup_uuid)
+                if associated_ports:
+                    action = _("Portgroup %(portgroup)s can not be associated "
+                               "with node %(node)s because there are ports "
+                               "associated with this portgroup.")
+                    raise exception.PortgroupNotEmpty(
+                        action % {'portgroup': portgroup_uuid,
+                                  'node': node.uuid})
+
             if 'address' in portgroup_obj.obj_what_changed():
-                vif = portgroup_obj.extra.get('vif_portgroup_id')
+                vif = portgroup_obj.extra.get('vif_port_id')
                 if vif:
                     api = dhcp_factory.DHCPFactory()
                     api.provider.update_port_address(
                         vif,
                         portgroup_obj.address,
                         token=context.auth_token)
-                # Log warning if there is no vif_portgroup_id and an instance
+                # Log warning if there is no vif_port_id and an instance
                 # is associated with the node.
                 elif node.instance_uuid:
                     LOG.warning(_LW(
@@ -2290,6 +2246,7 @@ def _store_configdrive(node, configdrive):
     node.instance_info = i_info
 
 
+@task_manager.require_exclusive_lock
 def do_node_deploy(task, conductor_id, configdrive=None):
     """Prepare the environment and deploy a node."""
     node = task.node
@@ -2499,6 +2456,7 @@ def do_sync_power_state(task, count):
     return count
 
 
+@task_manager.require_exclusive_lock
 def _do_inspect_hardware(task):
     """Initiates inspection.
 

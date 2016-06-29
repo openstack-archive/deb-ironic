@@ -31,11 +31,11 @@ eventlet.monkey_patch(os=False)
 import fixtures
 from oslo_config import cfg
 from oslo_config import fixture as config_fixture
-from oslo_context import context as ironic_context
 from oslo_log import log as logging
 import testtools
 
 from ironic.common import config as ironic_config
+from ironic.common import context as ironic_context
 from ironic.common import hash_ring
 from ironic.objects import base as objects_base
 from ironic.tests.unit import policy_fixture
@@ -116,7 +116,7 @@ class TestCase(testtools.TestCase):
                     fatal_exception_format_errors=True,
                     tempdir=tempfile.tempdir)
         self.set_defaults(host='fake-mini',
-                          verbose=True)
+                          debug=True)
         self.set_defaults(connection="sqlite://",
                           sqlite_synchronous=False,
                           group='database')

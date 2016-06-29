@@ -1,0 +1,22 @@
+{
+   "nodes" : [
+      {
+         "provision_state" : "available",
+         "name" : "test_node",
+         "maintenance" : false,
+         "uuid" : "ecddf26d-8c9c-4ddf-8f45-fd57e09ccddb",
+         "links" : [
+            {
+               "href" : "http://127.0.0.1:6385/v1/nodes/ecddf26d-8c9c-4ddf-8f45-fd57e09ccddb",
+               "rel" : "self"
+            },
+            {
+               "href" : "http://127.0.0.1:6385/nodes/ecddf26d-8c9c-4ddf-8f45-fd57e09ccddb",
+               "rel" : "bookmark"
+            }
+         ],
+         "instance_uuid" : null,
+         "power_state" : "power off"
+      }
+   ]
+}

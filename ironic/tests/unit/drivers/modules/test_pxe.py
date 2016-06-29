@@ -60,34 +60,6 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
         mgr_utils.mock_the_extension_manager(driver="fake_pxe")
         self.node = obj_utils.create_test_node(self.context, **n)
 
-    def _test_get_pxe_conf_option(self, driver, expected_value):
-        mgr_utils.mock_the_extension_manager(driver=driver)
-        self.node.driver = driver
-        self.node.save()
-
-        with task_manager.acquire(self.context, self.node.uuid) as task:
-            returned_value = pxe._get_pxe_conf_option(
-                task, 'pxe_config_template')
-
-        self.assertEqual(expected_value, returned_value)
-
-    def test_get_pxe_conf_option_iscsi_deploy(self):
-        self.config(group='pxe', pxe_config_template='my-pxe-config-template')
-        self._test_get_pxe_conf_option('fake_pxe',
-                                       'my-pxe-config-template')
-
-    def test_get_pxe_conf_option_agent_deploy_default(self):
-        self.config(group='pxe', pxe_config_template='my-pxe-config-template')
-        self._test_get_pxe_conf_option('fake_agent',
-                                       'my-pxe-config-template')
-
-    def test_get_pxe_conf_option_agent_deploy_not_default(self):
-        self.config(group='agent',
-                    agent_pxe_config_template='my-agent-config-template')
-        self.config(group='pxe', pxe_config_template='my-pxe-config-template')
-        self._test_get_pxe_conf_option('fake_agent',
-                                       'my-agent-config-template')
-
     def test__parse_driver_info_missing_deploy_kernel(self):
         del self.node.driver_info['deploy_kernel']
         self.assertRaises(exception.MissingParameterValue,
@@ -157,9 +129,9 @@ class PXEPrivateMethodsTestCase(db_base.DbTestCase):
         self.assertEqual(expected_info, image_info)
         self.assertFalse(show_mock.called)
         self.assertEqual('instance_kernel_uuid',
-                         self.node.instance_info.get('kernel'))
+                         self.node.instance_info['kernel'])
         self.assertEqual('instance_ramdisk_uuid',
-                         self.node.instance_info.get('ramdisk'))
+                         self.node.instance_info['ramdisk'])
 
     def test__get_instance_image_info(self):
         # Tests when 'is_whole_disk_image' exists in driver_internal_info

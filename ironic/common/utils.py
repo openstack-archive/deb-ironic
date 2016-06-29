@@ -49,6 +49,7 @@ utils_opts = [
                       'running commands as root.')),
     cfg.StrOpt('tempdir',
                default=tempfile.gettempdir(),
+               sample_default='/tmp',
                help=_('Temporary working directory, default is Python temp '
                       'dir.')),
 ]
@@ -299,29 +300,6 @@ def get_shortened_ipv6(address):
 def get_shortened_ipv6_cidr(address):
     net = netaddr.IPNetwork(address, version=6)
     return str(net.cidr)
-
-
-def is_valid_cidr(address):
-    """Check if the provided ipv4 or ipv6 address is a valid CIDR address."""
-    try:
-        # Validate the correct CIDR Address
-        netaddr.IPNetwork(address)
-    except netaddr.core.AddrFormatError:
-        return False
-    except UnboundLocalError:
-        # NOTE(MotoKen): work around bug in netaddr 0.7.5 (see detail in
-        # https://github.com/drkjam/netaddr/issues/2)
-        return False
-
-    # Prior validation partially verify /xx part
-    # Verify it here
-    ip_segment = address.split('/')
-
-    if (len(ip_segment) <= 1 or
-        ip_segment[1] == ''):
-        return False
-
-    return True
 
 
 def get_ip_version(network):

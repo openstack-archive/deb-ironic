@@ -33,15 +33,15 @@ authentication.
    * https://launchpad.net/ironic
 
 Related Projects
------------------
+----------------
 
-   * https://launchpad.net/ironic-inspector
-   * https://launchpad.net/python-ironicclient
-   * https://launchpad.net/python-ironic-inspector-client
-   * https://launchpad.net/bifrost
+* https://launchpad.net/ironic-inspector
+* https://launchpad.net/python-ironicclient
+* https://launchpad.net/python-ironic-inspector-client
+* https://launchpad.net/bifrost
 
 Project Hosting Details
--------------------------
+-----------------------
 
 Bug tracker
     http://launchpad.net/ironic
@@ -53,7 +53,7 @@ Wiki
     http://wiki.openstack.org/Ironic
 
 Code Hosting
-    https://github.com/openstack/ironic
+    https://git.openstack.org/cgit/openstack/ironic
 
 Code Review
     https://review.openstack.org/#/q/status:open+project:openstack/ironic,n,z

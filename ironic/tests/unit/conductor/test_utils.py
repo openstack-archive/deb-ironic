@@ -60,6 +60,23 @@ class NodeSetBootDeviceTestCase(base.DbTestCase):
                                              device='pxe',
                                              persistent=False)
 
+    def test_node_set_boot_device_adopting(self):
+        mgr_utils.mock_the_extension_manager(driver="fake_ipmitool")
+        self.driver = driver_factory.get_driver("fake_ipmitool")
+        ipmi_info = utils.get_test_ipmi_info()
+        node = obj_utils.create_test_node(self.context,
+                                          uuid=uuidutils.generate_uuid(),
+                                          driver='fake_ipmitool',
+                                          driver_info=ipmi_info,
+                                          provision_state=states.ADOPTING)
+        task = task_manager.TaskManager(self.context, node.uuid)
+
+        with mock.patch.object(self.driver.management,
+                               'set_boot_device') as mock_sbd:
+            conductor_utils.node_set_boot_device(task,
+                                                 device='pxe')
+            self.assertFalse(mock_sbd.called)
+
 
 class NodePowerActionTestCase(base.DbTestCase):
 
@@ -178,7 +195,8 @@ class NodePowerActionTestCase(base.DbTestCase):
         self.assertEqual(states.NOSTATE, node['target_power_state'])
         self.assertIsNone(node['last_error'])
 
-    def test_node_power_action_in_same_state(self):
+    @mock.patch.object(conductor_utils, 'LOG', autospec=True)
+    def test_node_power_action_in_same_state(self, log_mock):
         """Test setting node state to its present state.
 
         Test that we don't try to set the power state if the requested
@@ -206,6 +224,10 @@ class NodePowerActionTestCase(base.DbTestCase):
                 self.assertEqual(states.POWER_ON, node['power_state'])
                 self.assertIsNone(node['target_power_state'])
                 self.assertIsNone(node['last_error'])
+                log_mock.warning.assert_called_once_with(
+                    u"Not going to change node %(node)s power state because "
+                    u"current state = requested state = '%(state)s'.",
+                    {'state': states.POWER_ON, 'node': node.uuid})
 
     def test_node_power_action_in_same_state_db_not_in_sync(self):
         """Test setting node state to its present state if DB is out of sync.
@@ -294,7 +316,7 @@ class CleanupAfterTimeoutTestCase(tests_base.TestCase):
     def setUp(self):
         super(CleanupAfterTimeoutTestCase, self).setUp()
         self.task = mock.Mock(spec=task_manager.TaskManager)
-        self.task.context = mock.sentinel.context
+        self.task.context = self.context
         self.task.driver = mock.Mock(spec_set=['deploy'])
         self.task.shared = False
         self.task.node = mock.Mock(spec_set=objects.Node)
@@ -504,10 +526,10 @@ class NodeCleaningStepsTestCase(base.DbTestCase):
                       {'step': 'bad_step', 'interface': 'deploy'}]
 
         with task_manager.acquire(self.context, node.uuid) as task:
-            self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                    "does not support.*bad_step",
-                                    conductor_utils._validate_user_clean_steps,
-                                    task, user_steps)
+            self.assertRaisesRegex(exception.InvalidParameterValue,
+                                   "does not support.*bad_step",
+                                   conductor_utils._validate_user_clean_steps,
+                                   task, user_steps)
             mock_steps.assert_called_once_with(task, enabled=False, sort=False)
 
     @mock.patch.object(conductor_utils, '_get_cleaning_steps')
@@ -519,10 +541,10 @@ class NodeCleaningStepsTestCase(base.DbTestCase):
                       {'step': 'erase_disks', 'interface': 'deploy'}]
 
         with task_manager.acquire(self.context, node.uuid) as task:
-            self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                    "update_firmware.*invalid.*arg1",
-                                    conductor_utils._validate_user_clean_steps,
-                                    task, user_steps)
+            self.assertRaisesRegex(exception.InvalidParameterValue,
+                                   "update_firmware.*invalid.*arg1",
+                                   conductor_utils._validate_user_clean_steps,
+                                   task, user_steps)
             mock_steps.assert_called_once_with(task, enabled=False, sort=False)
 
     @mock.patch.object(conductor_utils, '_get_cleaning_steps')
@@ -533,10 +555,10 @@ class NodeCleaningStepsTestCase(base.DbTestCase):
                       {'step': 'build_raid', 'interface': 'deploy'}]
 
         with task_manager.acquire(self.context, node.uuid) as task:
-            self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                    "build_raid.*missing.*arg1",
-                                    conductor_utils._validate_user_clean_steps,
-                                    task, user_steps)
+            self.assertRaisesRegex(exception.InvalidParameterValue,
+                                   "build_raid.*missing.*arg1",
+                                   conductor_utils._validate_user_clean_steps,
+                                   task, user_steps)
             mock_steps.assert_called_once_with(task, enabled=False, sort=False)
 
 
@@ -567,6 +589,38 @@ class ErrorHandlersTestCase(tests_base.TestCase):
         self.assertFalse(self.node.save.called)
         self.assertFalse(log_mock.warning.called)
 
+    @mock.patch.object(conductor_utils, 'cleaning_error_handler')
+    def test_cleanup_cleanwait_timeout_handler_call(self, mock_error_handler):
+        self.node.clean_step = {}
+        conductor_utils.cleanup_cleanwait_timeout(self.task)
+
+        mock_error_handler.assert_called_once_with(
+            self.task,
+            msg="Timeout reached while cleaning the node. Please "
+                "check if the ramdisk responsible for the cleaning is "
+                "running on the node. Failed on step {}.",
+            set_fail_state=True)
+
+    def test_cleanup_cleanwait_timeout(self):
+        self.node.provision_state = states.CLEANFAIL
+        target = 'baz'
+        self.node.target_provision_state = target
+        self.node.driver_internal_info = {}
+        self.node.clean_step = {'key': 'val'}
+        clean_error = ("Timeout reached while cleaning the node. Please "
+                       "check if the ramdisk responsible for the cleaning is "
+                       "running on the node. Failed on step {'key': 'val'}.")
+        self.node.driver_internal_info = {
+            'cleaning_reboot': True,
+            'clean_step_index': 0}
+        conductor_utils.cleanup_cleanwait_timeout(self.task)
+        self.assertEqual({}, self.node.clean_step)
+        self.assertNotIn('clean_step_index', self.node.driver_internal_info)
+        self.task.process_event.assert_called_once_with('fail',
+                                                        target_state=None)
+        self.assertTrue(self.node.maintenance)
+        self.assertEqual(clean_error, self.node.maintenance_reason)
+
     def test_cleaning_error_handler(self):
         self.node.provision_state = states.CLEANING
         target = 'baz'
@@ -576,7 +630,7 @@ class ErrorHandlersTestCase(tests_base.TestCase):
         conductor_utils.cleaning_error_handler(self.task, msg)
         self.node.save.assert_called_once_with()
         self.assertEqual({}, self.node.clean_step)
-        self.assertFalse('clean_step_index' in self.node.driver_internal_info)
+        self.assertNotIn('clean_step_index', self.node.driver_internal_info)
         self.assertEqual(msg, self.node.last_error)
         self.assertTrue(self.node.maintenance)
         self.assertEqual(msg, self.node.maintenance_reason)

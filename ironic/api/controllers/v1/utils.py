@@ -13,10 +13,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import inspect
+
 import jsonpatch
 from oslo_config import cfg
 from oslo_utils import uuidutils
 import pecan
+from pecan import rest
 import six
 from six.moves import http_client
 from webob.static import FileIter
@@ -48,6 +51,7 @@ MIN_VERB_VERSIONS = {
     states.VERBS['inspect']: versions.MINOR_6_INSPECT_STATE,
     states.VERBS['abort']: versions.MINOR_13_ABORT_VERB,
     states.VERBS['clean']: versions.MINOR_15_MANUAL_CLEAN,
+    states.VERBS['adopt']: versions.MINOR_17_ADOPT_VERB,
 }
 
 
@@ -79,10 +83,20 @@ def apply_jsonpatch(doc, patch):
     return jsonpatch.apply_patch(doc, jsonpatch.JsonPatch(patch))
 
 
-def get_patch_value(patch, path):
-    for p in patch:
-        if p['path'] == path and p['op'] != 'remove':
-            return p['value']
+def get_patch_values(patch, path):
+    """Get the patch values corresponding to the specified path.
+
+    If there are multiple values specified for the same path
+    (for example the patch is [{'op': 'add', 'path': '/name', 'value': 'abc'},
+                               {'op': 'add', 'path': '/name', 'value': 'bca'}])
+    return all of them in a list (preserving order).
+
+    :param patch: HTTP PATCH request body.
+    :param path: the path to get the patch values for.
+    :returns: list of values for the specified path in the patch.
+    """
+    return [p['value'] for p in patch
+            if p['path'] == path and p['op'] != 'remove']
 
 
 def allow_node_logical_names():
@@ -274,3 +288,23 @@ def allow_links_node_states_and_driver_properties():
     """
     return (pecan.request.version.minor >=
             versions.MINOR_14_LINKS_NODESTATES_DRIVERPROPERTIES)
+
+
+def get_controller_reserved_names(cls):
+    """Get reserved names for a given controller.
+
+    Inspect the controller class and return the reserved names within
+    it. Reserved names are names that can not be used as an identifier
+    for a resource because the names are either being used as a custom
+    action or is the name of a nested controller inside the given class.
+
+    :param cls: The controller class to be inspected.
+    """
+    reserved_names = [
+        name for name, member in inspect.getmembers(cls)
+        if isinstance(member, rest.RestController)]
+
+    if hasattr(cls, '_custom_actions'):
+        reserved_names += cls._custom_actions.keys()
+
+    return reserved_names

@@ -27,6 +27,7 @@ from ironic.common import exception
 from ironic.common.glance_service import service_utils
 from ironic.common import image_service
 from ironic.common import images
+from ironic.common import states
 from ironic.common import swift
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
@@ -499,7 +500,24 @@ class IloVirtualMediaBootTestCase(db_base.DbTestCase):
             setup_vmedia_mock.assert_called_once_with(task, 'deploy-iso',
                                                       expected_ramdisk_opts)
 
+    @mock.patch.object(service_utils, 'is_glance_image', spec_set=True,
+                       autospec=True)
+    def test_prepare_ramdisk_not_deploying(self, mock_is_image):
+        """Ensure ramdisk build operations are blocked when not deploying"""
+
+        for state in states.STABLE_STATES:
+            mock_is_image.reset_mock()
+            self.node.provision_state = state
+            self.node.save()
+            with task_manager.acquire(self.context, self.node.uuid,
+                                      shared=False) as task:
+                self.assertIsNone(
+                    task.driver.boot.prepare_ramdisk(task, None))
+                self.assertFalse(mock_is_image.called)
+
     def test_prepare_ramdisk_glance_image(self):
+        self.node.provision_state = states.DEPLOYING
+        self.node.save()
         self._test_prepare_ramdisk(
             ilo_boot_iso='swift:abcdef',
             image_source='6b2f0c0c-79e8-4db6-842e-43c9764204af')
@@ -507,6 +525,8 @@ class IloVirtualMediaBootTestCase(db_base.DbTestCase):
         self.assertNotIn('ilo_boot_iso', self.node.instance_info)
 
     def test_prepare_ramdisk_not_a_glance_image(self):
+        self.node.provision_state = states.DEPLOYING
+        self.node.save()
         self._test_prepare_ramdisk(
             ilo_boot_iso='http://mybootiso',
             image_source='http://myimage')
@@ -580,11 +600,9 @@ class IloVirtualMediaBootTestCase(db_base.DbTestCase):
             cleanup_iso_mock.assert_called_once_with(task.node)
             cleanup_vmedia_mock.assert_called_once_with(task)
             driver_internal_info = task.node.driver_internal_info
-            boot_iso_created = driver_internal_info.get(
-                'boot_iso_created_in_web_server')
-            root_uuid = driver_internal_info.get('root_uuid_or_disk_id')
-            self.assertIsNone(boot_iso_created)
-            self.assertIsNone(root_uuid)
+            self.assertNotIn('boot_iso_created_in_web_server',
+                             driver_internal_info)
+            self.assertNotIn('root_uuid_or_disk_id', driver_internal_info)
 
     @mock.patch.object(ilo_common, 'cleanup_vmedia_boot', spec_set=True,
                        autospec=True)

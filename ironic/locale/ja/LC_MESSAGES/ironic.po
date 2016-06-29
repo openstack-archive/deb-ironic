@@ -1,34 +1,26 @@
-# Translations template for ironic.
-# Copyright (C) 2015 ORGANIZATION
-# This file is distributed under the same license as the ironic project.
-#
-# Translators:
-# Tomoyuki KATO <tomo@dream.daynight.jp>, 2013
 # Akihiro Motoki <amotoki@gmail.com>, 2015. #zanata
 # KATO Tomoyuki <kato.tomoyuki@jp.fujitsu.com>, 2015. #zanata
+# Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
+# KATO Tomoyuki <kato.tomoyuki@jp.fujitsu.com>, 2016. #zanata
+# Yuta Hono <yuta.hono@ntt.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: ironic 4.3.1.dev202\n"
-"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2016-01-27 02:09+0000\n"
+"Project-Id-Version: ironic 5.1.1.dev356\n"
+"Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
+"POT-Creation-Date: 2016-06-10 21:23+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"PO-Revision-Date: 2015-10-09 05:15+0000\n"
+"PO-Revision-Date: 2016-04-21 02:36+0000\n"
 "Last-Translator: KATO Tomoyuki <kato.tomoyuki@jp.fujitsu.com>\n"
-"Language: ja\n"
-"Plural-Forms: nplurals=1; plural=0;\n"
-"Generated-By: Babel 2.0\n"
-"X-Generator: Zanata 3.7.3\n"
 "Language-Team: Japanese\n"
+"Language: ja\n"
+"X-Generator: Zanata 3.7.3\n"
+"Plural-Forms: nplurals=1; plural=0\n"
 
 #, python-format
 msgid " after the completion of step \"%s\""
 msgstr "手順「%s」の完了後"
-
-#, fuzzy
-msgid " and "
-msgstr " および "
 
 #, python-format
 msgid "\"%s\" is not a valid \"msftocs_base_url\""
@@ -41,9 +33,6 @@ msgstr "「%s」は有効な「msftocs_blade_id」ではありません。"
 #, python-format
 msgid "\"msftocs_blade_id\" must be greater than 0. The provided value is: %s"
 msgstr "「msftocs_blade_id」は 0 より大きい必要があります。指定された値: %s"
-
-msgid "\"swift_temp_url_duration\" must be a positive integer."
-msgstr "「swift_temp_url_duration」は正の整数である必要があります。"
 
 #, python-format
 msgid "%(err)s"
@@ -106,18 +95,6 @@ msgstr "「drac_path」に非 ASCII 記号が含まれています。"
 msgid "'drac_protocol' contains non-ASCII symbol."
 msgstr "「drac_protocol」に非 ASCII 記号が含まれています。"
 
-msgid "'irmc_auth_method' has unsupported value."
-msgstr "「irmc_auth_method」にサポートされない値があります。"
-
-msgid "'irmc_client_timeout' is not integer type."
-msgstr "「irmc_client_timeout」が整数ではありません。"
-
-msgid "'irmc_port' has unsupported value."
-msgstr "「irmc_port」にサポートされない値があります。"
-
-msgid "'irmc_sensor_method' has unsupported value."
-msgstr "「irmc_sensor_method」にサポートされない値があります。"
-
 msgid "'qemu-img info' parsing failed."
 msgstr "「qemu-img info」の解析に失敗しました。"
 
@@ -135,6 +112,13 @@ msgstr ""
 #, python-format
 msgid "A chassis with UUID %(uuid)s already exists."
 msgstr "UUID %(uuid)s のシャーシは既に存在します。"
+
+msgid ""
+"A list of the glance api servers available to ironic. Prefix with https:// "
+"for SSL-based glance API servers. Format is [hostname|IP]:port."
+msgstr ""
+"ironic が利用可能な glance API サーバリスト。 SSLベースのglance API サーバー"
+"では https:// より始まります。フォーマットは [hostname|IP]:port です。"
 
 #, python-format
 msgid "A node with UUID %(uuid)s already exists."
@@ -199,13 +183,8 @@ msgstr ""
 "エージェントからノード %(node)s でのクリーニングステップ %(step)s に関するエ"
 "ラーが返されました: %(err)s。"
 
-#, fuzzy, python-format
-msgid ""
-"Agent returned unknown status for clean step %(step)s on node %(node)s : "
-"%(err)s."
-msgstr ""
-"エージェントからノード %(node)s でのクリーニング・ステップ %(step)s に関して"
-"不明な状況が返されました: %(err)s。"
+msgid "Allow to perform insecure SSL (https) requests to glance."
+msgstr "glance に対する非セキュアな SSL (https) 要求の実行を許可します。"
 
 msgid ""
 "An exclusive lock is required, but the current context has a shared lock."
@@ -221,29 +200,12 @@ msgstr ""
 msgid "An unknown exception occurred."
 msgstr "不明な例外が発生しました。"
 
-#, python-format
-msgid ""
-"Another job with ID %(job_id)s is already created  to configure %(target)s. "
-"Wait until existing job is completed or is canceled"
-msgstr ""
-"別の ID %(job_id)s のジョブが、すでに %(target)s を設定するために作成されてい"
-"ます。既存のジョブが完了するか、取り消されるまで待ってください。"
-
-#, python-format
-msgid "Asynchronous exception for node %(node)s: %(msg)s exception: %(e)s"
-msgstr "ノード %(node)s の非同期例外: %(msg)s 例外: %(e)s"
-
 msgid ""
 "Authentication method for iRMC operations; either 'basic' or 'digest'. The "
 "default value is 'basic'. Optional."
 msgstr ""
 "iRMC 操作の認証方式。「basic」または「digest」。デフォルト値は「basic」。オプ"
 "ション。"
-
-msgid ""
-"Authentication method to be used for iRMC operations, either \"basic\" or "
-"\"digest\""
-msgstr "iRMC の操作に使用する認証方式。「basic」か「digest」のどちらか。"
 
 msgid "Available commands"
 msgstr "利用できるコマンド"
@@ -310,10 +272,6 @@ msgstr ""
 "コンソール PID ファイルのディレクトリー「%(path)s」を作成できません。理由: "
 "%(reason)s。"
 
-#, python-format
-msgid "Cannot create node with invalid name %(name)s"
-msgstr "無効な名前 %(name)s でノードを作成することはできません"
-
 msgid "Cannot deploy whole disk image with swap or ephemeral size set"
 msgstr ""
 "スワップまたは一時サイズ設定ではディスクイメージ全体をデプロイできません"
@@ -343,21 +301,6 @@ msgid ""
 msgstr ""
 "PXE ブートローダーを検証できません。いくつかのパラメーターがノードの "
 "driver_info に不足しています。"
-
-msgid ""
-"Cannot validate iSCSI deploy. Some parameters were missing in node's "
-"instance_info"
-msgstr ""
-"iSCSI デプロイを検証できません。ノードの instance_info でいくつかのパラメー"
-"ターが不足しています。"
-
-#, python-format
-msgid ""
-"Cannot validate parameter for iSCSI deploy. Invalid parameter %(param)s. "
-"Reason: %(reason)s"
-msgstr ""
-"iSCSI デプロイのパラメーターを検証できません。無効なパラメーター: %(param)s、"
-"理由: %(reason)s"
 
 #, python-format
 msgid "Chassis %(chassis)s could not be found."
@@ -503,10 +446,6 @@ msgstr ""
 "した。ネットワークの問題が考えられます。%(exc)s"
 
 #, python-format
-msgid "Could not restart cleaning on node %(node)s: %(err)s."
-msgstr "ノード %(node)s でクリーニングを再開できませんでした: %(err)s。"
-
-#, python-format
 msgid "Could not stop the console for node '%(node)s'. Reason: %(err)s."
 msgstr "ノード「%(node)s」のコンソールを停止できませんでした。理由: %(err)s。"
 
@@ -549,23 +488,6 @@ msgstr ""
 "使用する DHCP プロバイダー。「neutron」は Neutron、「none」は何もしないプロバ"
 "イダーを使用します。"
 
-#, python-format
-msgid ""
-"DRAC client failed. Last error (cURL error code): %(last_error)s, fault "
-"string: \"%(fault_string)s\" response_code: %(response_code)s"
-msgstr ""
-"DRAC クライアントで障害が発生しました。最終エラー (cURL エラーコード): "
-"%(last_error)s、エラー文字列: \"%(fault_string)s\"、応答コード: "
-"%(response_code)s"
-
-#, python-format
-msgid ""
-"DRAC operation yielded return value %(actual_return_value)s that is neither "
-"error nor expected %(expected_return_value)s"
-msgstr ""
-"DRAC 処理が、エラーでも予期された %(expected_return_value)s でもない戻り値 "
-"%(actual_return_value)s を受け取りました。"
-
 msgid "Default glance hostname or IP address."
 msgstr "デフォルトの glance ホスト名または IP アドレス。"
 
@@ -589,13 +511,6 @@ msgstr "インスタンス %(instance)s のデプロイに失敗しました。�
 
 msgid "Deploy iso didn't contain efiboot.img or grub.cfg"
 msgstr "デプロイ ISO に efiboot.img も grub.cfg も含まれていませんでした"
-
-#, python-format
-msgid "Deploy key %(key_sent)s does not match with %(expected_key)s"
-msgstr "デプロイキー %(key_sent)s が %(expected_key)s に一致しません"
-
-msgid "Deploy key does not match"
-msgstr "デプロイキーが一致しません"
 
 msgid ""
 "Deploy timed out, but an unhandled exception was encountered while aborting. "
@@ -627,15 +542,6 @@ msgid ""
 msgstr ""
 "「%(path)s」があるディスク・ボリュームに十分なディスク容量がありませ"
 "ん。%(required)d Mib が必要ですが、使用可能な容量は%(actual)d MiB のみです。"
-
-msgid ""
-"Downgrade the database schema to the oldest revision. While optional, one "
-"should generally use --revision to specify the alembic revision string to "
-"downgrade to."
-msgstr ""
-"データベースのスキーマを最も古いバージョンにダウングレードします。オプション"
-"ですが、 一般的には --revision を使用して、ダウングレードする Alembic バー"
-"ジョン文字列を指定すべきです。"
 
 #, python-format
 msgid "Driver %(driver)s could not be loaded. Reason: %(reason)s."
@@ -700,10 +606,6 @@ msgstr ""
 msgid "Error rebooting node %(node)s after deploy. Error: %(error)s"
 msgstr ""
 "ノード %(node)s のデプロイ後の再起動がエラーになりました。エラー: %(error)s"
-
-#, python-format
-msgid "Error returned from deploy ramdisk: %s"
-msgstr "デプロイ RAM ディスクからエラーが返されました: %s"
 
 msgid ""
 "Error validating iLO virtual media deploy. Some parameters were missing in "
@@ -785,9 +687,6 @@ msgstr ""
 msgid "Failed to continue agent deployment."
 msgstr "エージェントのデプロイの続行に失敗しました。"
 
-msgid "Failed to continue iSCSI deployment."
-msgstr "iSCSI デプロイメントを続行できませんでした。"
-
 #, python-format
 msgid "Failed to create a file system. File system %(fs)s is not supported."
 msgstr ""
@@ -843,17 +742,9 @@ msgstr ""
 "ラー: %(error)s"
 
 #, python-format
-msgid "Failed to install bootloader on node %(node)s. Error: %(error)s."
+msgid "Failed to load DHCP provider %(dhcp_provider_name)s, reason: %(reason)s"
 msgstr ""
-"ノード %(node)s においてブートローダーのインストールに失敗しました。エラー: "
-"%(error)s。"
-
-#, python-format
-msgid ""
-"Failed to notify ramdisk to reboot after bootloader installation. Error: %s"
-msgstr ""
-"ブートローダーのインストール後に再起動するよう RAM ディスクに通知できませんで"
-"した。エラー: %s"
+"DHCP プロバイダー %(dhcp_provider_name)s をロードできませんでした: %(reason)s"
 
 #, python-format
 msgid "Failed to parse sensor data for node %(node)s. Error: %(error)s"
@@ -895,10 +786,6 @@ msgid ""
 msgstr ""
 "ノード %(node)s をデプロイする iSCSI ターゲットの開始に失敗しました。エラー: "
 "%(error)s"
-
-#, python-format
-msgid "Failed to tear down from cleaning for node %s"
-msgstr "ノード %s のクリーニングからの取り外しに失敗しました"
 
 #, python-format
 msgid "Failed to tear down. Error: %s"
@@ -1149,14 +1036,6 @@ msgstr "設定ファイルが無効です。%(error_msg)s"
 msgid "Invalid data supplied to HashRing.get_hosts."
 msgstr "HashRing.get_hosts に無効なデータが指定されました。"
 
-#, fuzzy, python-format
-msgid ""
-"Invalid filter dialect '%(invalid_filter)s'. Supported options are "
-"%(supported)s"
-msgstr ""
-"フィルター方言「%(invalid_filter)s」は無効です。サポートされるオプションは "
-"%(supported)s です"
-
 msgid "Invalid hosts supplied when building HashRing."
 msgstr "HashRing の構築時に無効なホストが指定されました。"
 
@@ -1272,10 +1151,15 @@ msgstr "使用する MySQL エンジン。"
 msgid "Name of the VM in VirtualBox. Required."
 msgstr "VirtualBox の仮想マシン名。必須。"
 
-msgid "Neutron auth_strategy should be either \"noauth\" or \"keystone\"."
+msgid ""
+"Name of this node. This can be an opaque identifier. It is not necessarily a "
+"hostname, FQDN, or IP address. However, the node name must be valid within "
+"an AMQP key, and if using ZeroMQ, a valid hostname, FQDN, or IP address."
 msgstr ""
-"Neutron の auth_strategy は「noauth」または「keystone」のいずれかでなければな"
-"りません。"
+"このノードの名前。これには不透明な ID を指定できます。この名前はホスト名、"
+"FQDN、または IP アドレスとは限りません。ただし、ノード名はAMQP鍵の中で有効で"
+"あり、ZeroMQを使用する場合には、有効なホスト名、FQDN、またはIP アドレスでなけ"
+"ればなりません。"
 
 msgid "No Keystone service catalog loaded"
 msgstr "keystone のサービスカタログが読み込まれていません"
@@ -1330,22 +1214,8 @@ msgid "Node %(node)s found not to be locked on release"
 msgstr "ノード %(node)s はリリース状態で、ロックされていませんでした。"
 
 #, python-format
-msgid "Node %(node)s got an invalid last step for %(state)s: %(step)s."
-msgstr ""
-"ノード %(node)s が %(state)s に関して無効な最終ステップを受け取りました: "
-"%(step)s。"
-
-#, python-format
 msgid "Node %(node)s is associated with instance %(instance)s."
 msgstr "ノード %(node)s はインスタンス %(instance)s に関連付けられています。"
-
-#, python-format
-msgid ""
-"Node %(node)s is configured to use the %(driver)s driver which currently "
-"does not support deploying partition images."
-msgstr ""
-"ノード %(node)s は、分割イメージのデプロイを現在サポートしていない "
-"%(driver)s ドライバーを使用するように設定されています。"
 
 #, python-format
 msgid ""
@@ -1354,11 +1224,6 @@ msgid ""
 msgstr ""
 "ノード %(node)s がホスト %(host)s によりロックされています。現在の操作の完了"
 "後に再試行してください。"
-
-#, python-format
-msgid "Node %(node)s: Cannot change name to invalid name '%(name)s'"
-msgstr ""
-"ノード %(node)s: 名前を無効な名前「%(name)s」に変更することはできません"
 
 #, python-format
 msgid "Node %s can not be updated while a state transition is in progress."
@@ -1392,15 +1257,12 @@ msgstr "ノードがデプロイ用のイメージの取得に失敗しました
 msgid "Node failed to move to active state."
 msgstr "ノードを稼働状態に移行できませんでした。"
 
-msgid "Node failed to start the next cleaning step."
-msgstr "ノードが、次のクリーニング手順の開始に失敗しました。"
-
 msgid "Node identifier not specified."
 msgstr "ノード ID が指定されていません。"
 
-#, fuzzy, python-format
+#, python-format
 msgid "Not authorized for image %(image_id)s."
-msgstr "イメージ %(image_id)s では許可されません。"
+msgstr "イメージ %(image_id)s では許可されていません。"
 
 msgid "Not authorized in Keystone."
 msgstr "keystone において許可されていません。"
@@ -1501,9 +1363,6 @@ msgstr "VirtualBox Web サービスがリッスンしているポート。オプ
 msgid "Port to be used for iLO operations"
 msgstr "iLO 操作に使用するポート"
 
-msgid "Port to be used for iRMC operations, either 80 or 443"
-msgstr "iRMC の操作に使用するポート。80 か 443 のどちらか。"
-
 msgid ""
 "Port to be used for iRMC operations; either 80 or 443. The default value is "
 "443. Optional."
@@ -1530,10 +1389,6 @@ msgstr "reset_bios_to_default クリーニング手順の優先度。"
 msgid "Priority for reset_ilo clean step."
 msgstr "reset_ilo クリーニング手順の優先度。"
 
-msgid "Protocol used for AMT endpoint, support http/https"
-msgstr ""
-"AMT エンドポイントで使用されるプロトコル。http/https をサポートします。"
-
 msgid ""
 "Protocol used for AMT endpoint. one of http, https; default is \"http\". "
 "Optional."
@@ -1548,13 +1403,6 @@ msgstr "プロビジョニング状態 \"%s\" が有効ではありません。"
 #, python-format
 msgid "RAID config validation error: %s"
 msgstr "RAID 設定の検証エラー: %s"
-
-#, python-format
-msgid ""
-"RPC do_node_deploy failed to validate deploy or power info. Error: %(msg)s"
-msgstr ""
-"RPC do_node_deploy はデプロイ情報または電源情報の検証に失敗しました。エラー: "
-"%(msg)s"
 
 #, python-format
 msgid ""
@@ -1686,12 +1534,6 @@ msgstr ""
 msgid "Seconds between conductor heart beats."
 msgstr "conductor のハートビート間隔の秒数"
 
-msgid "Seconds between running periodic tasks."
-msgstr "定期タスクの実行間隔 (秒単位)。"
-
-msgid "Sensor data retrieval method, either \"ipmitool\" or \"scci\""
-msgstr "センサーデータの取得方式。「ipmitool」か「scci」のどちらか。"
-
 msgid ""
 "Sensor data retrieval method; either 'ipmitool' or 'scci'. The default value "
 "is 'ipmitool'. Optional."
@@ -1722,13 +1564,6 @@ msgstr "ブートモードを %s に設定中"
 #, python-format
 msgid "Setting secure boot to %(flag)s for node %(node)s."
 msgstr "ノード %(node)s のセキュアブートを %(flag)s に設定中。"
-
-msgid ""
-"Some mandatory input missing in 'pass_bootloader_info' vendor passthru from "
-"ramdisk."
-msgstr ""
-"一部の必須入力が RAM ディスクの pass_bootloader_info ベンダーパススルーにあり"
-"ません。"
 
 msgid "Specified image file not found."
 msgstr "指定されたイメージファイルが見つかりません。"
@@ -1836,14 +1671,6 @@ msgid ""
 msgstr "ノードの driver_info に次の必須 iLO パラメーターがありません: %s"
 
 #, python-format
-msgid ""
-"The following type errors were encountered while parsing driver_info:\n"
-"%s"
-msgstr ""
-"driver_info の解析中に次の形式エラーが検出されました:\n"
-"%s"
-
-#, python-format
 msgid "The given image info does not have a valid image id: %s"
 msgstr "指定されたイメージ情報には有効なイメージ ID がありません: %s"
 
@@ -1890,6 +1717,10 @@ msgstr ""
 #, python-format
 msgid "The requested action \"%(action)s\" could not be understood."
 msgstr "要求されたアクション「%(action)s」を認識できませんでした。"
+
+#, python-format
+msgid "The sort_key value \"%(key)s\" is an invalid field for sorting"
+msgstr "sort_key の値「%(key)s」が、並び替えでは使用できないフィールドです"
 
 #, python-format
 msgid "The sort_key value %(key)s is an invalid field for sorting"
@@ -2011,10 +1842,6 @@ msgstr ""
 msgid "Unacceptable parameters."
 msgstr "受け入れられないパラメーター。"
 
-#, fuzzy, python-format
-msgid "Unknown lookup payload version: %s"
-msgstr "ルックアップ・ペイロード・バージョンが不明です: %s"
-
 #, python-format
 msgid "Unsupported target_state: %s"
 msgstr "サポートされない target_state: %s"
@@ -2060,14 +1887,6 @@ msgid ""
 msgstr ""
 "remote_image_share_root の値「%s」が、ディレクトリーではないか、存在しませ"
 "ん。"
-
-#, python-format
-msgid ""
-"Value '%s' for remote_image_share_type is not supported value either 'NFS' "
-"or 'CIFS'."
-msgstr ""
-"remote_image_share_type の値「%s」はサポートされません。「NFS」と「CIFS」がサ"
-"ポートされます。"
 
 #, python-format
 msgid ""
@@ -2155,14 +1974,9 @@ msgstr "有効化"
 msgid "enabling"
 msgstr "有効化中"
 
-#, fuzzy, python-format
+#, python-format
 msgid "fmt=%(fmt)s backed by: %(backing_file)s"
 msgstr "fmt=%(fmt)s の基盤: %(backing_file)s"
-
-#, python-format
-msgid "get_clean_steps for node %(node)s returned invalid result: %(result)s"
-msgstr ""
-"ノード %(node)s の get_clean_steps から無効な結果が返されました: %(result)s"
 
 msgid "getting boot device"
 msgstr "ブートデバイスの取得中"

@@ -34,13 +34,17 @@ Administrator's Guide
   deploy/user-guide
   Installation Guide <deploy/install-guide>
   Upgrade Guide <deploy/upgrade-guide>
-  Configuration Reference (Liberty) <http://docs.openstack.org/liberty/config-reference/content/ch_configuring-openstack-bare-metal.html>
+  Configuration Reference (Mitaka) <http://docs.openstack.org/mitaka/config-reference/bare-metal.html>
   drivers/ipa
   deploy/drivers
   deploy/cleaning
   deploy/raid
+  deploy/inspection
+  deploy/security
+  deploy/adoption
   deploy/troubleshooting
   Release Notes <http://docs.openstack.org/releasenotes/ironic/>
+  Dashboard (horizon) plugin <http://docs.openstack.org/developer/ironic-ui/>
 
 Commands and API References
 ===========================

@@ -32,7 +32,7 @@ Install prerequisites (for python 2.7):
 
   If using RHEL and yum reports "No package python-pip available" and "No
   package git-review available", use the EPEL software repository.
-  Instructions can be found at `<http://fedoraproject.org/wiki/EPEL/FAQ#howtouse>`_.
+  Instructions can be found at `<https://fedoraproject.org/wiki/EPEL/FAQ#howtouse>`_.
 
 - Fedora 22 or higher::
 
@@ -47,7 +47,7 @@ Install prerequisites (for python 2.7):
 
   Graphviz is only needed for generating the state machine diagram. To install it
   on openSUSE or SLE 12, see
-  `<http://software.opensuse.org/download.html?project=graphics&package=graphviz-plugins>`_.
+  `<https://software.opensuse.org/download.html?project=graphics&package=graphviz-plugins>`_.
 
 
 To use Python 3.4, follow the instructions above to install prerequisites and
@@ -115,6 +115,26 @@ To run a specific unit test, this passes the -r option and desired test
 To run only the pep8/flake8 syntax and style checks::
 
     tox -epep8
+
+Debugging unit tests
+--------------------
+
+In order to break into the debugger from a unit test we need to insert
+a breaking point to the code:
+
+.. code-block:: python
+
+  import pdb; pdb.set_trace()
+
+Then run ``tox`` with the debug environment as one of the following::
+
+  tox -e debug
+  tox -e debug test_file_name
+  tox -e debug test_file_name.TestClass
+  tox -e debug test_file_name.TestClass.test_name
+
+For more information see the `oslotest documentation
+<http://docs.openstack.org/developer/oslotest/features.html#debugging-with-oslo-debug-helper>`_.
 
 ===============================
 Exercising the Services Locally
@@ -187,16 +207,16 @@ Option 1: Manual Install
     cp etc/ironic/ironic.conf.sample etc/ironic/ironic.conf.local
 
     # disable auth since we are not running keystone here
-    sed -i "s/#auth_strategy=keystone/auth_strategy=noauth/" etc/ironic/ironic.conf.local
+    sed -i "s/#auth_strategy = keystone/auth_strategy = noauth/" etc/ironic/ironic.conf.local
 
     # Use the 'fake_ipmitool' test driver
-    sed -i "s/#enabled_drivers=pxe_ipmitool/enabled_drivers=fake_ipmitool/" etc/ironic/ironic.conf.local
+    sed -i "s/#enabled_drivers = pxe_ipmitool/enabled_drivers = fake_ipmitool/" etc/ironic/ironic.conf.local
 
     # set a fake host name [useful if you want to test multiple services on the same host]
-    sed -i "s/#host=.*/host=test-host/" etc/ironic/ironic.conf.local
+    sed -i "s/#host = .*/host = test-host/" etc/ironic/ironic.conf.local
 
     # turn off the periodic sync_power_state task, to avoid getting NodeLocked exceptions
-    sed -i "s/#sync_power_state_interval=60/sync_power_state_interval=-1/" etc/ironic/ironic.conf.local
+    sed -i "s/#sync_power_state_interval = 60/sync_power_state_interval = -1/" etc/ironic/ironic.conf.local
 
 #. Initialize the ironic database (optional)::
 
@@ -206,16 +226,16 @@ Option 1: Manual Install
     mysql -u root -pMYSQL_ROOT_PWD -e "create schema ironic"
 
     # and switch the DB connection from sqlite to something else, eg. mysql
-    sed -i "s/#connection=.*/connection=mysql\+pymysql:\/\/root:MYSQL_ROOT_PWD@localhost\/ironic/" etc/ironic/ironic.conf.local
+    sed -i "s/#connection = .*/connection = mysql\+pymysql:\/\/root:MYSQL_ROOT_PWD@localhost\/ironic/" etc/ironic/ironic.conf.local
 
 At this point, you can continue to Step 2.
 
 Option 2: Vagrant, VirtualBox, and Ansible
 ##########################################
 
-This option requires `virtualbox <https://www.virtualbox.org//>`_,
-`vagrant <http://www.vagrantup.com/downloads>`_, and
-`ansible <http://www.ansible.com/home>`_. You may install these using your
+This option requires `virtualbox <https://www.virtualbox.org>`_,
+`vagrant <https://www.vagrantup.com>`_, and
+`ansible <https://www.ansible.com>`_. You may install these using your
 favorite package manager, or by downloading from the provided links.
 
 Next, run vagrant::
@@ -348,13 +368,13 @@ station.  Deploying Ironic with DevStack requires a machine running Ubuntu
 Devstack will no longer create the user 'stack' with the desired
 permissions, but does provide a script to perform the task::
 
-    git clone https://github.com/openstack-dev/devstack.git devstack
+    git clone https://git.openstack.org/openstack-dev/devstack.git devstack
     sudo ./devstack/tools/create-stack-user.sh
 
 Switch to the stack user and clone DevStack::
 
     sudo su - stack
-    git clone https://github.com/openstack-dev/devstack.git devstack
+    git clone https://git.openstack.org/openstack-dev/devstack.git devstack
 
 Create devstack/local.conf with minimal settings required to enable Ironic.
 You can use either of two drivers for deploy: pxe_* or agent_*, see :ref:`IPA`
@@ -455,6 +475,21 @@ and uses the ``pxe_ssh`` driver by default::
       # on Ubuntu
       sudo -u libvirt-qemu touch $HOME/ironic-bm-logs/test.log
 
+.. note::
+    To check out an in-progress patch for testing, you can add a Git ref to the ``enable_plugin`` line. For instance::
+
+      enable_plugin ironic git://git.openstack.org/openstack/ironic refs/changes/46/295946/15
+
+    For a patch in review, you can find the ref to use by clicking the
+    "Download" button in Gerrit. You can also specify a different git repo, or
+    a branch or tag::
+
+      enable_plugin ironic https://github.com/openstack/ironic stable/kilo
+
+    For more details, see the
+    `devstack plugin interface documentation
+    <http://docs.openstack.org/developer/devstack/plugins.html#plugin-interface>`_.
+
 Run stack.sh::
 
     ./stack.sh
@@ -464,7 +499,7 @@ Source credentials, create a key, and spawn an instance::
     source ~/devstack/openrc
 
     # query the image id of the default cirros image
-    image=$(nova image-list | egrep "$DEFAULT_IMAGE_NAME"'[^-]' | awk '{ print $2 }')
+    image=$(openstack image show $DEFAULT_IMAGE_NAME -f value -c id)
 
     # create keypair
     ssh-keygen
@@ -547,6 +582,60 @@ The server should now be accessible via SSH::
     ssh cirros@10.1.0.4
     $
 
+=====================
+Running Tempest tests
+=====================
+
+After `Deploying Ironic with DevStack`_ one might want to run integration
+tests against the running cloud. The Tempest project is the project that
+offers an integration test suite for OpenStack.
+
+First, navigate to Tempest directory::
+
+  cd /opt/stack/tempest
+
+To run all tests from the `Ironic plugin
+<https://git.openstack.org/cgit/openstack/ironic/tree/ironic_tempest_plugin?h=master>`_,
+execute the following command::
+
+  tox -e all-plugin -- ironic
+
+To limit the amount of tests that you would like to run, you can use
+a regex. For instance, to limit the run to a single test file, the
+following command can be used::
+
+  tox -e all-plugin -- ironic_tempest_plugin.tests.scenario.test_baremetal_basic_ops
+
+
+Debugging Tempest tests
+-----------------------
+
+It is sometimes useful to step through the test code, line by line,
+especially when the error output is vague. This can be done by
+running the tests in debug mode and using a debugger such as `pdb
+<https://docs.python.org/2/library/pdb.html>`_.
+
+For example, after editing the *test_baremetal_basic_ops* file and
+setting up the pdb traces you can invoke the ``run_tempest.sh`` script
+in the Tempest directory with the following parameters::
+
+  ./run_tempest.sh -N -d ironic_tempest_plugin.tests.scenario.test_baremetal_basic_ops
+
+* The *-N* parameter tells the script to run the tests in the local
+  environment (without a virtualenv) so it can find the Ironic tempest
+  plugin.
+
+* The *-d* parameter enables the debug mode, allowing it to be used
+  with pdb.
+
+For more information about the supported parameters see::
+
+  ./run_tempest.sh --help
+
+.. note::
+   Always be careful when running debuggers in time sensitive code,
+   they may cause timeout errors that weren't there before.
+
 ================================
 Building developer documentation
 ================================
@@ -564,3 +653,4 @@ commands to build the documentation set::
 Now use your browser to open the top-level index.html located at::
 
     ironic/doc/build/html/index.html
+

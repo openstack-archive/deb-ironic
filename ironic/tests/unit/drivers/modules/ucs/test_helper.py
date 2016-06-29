@@ -15,7 +15,6 @@
 """Test class for common methods used by UCS modules."""
 
 import mock
-from oslo_config import cfg
 from oslo_utils import importutils
 
 from ironic.common import exception
@@ -30,7 +29,6 @@ from ironic.tests.unit.objects import utils as obj_utils
 ucs_error = importutils.try_import('UcsSdk.utils.exception')
 
 INFO_DICT = db_utils.get_test_ucs_info()
-CONF = cfg.CONF
 
 
 class UcsValidateParametersTestCase(db_base.DbTestCase):
@@ -48,10 +46,10 @@ class UcsValidateParametersTestCase(db_base.DbTestCase):
     def test_parse_driver_info(self):
         info = ucs_helper.parse_driver_info(self.node)
 
-        self.assertIsNotNone(info.get('ucs_address'))
-        self.assertIsNotNone(info.get('ucs_username'))
-        self.assertIsNotNone(info.get('ucs_password'))
-        self.assertIsNotNone(info.get('ucs_service_profile'))
+        self.assertIsNotNone(info['ucs_address'])
+        self.assertIsNotNone(info['ucs_username'])
+        self.assertIsNotNone(info['ucs_password'])
+        self.assertIsNotNone(info['ucs_service_profile'])
 
     def test_parse_driver_info_missing_address(self):
 

@@ -15,7 +15,6 @@
 """Test class for Management Interface used by iLO modules."""
 
 import mock
-from oslo_config import cfg
 from oslo_utils import importutils
 
 from ironic.common import boot_devices
@@ -32,7 +31,6 @@ from ironic.tests.unit.objects import utils as obj_utils
 ilo_error = importutils.try_import('proliantutils.exception')
 
 INFO_DICT = db_utils.get_test_ilo_info()
-CONF = cfg.CONF
 
 
 class IloManagementTestCase(db_base.DbTestCase):
@@ -254,10 +252,9 @@ class IloManagementTestCase(db_base.DbTestCase):
             task.driver.management.reset_ilo_credential(task)
             clean_step_mock.assert_called_once_with(
                 task.node, 'reset_ilo_credential', 'fake-password')
-            self.assertIsNone(
-                task.node.driver_info.get('ilo_change_password'))
-            self.assertEqual(task.node.driver_info['ilo_password'],
-                             'fake-password')
+            self.assertNotIn('ilo_change_password', task.node.driver_info)
+            self.assertEqual('fake-password',
+                             task.node.driver_info['ilo_password'])
 
     @mock.patch.object(ilo_management, 'LOG', spec_set=True, autospec=True)
     @mock.patch.object(ilo_management, '_execute_ilo_clean_step',

@@ -67,9 +67,9 @@ additional functionality:
 - bifrost_; a set of Ansible playbooks that automates the task of deploying a
   base image onto a set of known hardware using ironic.
 
-.. _ironic-inspector: https://github.com/openstack/ironic-inspector
-.. _diskimage-builder: https://github.com/openstack/diskimage-builder
-.. _bifrost: https://github.com/openstack/bifrost
+.. _ironic-inspector: http://docs.openstack.org/developer/ironic-inspector/
+.. _diskimage-builder: http://docs.openstack.org/developer/diskimage-builder/
+.. _bifrost: http://docs.openstack.org/developer/bifrost/
 
 
 .. todo: include coreos-image-builder reference here, once the split is done
@@ -481,10 +481,6 @@ Compute service's controller nodes and compute nodes.*
     #reserved_host_disk_mb=0
     reserved_host_memory_mb=0
 
-    # Full class name for the Manager for compute (string value)
-    #compute_manager=nova.compute.manager.ComputeManager
-    compute_manager=ironic.nova.compute.manager.ClusteredComputeManager
-
     # Flag to decide whether to use baremetal_scheduler_default_filters or not.
     # (boolean value)
     #scheduler_use_baremetal_filters=False
@@ -686,14 +682,7 @@ them to the Image service:
 1. The `disk-image-builder`_ can be used to create images required for
    deployment and the actual OS which the user is going to run.
 
-.. _disk-image-builder: https://github.com/openstack/diskimage-builder
-
-   *Note:* `tripleo-incubator`_ provides a `script`_ to install all the
-   dependencies for the disk-image-builder.
-
-.. _tripleo-incubator: https://github.com/openstack/tripleo-incubator
-
-.. _script: https://github.com/openstack/tripleo-incubator/blob/master/scripts/install-dependencies
+.. _disk-image-builder: http://docs.openstack.org/developer/diskimage-builder/
 
    - Install diskimage-builder package (use virtualenv, if you don't
      want to install anything globally)::
@@ -828,10 +817,10 @@ node(s) where ``ironic-conductor`` is running.
 #. Install tftp server and the syslinux package with the PXE boot images::
 
     Ubuntu: (Up to and including 14.04)
-        sudo apt-get install tftpd-hpa syslinux-common syslinux
+        sudo apt-get install xinetd tftpd-hpa syslinux-common syslinux
 
     Ubuntu: (14.10 and after)
-        sudo apt-get install tftpd-hpa syslinux-common pxelinux
+        sudo apt-get install xinetd tftpd-hpa syslinux-common pxelinux
 
     Fedora 21/RHEL7/CentOS7:
         sudo yum install tftp-server syslinux-tftpboot
@@ -839,7 +828,31 @@ node(s) where ``ironic-conductor`` is running.
     Fedora 22 or higher:
          sudo dnf install tftp-server syslinux-tftpboot
 
-#. Setup tftp server to serve ``/tftpboot``.
+#. Using xinetd to provide a tftp server setup to serve ``/tftpboot``.
+   Create or edit ``/etc/xinetd.d/tftp`` as below::
+
+    service tftp
+    {
+      protocol        = udp
+      port            = 69
+      socket_type     = dgram
+      wait            = yes
+      user            = root
+      server          = /usr/sbin/in.tftpd
+      server_args     = -v -v -v -v -v --map-file /tftpboot/map-file /tftpboot
+      disable         = no
+      # This is a workaround for Fedora, where TFTP will listen only on
+      # IPv6 endpoint, if IPv4 flag is not used.
+      flags           = IPv4
+    }
+
+   and restart xinetd service::
+
+    Ubuntu:
+        sudo service xinetd restart
+
+    Fedora:
+        sudo systemctl restart xinetd
 
 #. Copy the PXE image to ``/tftpboot``. The PXE image might be found at [1]_::
 
@@ -875,11 +888,6 @@ node(s) where ``ironic-conductor`` is running.
     echo 're ^/tftpboot/ /tftpboot/' >> /tftpboot/map-file
     echo 're ^(^/) /tftpboot/\1' >> /tftpboot/map-file
     echo 're ^([^/]) /tftpboot/\1' >> /tftpboot/map-file
-
-#. Enable tftp map file, modify ``/etc/xinetd.d/tftp`` as below and restart xinetd
-   service::
-
-    server_args = -v -v -v -v -v --map-file /tftpboot/map-file /tftpboot
 
 .. [1] On **Fedora/RHEL** the ``syslinux-tftpboot`` package already install
        the library modules and PXE image at ``/tftpboot``. If the TFTP server
@@ -1273,13 +1281,6 @@ The web console can be configured in Bare Metal service in the following way:
 
         #Additional append parameters for bare metal PXE boot. (string value)
         pxe_append_params = nofb nomodeset vga=normal console=tty0 console=ttyS0,115200n8
-
-   agent_* driver:
-
-        [agent]
-
-        #Additional append parameters for bare metal PXE boot. (string value)
-        agent_pxe_append_params = nofb nomodeset vga=normal console=tty0 console=ttyS0,115200n8
 
 * Configure node web console.
 
@@ -1876,76 +1877,11 @@ UUID interchangeably.
 .. _wiki_hostname: http://en.wikipedia.org/wiki/Hostname
 
 
-.. _inspection:
-
 Hardware Inspection
 -------------------
 
 Starting with the Kilo release, Bare Metal service supports hardware inspection
-that simplifies enrolling nodes.
-Inspection allows Bare Metal service to discover required node properties
-once required ``driver_info`` fields (for example, IPMI credentials) are set
-by an operator. Inspection will also create the Bare Metal service ports for the
-discovered ethernet MACs. Operators will have to manually delete the Bare Metal
-service ports for which physical media is not connected. This is required due
-to the `bug 1405131 <https://bugs.launchpad.net/ironic/+bug/1405131>`_.
-
-There are two kinds of inspection supported by Bare Metal service:
-
-#. Out-of-band inspection is currently implemented by iLO drivers, listed at
-   :ref:`ilo`.
-
-#. In-band inspection is performed by utilizing the ironic-inspector_ project.
-   This is supported by the following drivers::
-
-    pxe_drac
-    pxe_ipmitool
-    pxe_ipminative
-    pxe_ssh
-
-  This feature needs to be explicitly enabled in the configuration
-  by setting ``enabled = True`` in ``[inspector]`` section.
-  You must additionally install python-ironic-inspector-client_ to use
-  this functionality.
-  You must set ``service_url`` if the ironic-inspector service is
-  being run on a separate host from the ironic-conductor service, or is using
-  non-standard port.
-
-  In order to ensure that ports in Bare Metal service are synchronized with
-  NIC ports on the node, the following settings in the ironic-inspector
-  configuration file must be set::
-
-    [processing]
-    add_ports = all
-    keep_ports = present
-
-  .. note::
-    During Kilo cycle we used on older verions of Inspector called
-    ironic-discoverd_. Inspector is expected to be a mostly drop-in
-    replacement, and the same client library should be used to connect to both.
-
-    For Kilo, install ironic-discoverd_ of version 1.1.0 or higher
-    instead of python-ironic-inspector-client and use ``[discoverd]`` option
-    group in both Bare Metal service and ironic-discoverd configuration
-    files instead of ones provided above.
-
-Inspection can be initiated using node-set-provision-state.
-The node should be in MANAGEABLE state before inspection is initiated.
-
-* Move node to manageable state::
-
-    ironic node-set-provision-state <node_UUID> manage
-
-* Initiate inspection::
-
-    ironic node-set-provision-state <node_UUID> inspect
-
-.. note::
-    The above commands require the python-ironicclient_ to be version 0.5.0 or greater.
-
-.. _ironic-discoverd: https://pypi.python.org/pypi/ironic-discoverd
-.. _python-ironic-inspector-client: https://pypi.python.org/pypi/python-ironic-inspector-client
-.. _python-ironicclient: https://pypi.python.org/pypi/python-ironicclient
+that simplifies enrolling nodes - please see :ref:`inspection` for details.
 
 Specifying the disk for deployment
 ==================================
@@ -2013,6 +1949,72 @@ of the following ways:
 * `Using native SSL support in swift
   <http://docs.openstack.org/developer/swift/deployment_guide.html>`_
   (recommended only for testing purpose by swift).
+
+.. _EnableHTTPSinGlance:
+
+Enabling HTTPS in Image service
+===============================
+
+Ironic drivers usually use Image service during node provisioning. By default,
+image service does not use HTTPS, but it is required for secure communication.
+It can be enabled by making the following changes to ``/etc/glance/glance-api.conf``:
+
+#. `Configuring SSL support
+   <http://docs.openstack.org/developer/glance/configuring.html#configuring-ssl-support>`_
+
+#. Restart the glance-api service::
+
+    Fedora/RHEL7/CentOS7:
+        sudo systemctl restart openstack-glance-api
+
+    Debian/Ubuntu:
+        sudo service glance-api restart
+
+See the `Glance <http://docs.openstack.org/developer/glance/>`_ documentation,
+for more details on the Image service.
+
+Enabling HTTPS communication between Image service and Object storage
+=====================================================================
+
+This section describes the steps needed to enable secure HTTPS communication between
+Image service and Object storage when Object storage is used as the Backend.
+
+To enable secure HTTPS communication between Image service and Object storage follow these steps:
+
+#. :ref:`EnableHTTPSinSwift`.
+
+#.  `Configure Swift Storage Backend
+    <http://docs.openstack.org/developer/glance/configuring.html#configuring-the-swift-storage-backend>`_
+
+#. :ref:`EnableHTTPSinGlance`
+
+Enabling HTTPS communication between Image service and Bare Metal service
+=========================================================================
+
+This section describes the steps needed to enable secure HTTPS communication between
+Image service and Bare Metal service.
+
+To enable secure HTTPS communication between Bare Metal service and Image service follow these steps:
+
+#. Edit ``/etc/ironic/ironic.conf``::
+
+    [glance]
+    ...
+    glance_cafile=/path/to/certfile
+    glance_protocol=https
+    glance_api_insecure=False
+
+   .. note::
+      'glance_cafile' is a optional path to a CA certificate bundle to be used to validate the SSL certificate
+      served by Image service.
+
+#. Restart ironic-conductor service::
+
+    Fedora/RHEL7/CentOS7:
+        sudo systemctl restart openstack-ironic-conductor
+
+    Debian/Ubuntu:
+        sudo service ironic-conductor restart
 
 Using Bare Metal service as a standalone service
 ================================================
@@ -2189,6 +2191,11 @@ Enabling the configuration drive (configdrive)
 Starting with the Kilo release, the Bare Metal service supports exposing
 a configuration drive image to the instances.
 
+Configuration drive can store metadata and attaches to the instance when it
+boots. One use case for using the configuration drive is to expose a
+networking configuration when you do not use DHCP to assign IP addresses to
+instances.
+
 The configuration drive is usually used in conjunction with the Compute
 service, but the Bare Metal service also offers a standalone way of using it.
 The following sections will describe both methods.
@@ -2197,10 +2204,14 @@ The following sections will describe both methods.
 When used with Compute service
 ------------------------------
 
-To enable the configuration drive when deploying an instance, pass
-``--config-drive true`` parameter to the ``nova boot`` command, for example::
+To enable the configuration drive and passes user customized script when deploying an
+instance, pass ``--config-drive true`` parameter and ``--user-data`` to the
+``nova boot`` command, for example::
 
-    nova boot --config-drive true --flavor baremetal --image test-image instance-1
+    nova boot --config-drive true --flavor baremetal --image test-image --user-data ./my-script instance-1
+
+Then ``my-script`` is accessible from the configuration drive and could be
+performed automatically by cloud-init if it is integrated with the instance image.
 
 It's also possible to enable the configuration drive automatically on
 all instances by configuring the ``OpenStack Compute service`` to always
@@ -2222,7 +2233,7 @@ and provide the file or HTTP URL to the Bare Metal service.
 For the format of the configuration drive, Bare Metal service expects a
 ``gzipped`` and ``base64`` encoded ISO 9660 [*]_ file with a ``config-2``
 label. The
-`ironic client <https://github.com/openstack/python-ironicclient>`_
+`ironic client <http://docs.openstack.org/developer/python-ironicclient/>`_
 can generate a configuration drive in the `expected format`_. Just pass a
 directory path containing the files that will be injected into it via the
 ``--config-drive`` parameter of the ``node-set-provision-state`` command,
@@ -2314,7 +2325,7 @@ CoreOS tools
 
 #. Clone the ironic-python-agent_ project::
 
-    git clone https://github.com/openstack/ironic-python-agent
+    git clone https://git.openstack.org/openstack/ironic-python-agent
 
 #. Install the requirements::
 
@@ -2577,5 +2588,4 @@ following command.
     $ ironic node-set-maintenance $NODE_UUID off
 
 
-.. _diskimage-builder: https://github.com/openstack/diskimage-builder
-.. _ironic-python-agent: https://github.com/openstack/ironic-python-agent
+.. _ironic-python-agent: http://docs.openstack.org/developer/ironic-python-agent/

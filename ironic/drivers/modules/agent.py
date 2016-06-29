@@ -27,7 +27,6 @@ from ironic.common.i18n import _LI
 from ironic.common.i18n import _LW
 from ironic.common import image_service
 from ironic.common import images
-from ironic.common import paths
 from ironic.common import raid
 from ironic.common import states
 from ironic.common import utils
@@ -39,22 +38,8 @@ from ironic.drivers.modules import deploy_utils
 
 
 agent_opts = [
-    cfg.StrOpt('agent_pxe_append_params',
-               default='nofb nomodeset vga=normal',
-               help=_('DEPRECATED. Additional append parameters for '
-                      'baremetal PXE boot. This option is deprecated and '
-                      'will be removed in Mitaka release. Please use '
-                      '[pxe]pxe_append_params instead.')),
-    cfg.StrOpt('agent_pxe_config_template',
-               default=paths.basedir_def(
-                   'drivers/modules/agent_config.template'),
-               help=_('DEPRECATED. Template file for PXE configuration. '
-                      'This option is deprecated and will be removed '
-                      'in Mitaka release. Please use [pxe]pxe_config_template '
-                      'instead.')),
     cfg.BoolOpt('manage_agent_boot',
                 default=True,
-                deprecated_name='manage_tftp',
                 help=_('Whether Ironic will manage booting of the agent '
                        'ramdisk. If set to False, you will need to configure '
                        'your mechanism to allow booting the agent '

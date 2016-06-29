@@ -575,7 +575,7 @@ class TestListNodes(test_api_base.BaseApiTest):
         data = self.get_json('/nodes?associated=False&limit=2')
 
         self.assertThat(data['nodes'], HasLength(2))
-        self.assertTrue(data['nodes'][0]['uuid'] in unassociated_nodes)
+        self.assertIn(data['nodes'][0]['uuid'], unassociated_nodes)
 
     def test_next_link_with_association(self):
         self._create_association_test_nodes()
@@ -1086,24 +1086,6 @@ class TestPatch(test_api_base.BaseApiTest):
         self.assertEqual(http_client.BAD_REQUEST, response.status_code)
         self.assertTrue(response.json['error_message'])
 
-    def test_remove_instance_uuid_clean_backward_compat(self):
-        for state in (states.CLEANING, states.CLEANWAIT):
-            node = obj_utils.create_test_node(
-                self.context,
-                uuid=uuidutils.generate_uuid(),
-                provision_state=state,
-                target_provision_state=states.AVAILABLE)
-            self.mock_update_node.return_value = node
-            response = self.patch_json('/nodes/%s' % node.uuid,
-                                       [{'op': 'remove',
-                                         'path': '/instance_uuid'}])
-            self.assertEqual('application/json', response.content_type)
-            self.assertEqual(http_client.OK, response.status_code)
-            # NOTE(lucasagomes): instance_uuid is already removed as part of
-            # node's tear down, assert update has not been called. This test
-            # should be removed in the next cycle (Mitaka).
-            self.assertFalse(self.mock_update_node.called)
-
     def test_add_state_in_cleaning(self):
         node = obj_utils.create_test_node(
             self.context,
@@ -1256,17 +1238,48 @@ class TestPatch(test_api_base.BaseApiTest):
         self.assertEqual('application/json', response.content_type)
         self.assertEqual(http_client.OK, response.status_code)
 
-    def test_patch_add_name_invalid(self):
+    def _patch_add_name_invalid_or_reserved(self, name):
         self.mock_update_node.return_value = self.node_no_name
-        test_name = 'i am invalid'
         response = self.patch_json('/nodes/%s' % self.node_no_name.uuid,
                                    [{'path': '/name',
                                      'op': 'add',
-                                     'value': test_name}],
+                                     'value': name}],
                                    headers={api_base.Version.string: "1.10"},
                                    expect_errors=True)
         self.assertEqual('application/json', response.content_type)
         self.assertEqual(http_client.BAD_REQUEST, response.status_code)
+        self.assertTrue(response.json['error_message'])
+
+    def test_patch_add_name_invalid(self):
+        self._patch_add_name_invalid_or_reserved('i am invalid')
+
+    def test_patch_add_name_reserved(self):
+        reserved_names = api_utils.get_controller_reserved_names(
+            api_node.NodesController)
+        for name in reserved_names:
+            self._patch_add_name_invalid_or_reserved(name)
+
+    def test_patch_add_name_empty_invalid(self):
+        test_name = ''
+        response = self.patch_json('/nodes/%s' % self.node_no_name.uuid,
+                                   [{'path': '/name',
+                                     'op': 'add',
+                                     'value': test_name}],
+                                   headers={api_base.Version.string: "1.5"},
+                                   expect_errors=True)
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_code)
+        self.assertTrue(response.json['error_message'])
+
+    def test_patch_add_name_empty_not_acceptable(self):
+        test_name = ''
+        response = self.patch_json('/nodes/%s' % self.node_no_name.uuid,
+                                   [{'path': '/name',
+                                     'op': 'add',
+                                     'value': test_name}],
+                                   expect_errors=True)
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(http_client.NOT_ACCEPTABLE, response.status_code)
         self.assertTrue(response.json['error_message'])
 
     def test_patch_name_replace_ok(self):
@@ -1293,6 +1306,37 @@ class TestPatch(test_api_base.BaseApiTest):
         self.assertEqual(http_client.BAD_REQUEST, response.status_code)
         self.assertTrue(response.json['error_message'])
 
+    def test_patch_update_name_twice_both_invalid(self):
+        test_name_1 = 'Windows ME'
+        test_name_2 = 'Guido Van Error'
+        response = self.patch_json('/nodes/%s' % self.node.uuid,
+                                   [{'path': '/name',
+                                     'op': 'add',
+                                     'value': test_name_1},
+                                    {'path': '/name',
+                                     'op': 'replace',
+                                     'value': test_name_2}],
+                                   headers={api_base.Version.string: "1.5"},
+                                   expect_errors=True)
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_code)
+        self.assertIn(test_name_1, response.json['error_message'])
+
+    def test_patch_update_name_twice_second_invalid(self):
+        test_name = 'Guido Van Error'
+        response = self.patch_json('/nodes/%s' % self.node.uuid,
+                                   [{'path': '/name',
+                                     'op': 'add',
+                                     'value': 'node-0'},
+                                    {'path': '/name',
+                                     'op': 'replace',
+                                     'value': test_name}],
+                                   headers={api_base.Version.string: "1.5"},
+                                   expect_errors=True)
+        self.assertEqual('application/json', response.content_type)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_code)
+        self.assertIn(test_name, response.json['error_message'])
+
     def test_patch_duplicate_name(self):
         node = obj_utils.create_test_node(self.context,
                                           uuid=uuidutils.generate_uuid())
@@ -1308,7 +1352,7 @@ class TestPatch(test_api_base.BaseApiTest):
         self.assertEqual(http_client.CONFLICT, response.status_code)
         self.assertTrue(response.json['error_message'])
 
-    @mock.patch.object(api_node.NodesController, '_check_name_acceptable')
+    @mock.patch.object(api_node.NodesController, '_check_names_acceptable')
     def test_patch_name_remove_ok(self, cna_mock):
         self.mock_update_node.return_value = self.node
         response = self.patch_json('/nodes/%s' % self.node.uuid,
@@ -1379,6 +1423,34 @@ class TestPost(test_api_base.BaseApiTest):
         expected_location = '/v1/nodes/%s' % ndict['uuid']
         self.assertEqual(urlparse.urlparse(response.location).path,
                          expected_location)
+
+    def test_create_node_name_empty_invalid(self):
+        ndict = test_api_utils.post_get_test_node(name='')
+        response = self.post_json('/nodes', ndict,
+                                  headers={api_base.Version.string: "1.10"},
+                                  expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_int)
+        self.assertEqual('application/json', response.content_type)
+        self.assertTrue(response.json['error_message'])
+
+    def test_create_node_name_empty_not_acceptable(self):
+        ndict = test_api_utils.post_get_test_node(name='')
+        response = self.post_json('/nodes', ndict, expect_errors=True)
+        self.assertEqual(http_client.NOT_ACCEPTABLE, response.status_int)
+        self.assertEqual('application/json', response.content_type)
+        self.assertTrue(response.json['error_message'])
+
+    def test_create_node_reserved_name(self):
+        reserved_names = api_utils.get_controller_reserved_names(
+            api_node.NodesController)
+        for name in reserved_names:
+            ndict = test_api_utils.post_get_test_node(name=name)
+            response = self.post_json(
+                '/nodes', ndict, headers={api_base.Version.string: "1.10"},
+                expect_errors=True)
+            self.assertEqual(http_client.BAD_REQUEST, response.status_int)
+            self.assertEqual('application/json', response.content_type)
+            self.assertTrue(response.json['error_message'])
 
     def test_create_node_default_state_none(self):
         ndict = test_api_utils.post_get_test_node()
@@ -2094,6 +2166,108 @@ class TestPut(test_api_base.BaseApiTest):
         mock_rpcapi.assert_called_once_with(mock.ANY, self.node.uuid,
                                             clean_steps, 'test-topic')
 
+    def test_adopt_raises_error_before_1_17(self):
+        """Test that a lower API client cannot use the adopt verb"""
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['adopt']},
+                            headers={api_base.Version.string: "1.16"},
+                            expect_errors=True)
+        self.assertEqual(http_client.NOT_ACCEPTABLE, ret.status_code)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_adopt_from_manage(self, mock_dpa):
+        """Test that a node can be adopted from the manageable state"""
+        self.node.provision_state = states.MANAGEABLE
+        self.node.save()
+
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['adopt']},
+                            headers={api_base.Version.string: "1.17"})
+        self.assertEqual(http_client.ACCEPTED, ret.status_code)
+        self.assertEqual(b'', ret.body)
+        mock_dpa.assert_called_once_with(mock.ANY, self.node.uuid,
+                                         states.VERBS['adopt'],
+                                         'test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_adopt_from_adoptfail(self, mock_dpa):
+        """Test that a node in ADOPTFAIL can be adopted"""
+        self.node.provision_state = states.ADOPTFAIL
+        self.node.save()
+
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['adopt']},
+                            headers={api_base.Version.string: "1.17"})
+        self.assertEqual(http_client.ACCEPTED, ret.status_code)
+        self.assertEqual(b'', ret.body)
+        mock_dpa.assert_called_once_with(mock.ANY, self.node.uuid,
+                                         states.VERBS['adopt'],
+                                         'test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_adopt_from_active_fails(self, mock_dpa):
+        """Test that an ACTIVE node cannot be adopted"""
+        self.node.provision_state = states.ACTIVE
+        self.node.save()
+
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['adopt']},
+                            headers={api_base.Version.string: "1.17"},
+                            expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
+        self.assertEqual(0, mock_dpa.call_count)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_manage_from_adoptfail(self, mock_dpa):
+        """Test that a node can be sent to MANAGEABLE from ADOPTFAIL"""
+        self.node.provision_state = states.ADOPTFAIL
+        self.node.save()
+
+        ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                            {'target': states.VERBS['manage']},
+                            headers={api_base.Version.string: "1.17"})
+        self.assertEqual(http_client.ACCEPTED, ret.status_code)
+        self.assertEqual(b'', ret.body)
+        mock_dpa.assert_called_once_with(mock.ANY, self.node.uuid,
+                                         states.VERBS['manage'],
+                                         'test-topic')
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_bad_requests_in_adopting_state(self, mock_dpa):
+        """Test that a node in ADOPTING fails with invalid requests
+
+        Verify that an API request fails if the ACTIVE, REBUILD, or DELETED
+        state is requested by an API client when the node is in ADOPTING
+        state.
+        """
+        self.node.provision_state = states.ADOPTING
+        self.node.save()
+
+        for state in [states.ACTIVE, states.REBUILD, states.DELETED]:
+            ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                                {'target': state},
+                                expect_errors=True)
+            self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
+        self.assertEqual(0, mock_dpa.call_count)
+
+    @mock.patch.object(rpcapi.ConductorAPI, 'do_provisioning_action')
+    def test_bad_requests_in_adoption_failed_state(self, mock_dpa):
+        """Test that a node in ADOPTFAIL fails with invalid requests
+
+        Verify that an API request fails if the ACTIVE, REBUILD, or DELETED
+        state is requested by an API client when the node is in ADOPTFAIL
+        state.
+        """
+        self.node.provision_state = states.ADOPTFAIL
+        self.node.save()
+
+        for state in [states.ACTIVE, states.REBUILD, states.DELETED]:
+            ret = self.put_json('/nodes/%s/states/provision' % self.node.uuid,
+                                {'target': state},
+                                expect_errors=True)
+            self.assertEqual(http_client.BAD_REQUEST, ret.status_code)
+        self.assertEqual(0, mock_dpa.call_count)
+
     def test_set_console_mode_enabled(self):
         with mock.patch.object(rpcapi.ConductorAPI,
                                'set_console_mode') as mock_scm:
@@ -2344,59 +2518,59 @@ class TestPut(test_api_base.BaseApiTest):
 class TestCheckCleanSteps(base.TestCase):
     def test__check_clean_steps_not_list(self):
         clean_steps = {"step": "upgrade_firmware", "interface": "deploy"}
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                "not of type 'array'",
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               "not of type 'array'",
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_step_not_dict(self):
         clean_steps = ['clean step']
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                "not of type 'object'",
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               "not of type 'object'",
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_step_key_invalid(self):
         clean_steps = [{"step": "upgrade_firmware", "interface": "deploy",
                         "unknown": "upgrade_firmware"}]
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                'unexpected',
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               'unexpected',
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_step_missing_interface(self):
         clean_steps = [{"step": "upgrade_firmware"}]
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                'interface',
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               'interface',
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_step_missing_step_key(self):
         clean_steps = [{"interface": "deploy"}]
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                'step',
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               'step',
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_step_missing_step_value(self):
         clean_steps = [{"step": None, "interface": "deploy"}]
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                "not of type 'string'",
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               "not of type 'string'",
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_step_min_length_step_value(self):
         clean_steps = [{"step": "", "interface": "deploy"}]
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                'is too short',
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               'is too short',
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_step_interface_value_invalid(self):
         clean_steps = [{"step": "upgrade_firmware", "interface": "not"}]
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                'is not one of',
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               'is not one of',
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_step_args_value_invalid(self):
         clean_steps = [{"step": "upgrade_firmware", "interface": "deploy",
                         "args": "invalid args"}]
-        self.assertRaisesRegexp(exception.InvalidParameterValue,
-                                'args',
-                                api_node._check_clean_steps, clean_steps)
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               'args',
+                               api_node._check_clean_steps, clean_steps)
 
     def test__check_clean_steps_valid(self):
         clean_steps = [{"step": "upgrade_firmware", "interface": "deploy"}]

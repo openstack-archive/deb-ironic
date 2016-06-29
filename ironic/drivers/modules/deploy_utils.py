@@ -17,7 +17,6 @@
 import contextlib
 import os
 import re
-import socket
 import time
 
 from ironic_lib import disk_utils
@@ -49,28 +48,46 @@ from ironic import objects
 
 deploy_opts = [
     cfg.StrOpt('http_url',
-               help='ironic-conductor node\'s HTTP server URL. '
-                    'Example: http://192.1.2.3:8080',
-               deprecated_group='pxe'),
+               help=_("ironic-conductor node's HTTP server URL. "
+                      "Example: http://192.1.2.3:8080")),
     cfg.StrOpt('http_root',
                default='/httpboot',
-               help='ironic-conductor node\'s HTTP root path.',
-               deprecated_group='pxe'),
-    # TODO(rameshg87): Remove the deprecated names for the below two options in
-    # Mitaka release.
+               help=_("ironic-conductor node's HTTP root path.")),
     cfg.IntOpt('erase_devices_priority',
-               deprecated_name='agent_erase_devices_priority',
-               deprecated_group='agent',
                help=_('Priority to run in-band erase devices via the Ironic '
                       'Python Agent ramdisk. If unset, will use the priority '
                       'set in the ramdisk (defaults to 10 for the '
                       'GenericHardwareManager). If set to 0, will not run '
                       'during cleaning.')),
-    cfg.IntOpt('erase_devices_iterations',
-               deprecated_name='agent_erase_devices_iterations',
-               deprecated_group='agent',
+    # TODO(mmitchell): Remove the deprecated name/group during Ocata cycle.
+    cfg.IntOpt('shred_random_overwrite_iterations',
+               deprecated_name='erase_devices_iterations',
+               deprecated_group='deploy',
                default=1,
-               help=_('Number of iterations to be run for erasing devices.')),
+               min=0,
+               help=_('During shred, overwrite all block devices N times with '
+                      'random data. This is only used if a device could not '
+                      'be ATA Secure Erased. Defaults to 1.')),
+    cfg.BoolOpt('shred_final_overwrite_with_zeros',
+                default=True,
+                help=_("Whether to write zeros to a node's block devices "
+                       "after writing random data. This will write zeros to "
+                       "the device even when "
+                       "deploy.shred_random_overwrite_interations is 0. This "
+                       "option is only used if a device could not be ATA "
+                       "Secure Erased. Defaults to True.")),
+    cfg.BoolOpt('continue_if_disk_secure_erase_fails',
+                default=False,
+                help=_('Defines what to do if an ATA secure erase operation '
+                       'fails during cleaning in the Ironic Python Agent. '
+                       'If False, the cleaning operation will fail and the '
+                       'node will be put in ``clean failed`` state. '
+                       'If True, shred will be invoked and cleaning will '
+                       'continue.')),
+    cfg.BoolOpt('power_off_after_deploy_failure',
+                default=True,
+                help=_('Whether to power off a node after deploy failure. '
+                       'Defaults to True.')),
 ]
 CONF = cfg.CONF
 CONF.register_opts(deploy_opts, group='deploy')
@@ -98,6 +115,19 @@ SUPPORTED_CAPABILITIES = {
 }
 
 DISK_LAYOUT_PARAMS = ('root_gb', 'swap_mb', 'ephemeral_gb')
+
+
+def warn_about_unsafe_shred_parameters():
+    iterations = CONF.deploy.shred_random_overwrite_iterations
+    overwrite_with_zeros = CONF.deploy.shred_final_overwrite_with_zeros
+    if iterations == 0 and overwrite_with_zeros is False:
+        LOG.warning(_LW('With shred_random_overwrite_iterations set to 0 and '
+                        'shred_final_overwrite_with_zeros set to False, disks '
+                        'may NOT be shredded at all, unless they support ATA '
+                        'Secure Erase. This is a possible SECURITY ISSUE!'))
+
+
+warn_about_unsafe_shred_parameters()
 
 # All functions are called from deploy() directly or indirectly.
 # They are split for stub-out.
@@ -286,16 +316,6 @@ def switch_pxe_config(path, root_uuid_or_disk_id, boot_mode,
     _replace_boot_line(path, boot_mode, is_whole_disk_image, trusted_boot)
 
 
-def notify(address, port):
-    """Notify a node that it becomes ready to reboot."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.connect((address, port))
-        s.send('done')
-    finally:
-        s.close()
-
-
 def get_dev(address, port, iqn, lun):
     """Returns a device path for given parameters."""
     dev = ("/dev/disk/by-path/ip-%s:%s-iscsi-%s-lun-%s"
@@ -412,22 +432,6 @@ def _iscsi_setup_and_handle_errors(address, port, iqn, lun):
         delete_iscsi(address, port, iqn)
 
 
-def notify_ramdisk_to_proceed(address):
-    """Notifies the ramdisk waiting for instructions from Ironic.
-
-    DIB ramdisk (from init script) makes vendor passhthrus and listens
-    on port 10000 for Ironic to notify back the completion of the task.
-    This method connects to port 10000 of the bare metal running the
-    ramdisk and then sends some data to notify the ramdisk to proceed
-    with it's next task.
-
-    :param address: The IP address of the node.
-    """
-    # Ensure the node started netcat on the port after POST the request.
-    time.sleep(3)
-    notify(address, 10000)
-
-
 def check_for_missing_params(info_dict, error_msg, param_prefix=''):
     """Check for empty params in the provided dictionary.
 
@@ -492,15 +496,15 @@ def set_failed_state(task, msg):
                 % {'node': node.uuid, 'state': node.provision_state})
         LOG.exception(msg2)
 
-    try:
-        manager_utils.node_power_action(task, states.POWER_OFF)
-    except Exception:
-        msg2 = (_LE('Node %s failed to power off while handling deploy '
-                    'failure. This may be a serious condition. Node '
-                    'should be removed from Ironic or put in maintenance '
-                    'mode until the problem is resolved.') % node.uuid)
-        LOG.exception(msg2)
-
+    if CONF.deploy.power_off_after_deploy_failure:
+        try:
+            manager_utils.node_power_action(task, states.POWER_OFF)
+        except Exception:
+            msg2 = (_LE('Node %s failed to power off while handling deploy '
+                        'failure. This may be a serious condition. Node '
+                        'should be removed from Ironic or put in maintenance '
+                        'mode until the problem is resolved.') % node.uuid)
+            LOG.exception(msg2)
     # NOTE(deva): node_power_action() erases node.last_error
     #             so we need to set it here.
     node.last_error = msg
@@ -623,7 +627,7 @@ def agent_execute_clean_step(task, step):
 
 
 def agent_add_clean_params(task):
-    """Add required config parameters to node's driver_interal_info.
+    """Add required config parameters to node's driver_internal_info.
 
     Adds the required conf options to node's driver_internal_info.
     It is Required to pass the information to IPA.
@@ -631,8 +635,14 @@ def agent_add_clean_params(task):
     :param task: a TaskManager instance.
     """
     info = task.node.driver_internal_info
-    passes = CONF.deploy.erase_devices_iterations
-    info['agent_erase_devices_iterations'] = passes
+
+    random_iterations = CONF.deploy.shred_random_overwrite_iterations
+    info['agent_erase_devices_iterations'] = random_iterations
+    zeroize = CONF.deploy.shred_final_overwrite_with_zeros
+    info['agent_erase_devices_zeroize'] = zeroize
+    erase_fallback = CONF.deploy.continue_if_disk_secure_erase_fails
+    info['agent_continue_if_ata_erase_failed'] = erase_fallback
+
     task.node.driver_internal_info = info
     task.node.save()
 
@@ -981,6 +991,8 @@ def build_agent_options(node):
         # NOTE: The below entry is a temporary workaround for bug/1433812
         'coreos.configdrive': 0,
     }
+    # TODO(dtantsur): deprecate in favor of reading root hints directly from a
+    # node record.
     root_device = parse_root_device_hints(node)
     if root_device:
         agent_config_opts['root_device'] = root_device
@@ -1017,15 +1029,6 @@ def prepare_inband_cleaning(task, manage_boot=True):
 
     if manage_boot:
         ramdisk_opts = build_agent_options(task.node)
-
-        # TODO(rameshg87): Below code is to make sure that bash ramdisk
-        # invokes pass_deploy_info vendor passthru when it is booted
-        # for cleaning. Remove the below code once we stop supporting
-        # bash ramdisk in Ironic. Do a late import to avoid circular
-        # import.
-        from ironic.drivers.modules import iscsi_deploy
-        ramdisk_opts.update(
-            iscsi_deploy.build_deploy_ramdisk_options(task.node))
         task.driver.boot.prepare_ramdisk(task, ramdisk_opts)
 
     manager_utils.node_power_action(task, states.REBOOT)
@@ -1120,8 +1123,6 @@ def parse_instance_info(node):
                   " in node's instance_info")
     check_for_missing_params(i_info, error_msg)
 
-    # Internal use only
-    i_info['deploy_key'] = info.get('deploy_key')
     i_info['swap_mb'] = int(info.get('swap_mb', 0))
     i_info['ephemeral_gb'] = info.get('ephemeral_gb', 0)
     err_msg_invalid = _("Cannot validate parameter for driver deploy. "

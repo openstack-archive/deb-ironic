@@ -19,6 +19,8 @@ import requests
 
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common.i18n import _LE
+from ironic.common.i18n import _LW
 
 agent_opts = [
     cfg.StrOpt('agent_api_version',
@@ -32,6 +34,8 @@ CONF.register_opts(agent_opts, group='agent')
 
 LOG = log.getLogger(__name__)
 
+DEFAULT_IPA_PORTAL_PORT = 3260
+
 
 class AgentClient(object):
     """Client for interacting with nodes via a REST API."""
@@ -41,10 +45,6 @@ class AgentClient(object):
 
     def _get_command_url(self, node):
         agent_url = node.driver_internal_info.get('agent_url')
-        if not agent_url:
-            # (lintan) Keep backwards compatible with booted nodes before this
-            # change. Remove this after Kilo.
-            agent_url = node.driver_info.get('agent_url')
         if not agent_url:
             raise exception.IronicException(_('Agent driver requires '
                                               'agent_url in '
@@ -130,13 +130,71 @@ class AgentClient(object):
                              params=params,
                              wait=wait)
 
-    def start_iscsi_target(self, node, iqn):
-        """Expose the node's disk as an ISCSI target."""
+    def start_iscsi_target(self, node, iqn,
+                           portal_port=DEFAULT_IPA_PORTAL_PORT,
+                           wipe_disk_metadata=False):
+        """Expose the node's disk as an ISCSI target.
+
+        :param node: an Ironic node object
+        :param iqn: iSCSI target IQN
+        :param portal_port: iSCSI portal port
+        :param wipe_disk_metadata: True if the agent should wipe first the
+        disk magic strings like the partition table, RAID or filesystem
+        signature.
+        """
         params = {'iqn': iqn}
-        return self._command(node=node,
-                             method='iscsi.start_iscsi_target',
-                             params=params,
-                             wait=True)
+        # This is to workaround passing default values to an old ramdisk
+        # TODO(vdrok): remove this workaround in Ocata release
+        if portal_port != DEFAULT_IPA_PORTAL_PORT:
+            params['portal_port'] = portal_port
+        if wipe_disk_metadata:
+            params['wipe_disk_metadata'] = wipe_disk_metadata
+        while True:
+            result = self._command(node=node,
+                                   method='iscsi.start_iscsi_target',
+                                   params=params,
+                                   wait=True)
+            if (result['command_status'] == 'FAILED' and
+                    result['command_error']['type'] == 'TypeError'):
+                message = result['command_error']['message']
+                if 'wipe_disk_metadata' in message:
+                    # wipe_disk_metadata was introduced after portal_port, so
+                    # portal_port might still work, retry
+                    LOG.warning(_LW(
+                        "The ironic python agent in the ramdisk on node "
+                        "%(node)s failed to start the iSCSI target because "
+                        "it doesn't support wipe_disk_metadata parameter, "
+                        "retrying without passing it. If you need to have "
+                        "node's root disk wiped before exposing it via iSCSI, "
+                        "or because https://bugs.launchpad.net/bugs/1550604 "
+                        "affects you, please update the ramdisk to use "
+                        "version >= 1.3 (Newton, or higher) of ironic python "
+                        "agent."), {'node': node.uuid})
+                    # NOTE(vdrok): This is needed to make unit test's
+                    # assert_has_calls work, otherwise it will report it was
+                    # called without wipe_disk_metadata both times as "params"
+                    # dictionary is stored by reference in mock
+                    params = params.copy()
+                    del params['wipe_disk_metadata']
+                    continue
+                elif 'portal_port' in message:
+                    # It means that ironic is configured in a way that the
+                    # deploy driver has requested some things not available
+                    # on the old ramdisk. Since the user specified a
+                    # non-default portal_port, we do not try again with the
+                    # default value. Instead, the user needs to take some
+                    # explicit action.
+                    LOG.error(_LE(
+                        "The ironic python agent in the ramdisk on node "
+                        "%(node)s failed to start the iSCSI target because "
+                        "the agent doesn't support portal_port parameter. "
+                        "Please update the ramdisk to use version >= 1.3 "
+                        "(Newton, or higher) of ironic python agent, or use "
+                        "the default value of [iscsi]portal_port config "
+                        "option."), {'node': node.uuid})
+            # In all the other cases, it is a usual error, no additional action
+            # required, break from the loop returning the result
+            return result
 
     def install_bootloader(self, node, root_uuid, efi_system_part_uuid=None):
         """Install a boot loader on the image."""

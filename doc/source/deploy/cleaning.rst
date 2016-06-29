@@ -112,9 +112,9 @@ is an ordered list of cleaning steps. A cleaning step is represented by a
 dictionary (JSON), in the form::
 
   {
-      'interface': <interface>,
-      'step': <name of cleaning step>,
-      'args': {<arg1>: <value1>, ..., <argn>: <valuen>}
+      "interface": "<interface>",
+      "step": "<name of cleaning step>",
+      "args": {"<arg1>": "<value1>", ..., "<argn>": <valuen>}
   }
 
 The 'interface' and 'step' keys are required for all steps. If a cleaning step
@@ -138,7 +138,7 @@ An example of the request body for this API::
     "clean_steps": [{
       "interface": "raid",
       "step": "create_configuration",
-      "args": {"create_nonroot_volumes": "False"}
+      "args": {"create_nonroot_volumes": false}
     },
     {
       "interface": "deploy",
@@ -206,9 +206,6 @@ ramdisk used with an agent_* driver supports in-band cleaning. By default,
 ironic-python-agent ships with a minimal cleaning configuration, only erasing
 disks. However, with this ramdisk, you can add your own cleaning steps and/or
 override default cleaning steps with a custom Hardware Manager.
-
-There is currently no support for in-band cleaning using the ironic pxe
-ramdisk.
 
 Out-of-band
 -----------

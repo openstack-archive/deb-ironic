@@ -19,7 +19,6 @@
 The Ironic Management Service
 """
 
-import logging
 import sys
 
 from oslo_config import cfg
@@ -32,7 +31,7 @@ CONF = cfg.CONF
 
 
 def main():
-    # Pase config file and command line options, then start logging
+    # Parse config file and command line options, then start logging
     ironic_service.prepare_service(sys.argv)
 
     mgr = ironic_service.RPCService(CONF.host,
@@ -41,7 +40,7 @@ def main():
 
     LOG = log.getLogger(__name__)
     LOG.debug("Configuration:")
-    CONF.log_opt_values(LOG, logging.DEBUG)
+    CONF.log_opt_values(LOG, log.DEBUG)
 
     launcher = service.launch(CONF, mgr)
     launcher.wait()

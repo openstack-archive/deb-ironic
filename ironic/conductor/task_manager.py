@@ -96,7 +96,6 @@ raised in the background thread.):
 
 import futurist
 from oslo_config import cfg
-from oslo_context import context as oslo_context
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import timeutils
@@ -137,7 +136,7 @@ def require_exclusive_lock(f):
             raise exception.ExclusiveLockRequired()
         # NOTE(lintan): This is a workaround to set the context of async tasks,
         # which should contain an exclusive lock.
-        ensure_thread_contain_context(task.context)
+        task.context.ensure_thread_contain_context()
         return f(*args, **kwargs)
     return wrapper
 
@@ -156,23 +155,9 @@ def acquire(context, node_id, shared=False, driver_name=None,
 
     """
     # NOTE(lintan): This is a workaround to set the context of periodic tasks.
-    ensure_thread_contain_context(context)
+    context.ensure_thread_contain_context()
     return TaskManager(context, node_id, shared=shared,
                        driver_name=driver_name, purpose=purpose)
-
-
-def ensure_thread_contain_context(context):
-    """Ensure threading contains context
-
-    For async/periodic tasks, the context of local thread is missing.
-    Set it with request context and this is useful to log the request_id
-    in log messages.
-
-    :param context: Request context
-    """
-    if oslo_context.get_current():
-        return
-    context.update_store()
 
 
 class TaskManager(object):
@@ -273,6 +258,9 @@ class TaskManager(object):
 
         Also reloads node object from the database.
         Does nothing if lock is already exclusive.
+
+        :raises: NodeLocked if an exclusive lock remains on the node after
+                            "node_locked_retry_attempts"
         """
         if self.shared:
             LOG.debug('Upgrading shared lock on node %(uuid)s for %(purpose)s '
@@ -449,7 +437,7 @@ class TaskManager(object):
                 # also makes it easier to test.
                 fut.add_done_callback(self._thread_release_resources)
                 # Don't unlock! The unlock will occur when the
-                # thread finshes.
+                # thread finishes.
                 return
             except Exception as e:
                 with excutils.save_and_reraise_exception():

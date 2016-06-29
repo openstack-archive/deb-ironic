@@ -24,14 +24,13 @@ import inspect
 import json
 import os
 
-from futurist import periodics
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 import six
 
 from ironic.common import exception
-from ironic.common.i18n import _, _LE, _LW
+from ironic.common.i18n import _, _LE
 from ironic.common import raid
 
 LOG = logging.getLogger(__name__)
@@ -414,10 +413,8 @@ class BootInterface(object):
             Different implementations might want to boot the ramdisk in
             different ways by passing parameters to them.  For example,
 
-            - When DIB ramdisk is booted to deploy a node, it takes the
-              parameters iscsi_target_iqn, deployment_id, ironic_api_url, etc.
-            - When Agent ramdisk is booted to deploy a node, it takes the
-              parameters ipa-driver-name, ipa-api-url, root_device, etc.
+            When Agent ramdisk is booted to deploy a node, it takes the
+            parameters ipa-driver-name, ipa-api-url, root_device, etc.
 
             Other implementations can make use of ramdisk_params to pass such
             information.  Different implementations of boot interface will
@@ -544,6 +541,8 @@ class ConsoleInterface(object):
     def start_console(self, task):
         """Start a remote console for the task's node.
 
+        This method should not raise an exception if console already started.
+
         :param task: a TaskManager instance containing the node to act on.
         """
 
@@ -609,7 +608,7 @@ VendorMetadata = collections.namedtuple('VendorMetadata', ['method',
 
 
 def _passthru(http_methods, method=None, async=True, driver_passthru=False,
-              description=None, attach=False):
+              description=None, attach=False, require_exclusive_lock=True):
     """A decorator for registering a function as a passthru function.
 
     Decorator ensures function is ready to catch any ironic exceptions
@@ -635,7 +634,12 @@ def _passthru(http_methods, method=None, async=True, driver_passthru=False,
                    value should be returned in the response body.
                    Defaults to False.
     :param description: a string shortly describing what the method does.
-
+    :param require_exclusive_lock: Boolean value. Only valid for node passthru
+                                   methods. If True, lock the node before
+                                   validate() and invoking the vendor method.
+                                   The node remains locked during execution
+                                   for a synchronous passthru method. If False,
+                                   don't lock the node. Defaults to True.
     """
     def handle_passthru(func):
         api_method = method
@@ -651,6 +655,7 @@ def _passthru(http_methods, method=None, async=True, driver_passthru=False,
         if driver_passthru:
             func._driver_metadata = metadata
         else:
+            metadata[1]['require_exclusive_lock'] = require_exclusive_lock
             func._vendor_metadata = metadata
 
         passthru_logmessage = _LE('vendor_passthru failed with method %s')
@@ -671,9 +676,10 @@ def _passthru(http_methods, method=None, async=True, driver_passthru=False,
 
 
 def passthru(http_methods, method=None, async=True, description=None,
-             attach=False):
+             attach=False, require_exclusive_lock=True):
     return _passthru(http_methods, method, async, driver_passthru=False,
-                     description=description, attach=attach)
+                     description=description, attach=attach,
+                     require_exclusive_lock=require_exclusive_lock)
 
 
 def driver_passthru(http_methods, method=None, async=True, description=None,
@@ -1133,43 +1139,3 @@ def clean_step(priority, abortable=False, argsinfo=None):
         func._clean_step_argsinfo = argsinfo
         return func
     return decorator
-
-
-def driver_periodic_task(**kwargs):
-    """Decorator for a driver-specific periodic task.
-
-    Deprecated, please use futurist directly.
-    Example::
-
-        from futurist import periodics
-
-        class MyDriver(base.BaseDriver):
-            @periodics.periodic(spacing=42)
-            def task(self, manager, context):
-                # do some job
-
-    :param kwargs: arguments to pass to @periodics.periodic
-    """
-    LOG.warning(_LW('driver_periodic_task decorator is deprecated, please '
-                    'use futurist.periodics.periodic directly'))
-    # Previously we accepted more arguments, make a backward compatibility
-    # layer for out-of-tree drivers.
-    new_kwargs = {}
-    for arg in ('spacing', 'enabled', 'run_immediately'):
-        try:
-            new_kwargs[arg] = kwargs.pop(arg)
-        except KeyError:
-            pass
-
-    # NOTE(jroll) this is here to avoid a circular import when a module
-    # imports ironic.common.service. Normally I would balk at this, but this
-    # option is deprecared for removal and this code only runs at startup.
-    CONF.import_opt('periodic_interval', 'ironic.common.service')
-    new_kwargs.setdefault('spacing', CONF.periodic_interval)
-
-    if kwargs:
-        LOG.warning(_LW('The following arguments are not supported by '
-                        'futurist.periodics.periodic and are ignored: %s'),
-                    ', '.join(kwargs))
-
-    return periodics.periodic(**new_kwargs)

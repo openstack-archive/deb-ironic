@@ -50,13 +50,13 @@ class SSHValidateParametersTestCase(db_base.DbTestCase):
             driver='fake_ssh',
             driver_info=db_utils.get_test_ssh_info('password'))
         info = ssh._parse_driver_info(node)
-        self.assertIsNotNone(info.get('host'))
-        self.assertIsNotNone(info.get('username'))
-        self.assertIsNotNone(info.get('password'))
-        self.assertIsNotNone(info.get('port'))
-        self.assertIsNotNone(info.get('virt_type'))
-        self.assertIsNotNone(info.get('cmd_set'))
-        self.assertIsNotNone(info.get('uuid'))
+        self.assertIsNotNone(info['host'])
+        self.assertIsNotNone(info['username'])
+        self.assertIsNotNone(info['password'])
+        self.assertIsNotNone(info['port'])
+        self.assertIsNotNone(info['virt_type'])
+        self.assertIsNotNone(info['cmd_set'])
+        self.assertIsNotNone(info['uuid'])
 
     def test__parse_driver_info_good_key(self):
         # make sure we get back the expected things
@@ -65,13 +65,13 @@ class SSHValidateParametersTestCase(db_base.DbTestCase):
             driver='fake_ssh',
             driver_info=db_utils.get_test_ssh_info('key'))
         info = ssh._parse_driver_info(node)
-        self.assertIsNotNone(info.get('host'))
-        self.assertIsNotNone(info.get('username'))
-        self.assertIsNotNone(info.get('key_contents'))
-        self.assertIsNotNone(info.get('port'))
-        self.assertIsNotNone(info.get('virt_type'))
-        self.assertIsNotNone(info.get('cmd_set'))
-        self.assertIsNotNone(info.get('uuid'))
+        self.assertIsNotNone(info['host'])
+        self.assertIsNotNone(info['username'])
+        self.assertIsNotNone(info['key_contents'])
+        self.assertIsNotNone(info['port'])
+        self.assertIsNotNone(info['virt_type'])
+        self.assertIsNotNone(info['cmd_set'])
+        self.assertIsNotNone(info['uuid'])
 
     def test__parse_driver_info_good_file(self):
         # make sure we get back the expected things
@@ -85,13 +85,13 @@ class SSHValidateParametersTestCase(db_base.DbTestCase):
             driver='fake_ssh',
             driver_info=d_info)
         info = ssh._parse_driver_info(node)
-        self.assertIsNotNone(info.get('host'))
-        self.assertIsNotNone(info.get('username'))
-        self.assertIsNotNone(info.get('key_filename'))
-        self.assertIsNotNone(info.get('port'))
-        self.assertIsNotNone(info.get('virt_type'))
-        self.assertIsNotNone(info.get('cmd_set'))
-        self.assertIsNotNone(info.get('uuid'))
+        self.assertIsNotNone(info['host'])
+        self.assertIsNotNone(info['username'])
+        self.assertIsNotNone(info['key_filename'])
+        self.assertIsNotNone(info['port'])
+        self.assertIsNotNone(info['virt_type'])
+        self.assertIsNotNone(info['cmd_set'])
+        self.assertIsNotNone(info['uuid'])
 
     def test__parse_driver_info_bad_file(self):
         # A filename that doesn't exist errors.
@@ -155,16 +155,6 @@ class SSHValidateParametersTestCase(db_base.DbTestCase):
         self.assertRaises(exception.InvalidParameterValue,
                           ssh._parse_driver_info,
                           node)
-
-    def test__normalize_mac_string(self):
-        mac_raw = "0A:1B-2C-3D:4F"
-        mac_clean = ssh._normalize_mac(mac_raw)
-        self.assertEqual("0a1b2c3d4f", mac_clean)
-
-    def test__normalize_mac_unicode(self):
-        mac_raw = u"0A:1B-2C-3D:4F"
-        mac_clean = ssh._normalize_mac(mac_raw)
-        self.assertEqual("0a1b2c3d4f", mac_clean)
 
     def test__parse_driver_info_with_custom_libvirt_uri(self):
         CONF.set_override('libvirt_uri', 'qemu:///foo', 'ssh')
@@ -783,6 +773,34 @@ class SSHDriverTestCase(db_base.DbTestCase):
                         '--boot1 net') % fake_name
         mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
 
+    @mock.patch.object(ssh, '_get_power_status', autospec=True)
+    @mock.patch.object(ssh, '_get_connection', autospec=True)
+    @mock.patch.object(ssh, '_get_hosts_name_for_node', autospec=True)
+    @mock.patch.object(ssh, '_ssh_execute', autospec=True)
+    def test_management_interface_set_boot_device_vbox_with_power_on(
+            self, mock_exc, mock_h, mock_get_conn, mock_get_power):
+        fake_name = 'fake-name'
+        mock_h.return_value = fake_name
+        mock_get_conn.return_value = self.sshclient
+        # NOTE(jroll) _power_off calls _get_power_state twice
+        mock_get_power.side_effect = [
+            states.POWER_ON, states.POWER_ON, states.POWER_OFF
+        ]
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node['driver_info']['ssh_virt_type'] = 'vbox'
+            task.node['driver_info']['vbox_use_headless'] = True
+            self.driver.management.set_boot_device(task, boot_devices.PXE)
+
+        expected_cmds = [
+            mock.call(mock.ANY,
+                      'LC_ALL=C /usr/bin/VBoxManage '
+                      'controlvm %s poweroff' % fake_name),
+            mock.call(mock.ANY,
+                      'LC_ALL=C /usr/bin/VBoxManage '
+                      'modifyvm %s --boot1 net' % fake_name)
+        ]
+        self.assertEqual(expected_cmds, mock_exc.call_args_list)
+
     @mock.patch.object(ssh, '_get_connection', autospec=True)
     @mock.patch.object(ssh, '_get_hosts_name_for_node', autospec=True)
     @mock.patch.object(ssh, '_ssh_execute', autospec=True)
@@ -1015,6 +1033,40 @@ class SSHDriverTestCase(db_base.DbTestCase):
             self.driver.power.set_power_state(task, states.POWER_OFF)
         expected_cmd = ("LC_ALL=C /opt/xensource/bin/xe "
                         "vm-shutdown uuid=fakevm force=true")
+        mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
+
+    @mock.patch.object(ssh, '_get_connection', autospec=True)
+    @mock.patch.object(ssh, '_get_hosts_name_for_node', autospec=True)
+    @mock.patch.object(ssh, '_ssh_execute', autospec=True)
+    @mock.patch.object(ssh, '_get_power_status', autospec=True)
+    def test_start_command_vbox(self, mock_power, mock_exc, mock_h,
+                                mock_get_conn):
+        mock_power.side_effect = [states.POWER_OFF, states.POWER_ON]
+        nodename = 'fakevm'
+        mock_h.return_value = nodename
+        mock_get_conn.return_value = self.sshclient
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node['driver_info']['ssh_virt_type'] = 'vbox'
+            self.driver.power.set_power_state(task, states.POWER_ON)
+        expected_cmd = 'LC_ALL=C /usr/bin/VBoxManage startvm fakevm'
+        mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
+
+    @mock.patch.object(ssh, '_get_connection', autospec=True)
+    @mock.patch.object(ssh, '_get_hosts_name_for_node', autospec=True)
+    @mock.patch.object(ssh, '_ssh_execute', autospec=True)
+    @mock.patch.object(ssh, '_get_power_status', autospec=True)
+    def test_start_command_vbox_headless(self, mock_power, mock_exc, mock_h,
+                                         mock_get_conn):
+        mock_power.side_effect = [states.POWER_OFF, states.POWER_ON]
+        nodename = 'fakevm'
+        mock_h.return_value = nodename
+        mock_get_conn.return_value = self.sshclient
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node['driver_info']['ssh_virt_type'] = 'vbox'
+            task.node['driver_info']['vbox_use_headless'] = True
+            self.driver.power.set_power_state(task, states.POWER_ON)
+        expected_cmd = ('LC_ALL=C /usr/bin/VBoxManage '
+                        'startvm fakevm --type headless')
         mock_exc.assert_called_once_with(mock.ANY, expected_cmd)
 
     def test_management_interface_validate_good(self):

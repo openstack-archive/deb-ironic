@@ -18,12 +18,12 @@ import gettext
 import iso8601
 
 import mock
-from oslo_context import context
 from oslo_versionedobjects import base as object_base
 from oslo_versionedobjects import exception as object_exception
 from oslo_versionedobjects import fixture as object_fixture
 import six
 
+from ironic.common import context
 from ironic.objects import base
 from ironic.objects import fields
 from ironic.tests import base as test_base
@@ -176,7 +176,7 @@ class _TestObject(object):
             fields = {'foobar': fields.IntegerField()}
         obj = Foo(self.context)
 
-        self.assertRaisesRegexp(
+        self.assertRaisesRegex(
             NotImplementedError, "Cannot load 'foobar' in the base class",
             getattr, obj, 'foobar')
 
@@ -198,7 +198,7 @@ class _TestObject(object):
         obj.foo = 123
         self.assertEqual(set(['foo']), obj.obj_what_changed())
         primitive = obj.obj_to_primitive()
-        self.assertTrue('ironic_object.changes' in primitive)
+        self.assertIn('ironic_object.changes', primitive)
         obj2 = MyObj.obj_from_primitive(primitive)
         self.assertEqual(set(['foo']), obj2.obj_what_changed())
         obj2.obj_reset_changes()
@@ -292,10 +292,10 @@ class _TestObject(object):
 
     def test_contains(self):
         obj = MyObj(self.context)
-        self.assertFalse('foo' in obj)
+        self.assertNotIn('foo', obj)
         obj.foo = 1
-        self.assertTrue('foo' in obj)
-        self.assertFalse('does_not_exist' in obj)
+        self.assertIn('foo', obj)
+        self.assertNotIn('does_not_exist', obj)
 
     def test_obj_attr_is_set(self):
         obj = MyObj(self.context, foo=1)
@@ -434,7 +434,7 @@ class TestObjectSerializer(test_base.TestCase):
         ser = base.IronicObjectSerializer()
         obj = MyObj(self.context)
         primitive = ser.serialize_entity(self.context, obj)
-        self.assertTrue('ironic_object.name' in primitive)
+        self.assertIn('ironic_object.name', primitive)
         obj2 = ser.deserialize_entity(self.context, primitive)
         self.assertIsInstance(obj2, MyObj)
         self.assertEqual(self.context, obj2._context)

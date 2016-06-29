@@ -16,6 +16,7 @@ import mock
 
 from oslo_config import cfg
 from oslo_utils import importutils
+from oslo_utils import uuidutils
 
 from ironic.common import exception
 from ironic.conductor import task_manager
@@ -39,7 +40,7 @@ class CIMCBaseTestCase(db_base.DbTestCase):
             self.context,
             driver='fake_cimc',
             driver_info=db_utils.get_test_cimc_info(),
-            instance_uuid="fake_uuid")
+            instance_uuid=uuidutils.generate_uuid())
         CONF.set_override('max_retry', 2, 'cimc')
         CONF.set_override('action_interval', 0, 'cimc')
 
@@ -49,9 +50,9 @@ class ParseDriverInfoTestCase(CIMCBaseTestCase):
     def test_parse_driver_info(self):
         info = cimc_common.parse_driver_info(self.node)
 
-        self.assertIsNotNone(info.get('cimc_address'))
-        self.assertIsNotNone(info.get('cimc_username'))
-        self.assertIsNotNone(info.get('cimc_password'))
+        self.assertIsNotNone(info['cimc_address'])
+        self.assertIsNotNone(info['cimc_username'])
+        self.assertIsNotNone(info['cimc_password'])
 
     def test_parse_driver_info_missing_address(self):
         del self.node.driver_info['cimc_address']
@@ -109,9 +110,9 @@ class CIMCHandleTestCase(CIMCBaseTestCase):
     @mock.patch.object(cimc_common, 'handle_login', autospec=True)
     def test_cimc_handle(self, mock_login, mock_handle):
         mo_hand = mock.MagicMock()
-        mo_hand.username = self.node.driver_info.get('cimc_username')
-        mo_hand.password = self.node.driver_info.get('cimc_password')
-        mo_hand.name = self.node.driver_info.get('cimc_address')
+        mo_hand.username = self.node.driver_info['cimc_username']
+        mo_hand.password = self.node.driver_info['cimc_password']
+        mo_hand.name = self.node.driver_info['cimc_address']
         mock_handle.return_value = mo_hand
         info = cimc_common.parse_driver_info(self.node)
 

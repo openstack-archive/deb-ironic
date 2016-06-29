@@ -249,13 +249,15 @@ class UpdateNodeTestCase(mgr_utils.ServiceSetUpMixin,
         node = obj_utils.create_test_node(self.context, driver='fake',
                                           instance_uuid=None,
                                           power_state=states.NOSTATE)
-        node.instance_uuid = 'fake-uuid'
+        uuid1 = uuidutils.generate_uuid()
+        uuid2 = uuidutils.generate_uuid()
+        node.instance_uuid = uuid1
         self.service.update_node(self.context, node)
 
         # Check if the change was applied
-        node.instance_uuid = 'meow'
+        node.instance_uuid = uuid2
         node.refresh()
-        self.assertEqual('fake-uuid', node.instance_uuid)
+        self.assertEqual(uuid1, node.instance_uuid)
 
     def test_associate_node_powered_off(self):
         self._test_associate_node(states.POWER_OFF)
@@ -288,8 +290,9 @@ class UpdateNodeTestCase(mgr_utils.ServiceSetUpMixin,
 class VendorPassthruTestCase(mgr_utils.ServiceSetUpMixin,
                              tests_db_base.DbTestCase):
 
+    @mock.patch.object(task_manager.TaskManager, 'upgrade_lock')
     @mock.patch.object(task_manager.TaskManager, 'spawn_after')
-    def test_vendor_passthru_async(self, mock_spawn):
+    def test_vendor_passthru_async(self, mock_spawn, mock_upgrade):
         node = obj_utils.create_test_node(self.context, driver='fake')
         info = {'bar': 'baz'}
         self._start_service()
@@ -305,13 +308,17 @@ class VendorPassthruTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertIsNone(response['return'])
         self.assertTrue(response['async'])
 
+        # Assert lock was upgraded to an exclusive one
+        self.assertEqual(1, mock_upgrade.call_count)
+
         node.refresh()
         self.assertIsNone(node.last_error)
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
 
+    @mock.patch.object(task_manager.TaskManager, 'upgrade_lock')
     @mock.patch.object(task_manager.TaskManager, 'spawn_after')
-    def test_vendor_passthru_sync(self, mock_spawn):
+    def test_vendor_passthru_sync(self, mock_spawn, mock_upgrade):
         node = obj_utils.create_test_node(self.context, driver='fake')
         info = {'bar': 'meow'}
         self._start_service()
@@ -327,9 +334,38 @@ class VendorPassthruTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertTrue(response['return'])
         self.assertFalse(response['async'])
 
+        # Assert lock was upgraded to an exclusive one
+        self.assertEqual(1, mock_upgrade.call_count)
+
         node.refresh()
         self.assertIsNone(node.last_error)
         # Verify reservation has been cleared.
+        self.assertIsNone(node.reservation)
+
+    @mock.patch.object(task_manager.TaskManager, 'upgrade_lock')
+    @mock.patch.object(task_manager.TaskManager, 'spawn_after')
+    def test_vendor_passthru_shared_lock(self, mock_spawn, mock_upgrade):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        info = {'bar': 'woof'}
+        self._start_service()
+
+        response = self.service.vendor_passthru(self.context, node.uuid,
+                                                'fourth_method_shared_lock',
+                                                'POST', info)
+        # Waiting to make sure the below assertions are valid.
+        self._stop_service()
+
+        # Assert spawn_after was called
+        self.assertTrue(mock_spawn.called)
+        self.assertIsNone(response['return'])
+        self.assertTrue(response['async'])
+
+        # Assert lock was never upgraded to an exclusive one
+        self.assertFalse(mock_upgrade.called)
+
+        node.refresh()
+        self.assertIsNone(node.last_error)
+        # Verify there's no reservation on the node
         self.assertIsNone(node.reservation)
 
     def test_vendor_passthru_http_method_not_supported(self):
@@ -1064,7 +1100,13 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
             self.context, driver='fake',
             provision_state=states.CLEANWAIT,
             target_provision_state=tgt_prov_state,
-            provision_updated_at=datetime.datetime(2000, 1, 1, 0, 0))
+            provision_updated_at=datetime.datetime(2000, 1, 1, 0, 0),
+            clean_step={
+                'interface': 'deploy',
+                'step': 'erase_devices'},
+            driver_internal_info={
+                'cleaning_reboot': manual,
+                'clean_step_index': 0})
 
         self.service._check_cleanwait_timeouts(self.context)
         self._stop_service()
@@ -1072,6 +1114,11 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(states.CLEANFAIL, node.provision_state)
         self.assertEqual(tgt_prov_state, node.target_provision_state)
         self.assertIsNotNone(node.last_error)
+        # Test that cleaning parameters have been purged in order
+        # to prevent looping of the cleaning sequence
+        self.assertEqual({}, node.clean_step)
+        self.assertNotIn('clean_step_index', node.driver_internal_info)
+        self.assertNotIn('cleaning_reboot', node.driver_internal_info)
 
     def test__check_cleanwait_timeouts_automated_clean(self):
         self._check_cleanwait_timeouts()
@@ -1426,7 +1473,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(exception.InvalidStateRequested, exc.exc_info[0])
         mock_validate.assert_called_once_with(mock.ANY)
         node.refresh()
-        self.assertFalse('clean_steps' in node.driver_internal_info)
+        self.assertNotIn('clean_steps', node.driver_internal_info)
 
     @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
     @mock.patch('ironic.drivers.modules.fake.FakePower.validate')
@@ -1521,7 +1568,8 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         # test a node can continue cleaning via RPC
         prv_state = return_state
         tgt_prv_state = states.MANAGEABLE if manual else states.AVAILABLE
-        driver_info = {'clean_steps': self.clean_steps}
+        driver_info = {'clean_steps': self.clean_steps,
+                       'clean_step_index': 0}
         node = obj_utils.create_test_node(self.context, driver='fake',
                                           provision_state=prv_state,
                                           target_provision_state=tgt_prv_state,
@@ -1543,13 +1591,11 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
     def test_continue_node_clean_manual(self):
         self._continue_node_clean(states.CLEANWAIT, manual=True)
 
-    def test_continue_node_clean_backward_compat(self):
-        self._continue_node_clean(states.CLEANING)
-
     @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
     def _continue_node_clean_skip_step(self, mock_spawn, skip=True):
         # test that skipping current step mechanism works
-        driver_info = {'clean_steps': self.clean_steps}
+        driver_info = {'clean_steps': self.clean_steps,
+                       'clean_step_index': 0}
         if not skip:
             driver_info['skip_current_clean_step'] = skip
         node = obj_utils.create_test_node(
@@ -1563,8 +1609,8 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         if skip:
             expected_step_index = 1
         else:
-            self.assertFalse(
-                'skip_current_clean_step' in node.driver_internal_info)
+            self.assertNotIn(
+                'skip_current_clean_step', node.driver_internal_info)
             expected_step_index = 0
         mock_spawn.assert_called_with(self.service._do_next_clean_step,
                                       mock.ANY, expected_step_index)
@@ -1579,7 +1625,8 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         last_clean_step = self.clean_steps[0]
         last_clean_step['abortable'] = False
         last_clean_step['abort_after'] = True
-        driver_info = {'clean_steps': self.clean_steps}
+        driver_info = {'clean_steps': self.clean_steps,
+                       'clean_step_index': 0}
         tgt_prov_state = states.MANAGEABLE if manual else states.AVAILABLE
         node = obj_utils.create_test_node(
             self.context, driver='fake', provision_state=states.CLEANWAIT,
@@ -1836,9 +1883,6 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
     def test_do_next_clean_step_automated_first_step_async(self):
         self._do_next_clean_step_first_step_async(states.CLEANWAIT)
 
-    def test_do_next_clean_step_first_step_async_backward_compat(self):
-        self._do_next_clean_step_first_step_async(states.CLEANING)
-
     def test_do_next_clean_step_manual_first_step_async(self):
         self._do_next_clean_step_first_step_async(
             states.CLEANWAIT, clean_steps=[self.deploy_raid])
@@ -1877,9 +1921,6 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
     def test_do_next_clean_step_continue_from_last_cleaning(self):
         self._do_next_clean_step_continue_from_last_cleaning(states.CLEANWAIT)
 
-    def test_do_next_clean_step_continue_from_last_cleaning_backward_com(self):
-        self._do_next_clean_step_continue_from_last_cleaning(states.CLEANING)
-
     def test_do_next_clean_step_manual_continue_from_last_cleaning(self):
         self._do_next_clean_step_continue_from_last_cleaning(states.CLEANWAIT,
                                                              manual=True)
@@ -1911,7 +1952,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(tgt_prov_state, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
         self.assertEqual({}, node.clean_step)
-        self.assertFalse('clean_step_index' in node.driver_internal_info)
+        self.assertNotIn('clean_step_index', node.driver_internal_info)
         self.assertIsNone(node.driver_internal_info['clean_steps'])
         self.assertFalse(mock_execute.called)
 
@@ -1951,7 +1992,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(tgt_prov_state, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
         self.assertEqual({}, node.clean_step)
-        self.assertFalse('clean_step_index' in node.driver_internal_info)
+        self.assertNotIn('clean_step_index', node.driver_internal_info)
         self.assertIsNone(node.driver_internal_info['clean_steps'])
         mock_power_execute.assert_called_once_with(mock.ANY,
                                                    self.clean_steps[1])
@@ -1996,7 +2037,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(states.CLEANFAIL, node.provision_state)
         self.assertEqual(tgt_prov_state, node.target_provision_state)
         self.assertEqual({}, node.clean_step)
-        self.assertFalse('clean_step_index' in node.driver_internal_info)
+        self.assertNotIn('clean_step_index', node.driver_internal_info)
         self.assertIsNotNone(node.last_error)
         self.assertTrue(node.maintenance)
         mock_execute.assert_called_once_with(mock.ANY, self.clean_steps[0])
@@ -2007,11 +2048,15 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
     def test__do_next_clean_step_manual_execute_fail(self):
         self._do_next_clean_step_execute_fail(manual=True)
 
-    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.execute_clean_step')
+    @mock.patch.object(manager, 'LOG', autospec=True)
+    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.execute_clean_step',
+                autospec=True)
+    @mock.patch('ironic.drivers.modules.fake.FakePower.execute_clean_step',
+                autospec=True)
     @mock.patch.object(fake.FakeDeploy, 'tear_down_cleaning', autospec=True)
-    def _do_next_clean_step_fail_in_tear_down_cleaning(self, tear_mock,
-                                                       mock_execute,
-                                                       manual=True):
+    def _do_next_clean_step_fail_in_tear_down_cleaning(
+            self, tear_mock, power_exec_mock, deploy_exec_mock, log_mock,
+            manual=True):
         tgt_prov_state = states.MANAGEABLE if manual else states.AVAILABLE
         node = obj_utils.create_test_node(
             self.context, driver='fake',
@@ -2022,8 +2067,9 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
                                   'clean_step_index': None},
             clean_step={})
 
-        mock_execute.return_value = None
-        tear_mock.side_effect = Exception()
+        deploy_exec_mock.return_value = None
+        power_exec_mock.return_value = None
+        tear_mock.side_effect = Exception('boom')
 
         self._start_service()
 
@@ -2038,11 +2084,23 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(states.CLEANFAIL, node.provision_state)
         self.assertEqual(tgt_prov_state, node.target_provision_state)
         self.assertEqual({}, node.clean_step)
-        self.assertFalse('clean_step_index' in node.driver_internal_info)
+        self.assertNotIn('clean_step_index', node.driver_internal_info)
         self.assertIsNotNone(node.last_error)
         self.assertEqual(1, tear_mock.call_count)
         self.assertTrue(node.maintenance)
-        mock_execute.assert_called_once_with(mock.ANY, self.clean_steps[0])
+        deploy_exec_calls = [
+            mock.call(mock.ANY, mock.ANY, self.clean_steps[0]),
+            mock.call(mock.ANY, mock.ANY, self.clean_steps[2]),
+        ]
+        self.assertEqual(deploy_exec_calls, deploy_exec_mock.call_args_list)
+
+        power_exec_calls = [
+            mock.call(mock.ANY, mock.ANY, self.clean_steps[1]),
+        ]
+        self.assertEqual(power_exec_calls, power_exec_mock.call_args_list)
+        log_mock.exception.assert_called_once_with(
+            'Failed to tear down from cleaning for node {}, reason: boom'
+            .format(node.uuid))
 
     def test__do_next_clean_step_automated_fail_in_tear_down_cleaning(self):
         self._do_next_clean_step_fail_in_tear_down_cleaning()
@@ -2079,7 +2137,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
             self.assertEqual(tgt_prov_state, node.provision_state)
             self.assertEqual(states.NOSTATE, node.target_provision_state)
             self.assertEqual({}, node.clean_step)
-            self.assertFalse('clean_step_index' in node.driver_internal_info)
+            self.assertNotIn('clean_step_index', node.driver_internal_info)
             self.assertFalse(mock_execute.called)
             mock_execute.reset_mock()
 
@@ -2118,7 +2176,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(states.CLEANFAIL, node.provision_state)
         self.assertEqual(tgt_prov_state, node.target_provision_state)
         self.assertEqual({}, node.clean_step)
-        self.assertFalse('clean_step_index' in node.driver_internal_info)
+        self.assertNotIn('clean_step_index', node.driver_internal_info)
         self.assertIsNotNone(node.last_error)
         self.assertTrue(node.maintenance)
         deploy_exec_mock.assert_called_once_with(mock.ANY,
@@ -2169,45 +2227,6 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         with task_manager.acquire(self.context, node.uuid) as task:
             step_index = self.service._get_node_next_clean_steps(task)
             self.assertEqual(0, step_index)
-
-    def __get_node_next_clean_steps_backwards_compat(self, skip=True):
-        driver_internal_info = {'clean_steps': self.clean_steps}
-        node = obj_utils.create_test_node(
-            self.context, driver='fake',
-            provision_state=states.CLEANWAIT,
-            target_provision_state=states.AVAILABLE,
-            driver_internal_info=driver_internal_info,
-            last_error=None,
-            clean_step=self.clean_steps[0])
-
-        with task_manager.acquire(self.context, node.uuid) as task:
-            step_index = self.service._get_node_next_clean_steps(
-                task, skip_current_step=skip)
-            expected_index = 1 if skip else 0
-            self.assertEqual(expected_index, step_index)
-
-    def test__get_node_next_clean_steps_backwards_compat(self):
-        self.__get_node_next_clean_steps_backwards_compat()
-
-    def test__get_node_next_clean_steps_no_skip_backwards_compat(self):
-        self.__get_node_next_clean_steps_backwards_compat(skip=False)
-
-    def test__get_node_next_clean_steps_bad_clean_step(self):
-        # NOTE(rloo) for backwards compatibility
-        driver_internal_info = {'clean_steps': self.clean_steps}
-        node = obj_utils.create_test_node(
-            self.context, driver='fake',
-            provision_state=states.CLEANWAIT,
-            target_provision_state=states.AVAILABLE,
-            driver_internal_info=driver_internal_info,
-            last_error=None,
-            clean_step={'interface': 'deploy',
-                        'step': 'not_a_clean_step',
-                        'priority': 100})
-
-        with task_manager.acquire(self.context, node.uuid) as task:
-            self.assertRaises(exception.NodeCleaningFailure,
-                              self.service._get_node_next_clean_steps, task)
 
 
 @mgr_utils.mock_record_keepalive
@@ -2548,8 +2567,8 @@ class DestroyNodeTestCase(mgr_utils.ServiceSetUpMixin,
 
     def test_destroy_node_associated(self):
         self._start_service()
-        node = obj_utils.create_test_node(self.context,
-                                          instance_uuid='fake-uuid')
+        node = obj_utils.create_test_node(
+            self.context, instance_uuid=uuidutils.generate_uuid())
 
         exc = self.assertRaises(messaging.rpc.ExpectedException,
                                 self.service.destroy_node,
@@ -2577,10 +2596,9 @@ class DestroyNodeTestCase(mgr_utils.ServiceSetUpMixin,
 
     def test_destroy_node_allowed_in_maintenance(self):
         self._start_service()
-        node = obj_utils.create_test_node(self.context,
-                                          instance_uuid='fake-uuid',
-                                          provision_state=states.ACTIVE,
-                                          maintenance=True)
+        node = obj_utils.create_test_node(
+            self.context, instance_uuid=uuidutils.generate_uuid(),
+            provision_state=states.ACTIVE, maintenance=True)
         self.service.destroy_node(self.context, node.uuid)
         self.assertRaises(exception.NodeNotFound,
                           self.dbapi.get_node_by_uuid,
@@ -2603,6 +2621,16 @@ class DestroyNodeTestCase(mgr_utils.ServiceSetUpMixin,
             self.assertRaises(exception.NodeNotFound,
                               self.dbapi.get_node_by_uuid,
                               node.uuid)
+
+    def test_destroy_node_adopt_failed_no_power_change(self):
+        self._start_service()
+        node = obj_utils.create_test_node(self.context,
+                                          driver='fake',
+                                          provision_state=states.ADOPTFAIL)
+        with mock.patch.object(self.driver.power,
+                               'set_power_state') as mock_power:
+            self.service.destroy_node(self.context, node.uuid)
+            self.assertFalse(mock_power.called)
 
 
 @mgr_utils.mock_record_keepalive
@@ -2940,12 +2968,98 @@ class UpdatePortgroupTestCase(mgr_utils.ServiceSetUpMixin,
         portgroup.refresh()
         self.assertEqual(old_extra, portgroup.extra)
 
+    def test_update_portgroup_to_node_in_deleting_state(self):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        portgroup = obj_utils.create_test_portgroup(self.context,
+                                                    node_id=node.id,
+                                                    extra={'foo': 'bar'})
+        update_node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.DELETING,
+            uuid=uuidutils.generate_uuid())
+
+        old_node_id = portgroup.node_id
+        portgroup.node_id = update_node.id
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.update_portgroup,
+                                self.context, portgroup)
+        self.assertEqual(exception.InvalidState, exc.exc_info[0])
+        portgroup.refresh()
+        self.assertEqual(old_node_id, portgroup.node_id)
+
+    @mock.patch.object(dbapi.IMPL, 'get_ports_by_portgroup_id')
+    def test_update_portgroup_to_node_in_manageable_state(self,
+                                                          mock_get_ports):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        portgroup = obj_utils.create_test_portgroup(self.context,
+                                                    node_id=node.id,
+                                                    extra={'foo': 'bar'})
+        update_node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.MANAGEABLE,
+            uuid=uuidutils.generate_uuid())
+        mock_get_ports.return_value = []
+
+        self._start_service()
+
+        portgroup.node_id = update_node.id
+        self.service.update_portgroup(self.context, portgroup)
+        portgroup.refresh()
+        self.assertEqual(update_node.id, portgroup.node_id)
+        mock_get_ports.assert_called_once_with(portgroup.uuid)
+
+    @mock.patch.object(dbapi.IMPL, 'get_ports_by_portgroup_id')
+    def test_update_portgroup_to_node_in_active_state_and_maintenance(
+            self, mock_get_ports):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        portgroup = obj_utils.create_test_portgroup(self.context,
+                                                    node_id=node.id,
+                                                    extra={'foo': 'bar'})
+        update_node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.ACTIVE,
+            maintenance=True,
+            uuid=uuidutils.generate_uuid())
+        mock_get_ports.return_value = []
+
+        self._start_service()
+
+        portgroup.node_id = update_node.id
+        self.service.update_portgroup(self.context, portgroup)
+        portgroup.refresh()
+        self.assertEqual(update_node.id, portgroup.node_id)
+        mock_get_ports.assert_called_once_with(portgroup.uuid)
+
+    @mock.patch.object(dbapi.IMPL, 'get_ports_by_portgroup_id')
+    def test_update_portgroup_association_with_ports(self, mock_get_ports):
+        node = obj_utils.create_test_node(self.context, driver='fake')
+        portgroup = obj_utils.create_test_portgroup(self.context,
+                                                    node_id=node.id,
+                                                    extra={'foo': 'bar'})
+        update_node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            maintenance=True,
+            uuid=uuidutils.generate_uuid())
+        mock_get_ports.return_value = ['test_port']
+
+        self._start_service()
+
+        old_node_id = portgroup.node_id
+        portgroup.node_id = update_node.id
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.update_portgroup,
+                                self.context, portgroup)
+        self.assertEqual(exception.PortgroupNotEmpty, exc.exc_info[0])
+        portgroup.refresh()
+        self.assertEqual(old_node_id, portgroup.node_id)
+        mock_get_ports.assert_called_once_with(portgroup.uuid)
+
     @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.update_port_address')
     def test_update_portgroup_address(self, mac_update_mock):
         node = obj_utils.create_test_node(self.context, driver='fake')
         pg = obj_utils.create_test_portgroup(
             self.context, node_id=node.id,
-            extra={'vif_portgroup_id': 'fake-id'})
+            extra={'vif_port_id': 'fake-id'})
         new_address = '11:22:33:44:55:bb'
         pg.address = new_address
         self.service.update_portgroup(self.context, pg)
@@ -2959,7 +3073,7 @@ class UpdatePortgroupTestCase(mgr_utils.ServiceSetUpMixin,
         node = obj_utils.create_test_node(self.context, driver='fake')
         pg = obj_utils.create_test_portgroup(
             self.context, node_id=node.id,
-            extra={'vif_portgroup_id': 'fake-id'})
+            extra={'vif_port_id': 'fake-id'})
         old_address = pg.address
         pg.address = '11:22:33:44:55:bb'
         mac_update_mock.side_effect = (
@@ -3797,7 +3911,8 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
         self._check_driver_properties("fake_ipminative", expected)
 
     def test_driver_properties_fake_ssh(self):
-        expected = ['ssh_address', 'ssh_username', 'ssh_virt_type',
+        expected = ['ssh_address', 'ssh_username',
+                    'vbox_use_headless', 'ssh_virt_type',
                     'ssh_key_contents', 'ssh_key_filename',
                     'ssh_password', 'ssh_port', 'ssh_terminal_port']
         self._check_driver_properties("fake_ssh", expected)
@@ -3837,7 +3952,8 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
 
     def test_driver_properties_pxe_ssh(self):
         expected = ['deploy_kernel', 'deploy_ramdisk',
-                    'ssh_address', 'ssh_username', 'ssh_virt_type',
+                    'ssh_address', 'ssh_username',
+                    'vbox_use_headless', 'ssh_virt_type',
                     'ssh_key_contents', 'ssh_key_filename',
                     'ssh_password', 'ssh_port', 'ssh_terminal_port',
                     'deploy_forces_oob_reboot']
@@ -4752,3 +4868,151 @@ class DoNodeTakeOverTestCase(mgr_utils.ServiceSetUpMixin,
         mock_prepare.assert_called_once_with(mock.ANY)
         mock_take_over.assert_called_once_with(mock.ANY)
         mock_start_console.assert_called_once_with(mock.ANY)
+
+
+@mgr_utils.mock_record_keepalive
+class DoNodeAdoptionTestCase(
+        mgr_utils.ServiceSetUpMixin,
+        tests_db_base.DbTestCase):
+
+    @mock.patch('ironic.drivers.modules.fake.FakePower.validate')
+    @mock.patch('ironic.drivers.modules.fake.FakeBoot.validate')
+    @mock.patch('ironic.drivers.modules.fake.FakeConsole.start_console')
+    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.take_over')
+    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.prepare')
+    def test__do_adoption_with_takeover(self,
+                                        mock_prepare,
+                                        mock_take_over,
+                                        mock_start_console,
+                                        mock_boot_validate,
+                                        mock_power_validate):
+        """Test a successful node adoption"""
+        self._start_service()
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.ADOPTING)
+        task = task_manager.TaskManager(self.context, node.uuid)
+
+        self.service._do_adoption(task)
+        node.refresh()
+
+        self.assertEqual(states.ACTIVE, node.provision_state)
+        self.assertIsNone(node.last_error)
+        self.assertFalse(node.console_enabled)
+        mock_prepare.assert_called_once_with(mock.ANY)
+        mock_take_over.assert_called_once_with(mock.ANY)
+        self.assertFalse(mock_start_console.called)
+        self.assertTrue(mock_boot_validate.called)
+        self.assertIn('is_whole_disk_image', task.node.driver_internal_info)
+
+    @mock.patch('ironic.drivers.modules.fake.FakeBoot.validate')
+    @mock.patch('ironic.drivers.modules.fake.FakeConsole.start_console')
+    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.take_over')
+    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.prepare')
+    def test__do_adoption_take_over_failure(self,
+                                            mock_prepare,
+                                            mock_take_over,
+                                            mock_start_console,
+                                            mock_boot_validate):
+        """Test that adoption failed if an exception is raised"""
+        # Note(TheJulia): Use of an actual possible exception that
+        # can be raised due to a misconfiguration.
+        mock_take_over.side_effect = exception.IPMIFailure(
+            "something went wrong")
+
+        self._start_service()
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.ADOPTING)
+        task = task_manager.TaskManager(self.context, node.uuid)
+
+        self.service._do_adoption(task)
+        node.refresh()
+
+        self.assertEqual(states.ADOPTFAIL, node.provision_state)
+        self.assertIsNotNone(node.last_error)
+        self.assertFalse(node.console_enabled)
+        mock_prepare.assert_called_once_with(mock.ANY)
+        mock_take_over.assert_called_once_with(mock.ANY)
+        self.assertFalse(mock_start_console.called)
+        self.assertTrue(mock_boot_validate.called)
+        self.assertIn('is_whole_disk_image', task.node.driver_internal_info)
+
+    @mock.patch('ironic.drivers.modules.fake.FakeBoot.validate')
+    @mock.patch('ironic.drivers.modules.fake.FakeConsole.start_console')
+    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.take_over')
+    @mock.patch('ironic.drivers.modules.fake.FakeDeploy.prepare')
+    def test__do_adoption_boot_validate_failure(self,
+                                                mock_prepare,
+                                                mock_take_over,
+                                                mock_start_console,
+                                                mock_boot_validate):
+        """Test that adoption fails if the boot validation fails"""
+        # Note(TheJulia): Use of an actual possible exception that
+        # can be raised due to a misconfiguration.
+        mock_boot_validate.side_effect = exception.MissingParameterValue(
+            "something is missing")
+
+        self._start_service()
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.ADOPTING)
+        task = task_manager.TaskManager(self.context, node.uuid)
+
+        self.service._do_adoption(task)
+        node.refresh()
+
+        self.assertEqual(states.ADOPTFAIL, node.provision_state)
+        self.assertIsNotNone(node.last_error)
+        self.assertFalse(node.console_enabled)
+        self.assertFalse(mock_prepare.called)
+        self.assertFalse(mock_take_over.called)
+        self.assertFalse(mock_start_console.called)
+        self.assertTrue(mock_boot_validate.called)
+
+    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    def test_do_provisioning_action_adopt_node(self, mock_spawn):
+        """Test an adoption request results in the node in ADOPTING"""
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.MANAGEABLE,
+            target_provision_state=states.NOSTATE)
+
+        self._start_service()
+        self.service.do_provisioning_action(self.context, node.uuid, 'adopt')
+        node.refresh()
+        self.assertEqual(states.ADOPTING, node.provision_state)
+        self.assertEqual(states.ACTIVE, node.target_provision_state)
+        self.assertIsNone(node.last_error)
+        mock_spawn.assert_called_with(self.service._do_adoption, mock.ANY)
+
+    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    def test_do_provisioning_action_adopt_node_retry(self, mock_spawn):
+        """Test a retried adoption from ADOPTFAIL results in ADOPTING state"""
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.ADOPTFAIL,
+            target_provision_state=states.ACTIVE)
+
+        self._start_service()
+        self.service.do_provisioning_action(self.context, node.uuid, 'adopt')
+        node.refresh()
+        self.assertEqual(states.ADOPTING, node.provision_state)
+        self.assertEqual(states.ACTIVE, node.target_provision_state)
+        self.assertIsNone(node.last_error)
+        mock_spawn.assert_called_with(self.service._do_adoption, mock.ANY)
+
+    def test_do_provisioning_action_manage_of_failed_adoption(self):
+        """Test a node in ADOPTFAIL can be taken to MANAGEABLE"""
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.ADOPTFAIL,
+            target_provision_state=states.ACTIVE)
+
+        self._start_service()
+        self.service.do_provisioning_action(self.context, node.uuid, 'manage')
+        node.refresh()
+
+        self.assertEqual(states.MANAGEABLE, node.provision_state)
+        self.assertEqual(states.NOSTATE, node.target_provision_state)
+        self.assertIsNone(node.last_error)

@@ -36,17 +36,14 @@ LOG = logging.getLogger(__name__)
 
 inspector_opts = [
     cfg.BoolOpt('enabled', default=False,
-                help=_('whether to enable inspection using ironic-inspector'),
-                deprecated_group='discoverd'),
+                help=_('whether to enable inspection using ironic-inspector')),
     cfg.StrOpt('service_url',
                help=_('ironic-inspector HTTP endpoint. If this is not set, '
                       'the ironic-inspector client default '
-                      '(http://127.0.0.1:5050) will be used.'),
-               deprecated_group='discoverd'),
+                      '(http://127.0.0.1:5050) will be used.')),
     cfg.IntOpt('status_check_period', default=60,
                help=_('period (in seconds) to check status of nodes '
-                      'on inspection'),
-               deprecated_group='discoverd'),
+                      'on inspection')),
 ]
 
 CONF = cfg.CONF
@@ -151,6 +148,7 @@ def _call_inspector(func, uuid, context):
 
 def _start_inspection(node_uuid, context):
     """Call to inspector to start inspection."""
+    context.ensure_thread_contain_context()
     try:
         _call_inspector(client.introspect, node_uuid, context)
     except Exception as exc:

@@ -87,7 +87,7 @@ POST_CLEAN_STEP_HOOKS = {}
 VENDOR_PROPERTIES = {
     'deploy_forces_oob_reboot': _(
         'Whether Ironic should force a reboot of the Node via the out-of-band '
-        'channel after deployment is complete. Provides compatiblity with '
+        'channel after deployment is complete. Provides compatibility with '
         'older deploy ramdisks. Defaults to False. Optional.')
 }
 
@@ -290,19 +290,38 @@ class BaseAgentVendor(base.VendorInterface):
         unable to tell if an ordering change will cause a cleaning issue so
         it returns CLEAN_VERSION_MISMATCH. For automated cleaning, we restart
         the entire cleaning cycle. For manual cleaning, we don't.
+
+        Additionally, if a clean_step includes the reboot_requested property
+        set to True, this method will coordinate the reboot once the step is
+        completed.
         """
         node = task.node
         # For manual clean, the target provision state is MANAGEABLE, whereas
         # for automated cleaning, it is (the default) AVAILABLE.
         manual_clean = node.target_provision_state == states.MANAGEABLE
-        command = self._get_completed_cleaning_command(task)
+        agent_commands = self._client.get_commands_status(task.node)
+
+        if not agent_commands:
+            if task.node.driver_internal_info.get('cleaning_reboot'):
+                # Node finished a cleaning step that requested a reboot, and
+                # this is the first heartbeat after booting. Continue cleaning.
+                info = task.node.driver_internal_info
+                info.pop('cleaning_reboot', None)
+                task.node.driver_internal_info = info
+                self.notify_conductor_resume_clean(task)
+                return
+            else:
+                # Agent has no commands whatsoever
+                return
+
+        command = self._get_completed_cleaning_command(task, agent_commands)
         LOG.debug('Cleaning command status for node %(node)s on step %(step)s:'
                   ' %(command)s', {'node': node.uuid,
                                    'step': node.clean_step,
                                    'command': command})
 
         if not command:
-            # Command is not done yet
+            # Agent command in progress
             return
 
         if command.get('command_status') == 'FAILED':
@@ -378,6 +397,10 @@ class BaseAgentVendor(base.VendorInterface):
                     LOG.exception(msg)
                     return manager_utils.cleaning_error_handler(task, msg)
 
+            if task.node.clean_step.get('reboot_requested'):
+                self._cleaning_reboot(task)
+                return
+
             LOG.info(_LI('Agent on node %s returned cleaning command success, '
                          'moving to next clean step'), node.uuid)
             self.notify_conductor_resume_clean(task)
@@ -389,6 +412,34 @@ class BaseAgentVendor(base.VendorInterface):
                     'step': node.clean_step})
             LOG.error(msg)
             return manager_utils.cleaning_error_handler(task, msg)
+
+    def _cleaning_reboot(self, task):
+        """Reboots a node out of band after a clean step that requires it.
+
+        If an agent clean step has 'reboot_requested': True, reboots the
+        node when the step is completed. Will put the node in CLEANFAIL
+        if the node cannot be rebooted.
+
+        :param task: a TaskManager instance
+        """
+        try:
+            manager_utils.node_power_action(task, states.REBOOT)
+        except Exception as e:
+            msg = (_('Reboot requested by clean step %(step)s failed for '
+                     'node %(node)s: %(err)s') %
+                   {'step': task.node.clean_step,
+                    'node': task.node.uuid,
+                    'err': e})
+            LOG.error(msg)
+            # do not set cleaning_reboot if we didn't reboot
+            manager_utils.cleaning_error_handler(task, msg)
+            return
+
+        # Signify that we've rebooted
+        driver_internal_info = task.node.driver_internal_info
+        driver_internal_info['cleaning_reboot'] = True
+        task.node.driver_internal_info = driver_internal_info
+        task.node.save()
 
     @base.passthru(['POST'])
     @task_manager.require_exclusive_lock
@@ -441,11 +492,7 @@ class BaseAgentVendor(base.VendorInterface):
             elif (node.provision_state == states.DEPLOYWAIT and
                   self.deploy_has_started(task)):
                 node.touch_provisioning()
-            # TODO(lucasagomes): CLEANING here for backwards compat
-            # with previous code, otherwise nodes in CLEANING when this
-            # is deployed would fail. Should be removed once the Mitaka
-            # release starts.
-            elif node.provision_state in (states.CLEANWAIT, states.CLEANING):
+            elif node.provision_state == states.CLEANWAIT:
                 node.touch_provisioning()
                 try:
                     if not node.clean_step:
@@ -546,9 +593,12 @@ class BaseAgentVendor(base.VendorInterface):
             'node': ndict,
         }
 
-    def _get_completed_cleaning_command(self, task):
-        """Returns None or a completed cleaning command from the agent."""
-        commands = self._client.get_commands_status(task.node)
+    def _get_completed_cleaning_command(self, task, commands):
+        """Returns None or a completed cleaning command from the agent.
+
+        :param commands: a set of command results from the agent, typically
+                         fetched with agent_client.get_commands_status()
+        """
         if not commands:
             return
 

@@ -41,6 +41,14 @@ CLEANING_INTERFACE_PRIORITY = {
 def node_set_boot_device(task, device, persistent=False):
     """Set the boot device for a node.
 
+    Sets the boot device for a node if the node's driver interface
+    contains a 'management' interface.
+
+    If the node that the boot device change is being requested for
+    is in ADOPTING state, the boot device will not be set as that
+    change could potentially result in the future running state of
+    an adopted node being modified erroneously.
+
     :param task: a TaskManager instance.
     :param device: Boot device. Values are vendor-specific.
     :param persistent: Whether to set next-boot, or make the change
@@ -51,9 +59,10 @@ def node_set_boot_device(task, device, persistent=False):
     """
     if getattr(task.driver, 'management', None):
         task.driver.management.validate(task)
-        task.driver.management.set_boot_device(task,
-                                               device=device,
-                                               persistent=persistent)
+        if task.node.provision_state != states.ADOPTING:
+            task.driver.management.set_boot_device(task,
+                                                   device=device,
+                                                   persistent=persistent)
 
 
 @task_manager.require_exclusive_lock
@@ -101,9 +110,10 @@ def node_power_action(task, new_state):
             node['power_state'] = new_state
             node['target_power_state'] = states.NOSTATE
             node.save()
-            LOG.warning(_LW("Not going to change node power state because "
-                            "current state = requested state = '%(state)s'."),
-                        {'state': curr_state})
+            LOG.warning(_LW("Not going to change node %(node)s power "
+                            "state because current state = requested state "
+                            "= '%(state)s'."),
+                        {'node': node.uuid, 'state': curr_state})
             return
 
         if curr_state == states.ERROR:
@@ -201,15 +211,33 @@ def provisioning_error_handler(e, node, provision_state,
                      'tgt_prov_state': target_provision_state})
 
 
+def cleanup_cleanwait_timeout(task):
+    """Cleanup a cleaning task after timeout.
+
+    :param task: a TaskManager instance.
+    """
+    last_error = (_("Timeout reached while cleaning the node. Please "
+                    "check if the ramdisk responsible for the cleaning is "
+                    "running on the node. Failed on step %(step)s.") %
+                  {'step': task.node.clean_step})
+    cleaning_error_handler(task, msg=last_error,
+                           set_fail_state=True)
+
+
 def cleaning_error_handler(task, msg, tear_down_cleaning=True,
                            set_fail_state=True):
     """Put a failed node in CLEANFAIL and maintenance."""
     node = task.node
-    if node.provision_state in (states.CLEANING, states.CLEANWAIT):
+    if node.provision_state in (
+            states.CLEANING,
+            states.CLEANWAIT,
+            states.CLEANFAIL):
         # Clear clean step, msg should already include current step
         node.clean_step = {}
         info = node.driver_internal_info
         info.pop('clean_step_index', None)
+        # Clear any leftover metadata about cleaning reboots
+        info.pop('cleaning_reboot', None)
         node.driver_internal_info = info
     # For manual cleaning, the target provision state is MANAGEABLE, whereas
     # for automated cleaning, it is AVAILABLE.

@@ -113,17 +113,6 @@ class TestPXEUtils(db_base.DbTestCase):
 
         self.assertEqual(six.text_type(expected_template), rendered_template)
 
-    def test__build_pxe_config_with_agent(self):
-
-        rendered_template = pxe_utils._build_pxe_config(
-            self.agent_pxe_options, CONF.agent.agent_pxe_config_template,
-            '{{ ROOT }}', '{{ DISK_IDENTIFIER }}')
-
-        template_file = 'ironic/tests/unit/drivers/agent_pxe_config.template'
-        expected_template = open(template_file).read().rstrip()
-
-        self.assertEqual(six.text_type(expected_template), rendered_template)
-
     def test__build_ipxe_bios_config(self):
         # NOTE(lucasagomes): iPXE is just an extension of the PXE driver,
         # it doesn't have it's own configuration option for template.
@@ -249,17 +238,11 @@ class TestPXEUtils(db_base.DbTestCase):
             mock.call(u'../1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
                       '/httpboot/pxelinux.cfg/00-11-22-33-44-55-66'),
             mock.call(u'../1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
-                      '/httpboot/pxelinux.cfg/00112233445566'),
-            mock.call(u'../1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
                       '/httpboot/pxelinux.cfg/00-11-22-33-44-55-67'),
-            mock.call(u'../1be26c0b-03f2-4d2e-ae87-c02d7f33c123/config',
-                      '/httpboot/pxelinux.cfg/00112233445567'),
         ]
         unlink_calls = [
             mock.call('/httpboot/pxelinux.cfg/00-11-22-33-44-55-66'),
-            mock.call('/httpboot/pxelinux.cfg/00112233445566'),
             mock.call('/httpboot/pxelinux.cfg/00-11-22-33-44-55-67'),
-            mock.call('/httpboot/pxelinux.cfg/00112233445567'),
         ]
         with task_manager.acquire(self.context, self.node.uuid) as task:
             pxe_utils._link_mac_pxe_configs(task)
@@ -625,10 +608,7 @@ class TestPXEUtils(db_base.DbTestCase):
             task.node.properties = properties
             pxe_utils.clean_up_pxe_config(task)
 
-            unlink_calls = [
-                mock.call('/httpboot/pxelinux.cfg/aa-aa-aa-aa-aa-aa'),
-                mock.call('/httpboot/pxelinux.cfg/aaaaaaaaaaaa')
-            ]
-            unlink_mock.assert_has_calls(unlink_calls)
+            unlink_mock.assert_called_once_with(
+                '/httpboot/pxelinux.cfg/aa-aa-aa-aa-aa-aa')
             rmtree_mock.assert_called_once_with(
                 os.path.join(CONF.deploy.http_root, self.node.uuid))

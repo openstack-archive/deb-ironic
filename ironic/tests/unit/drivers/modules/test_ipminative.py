@@ -51,11 +51,11 @@ class IPMINativePrivateMethodTestCase(db_base.DbTestCase):
 
     def test__parse_driver_info(self):
         # make sure we get back the expected things
-        self.assertIsNotNone(self.info.get('address'))
-        self.assertIsNotNone(self.info.get('username'))
-        self.assertIsNotNone(self.info.get('password'))
-        self.assertIsNotNone(self.info.get('uuid'))
-        self.assertIsNotNone(self.info.get('force_boot_device'))
+        self.assertIsNotNone(self.info['address'])
+        self.assertIsNotNone(self.info['username'])
+        self.assertIsNotNone(self.info['password'])
+        self.assertIsNotNone(self.info['uuid'])
+        self.assertIsNotNone(self.info['force_boot_device'])
 
         # make sure error is raised when info, eg. username, is missing
         info = dict(INFO_DICT)
@@ -400,7 +400,7 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
     @mock.patch('pyghmi.ipmi.command.Command', autospec=True)
     def test_reboot_fail(self, ipmi_mock):
         ipmicmd = ipmi_mock.return_value
-        ipmicmd.set_power.return_value = {'powerstate': 'error'}
+        ipmicmd.set_power.return_value = {'error': 'Some IPMI error'}
 
         self.config(retry_timeout=500, group='ipmi')
         with task_manager.acquire(self.context,
@@ -595,8 +595,7 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
         send_raw_mock.assert_called_once_with(self.info, bytes)
 
     @mock.patch.object(ipminative, '_send_raw', autospec=True)
-    def _test_bmc_reset(self, warm, send_raw_mock):
-        expected_bytes = '0x06 0x03' if warm else '0x06 0x02'
+    def _test_bmc_reset(self, warm, expected_bytes, send_raw_mock):
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:
             self.driver.vendor.bmc_reset(task, http_method='POST', warm=warm)
@@ -604,7 +603,9 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
         send_raw_mock.assert_called_once_with(self.info, expected_bytes)
 
     def test_bmc_reset_cold(self):
-        self._test_bmc_reset(False)
+        for param in (False, 'false', 'off', 'n', 'no'):
+            self._test_bmc_reset(param, '0x06 0x02')
 
     def test_bmc_reset_warm(self):
-        self._test_bmc_reset(True)
+        for param in (True, 'true', 'on', 'y', 'yes'):
+            self._test_bmc_reset(param, '0x06 0x03')
