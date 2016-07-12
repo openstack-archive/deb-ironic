@@ -5,6 +5,8 @@ ironic (1:6.0.0-1) experimental; urgency=medium
   * Added new pt_BR.po Brazilian Portuguese debconf templates translation
     (Closes: #829340).
   * Rebase allow-any-pytz-version.patch. Add allow-any-fixtures-version.patch.
+  * Using oslo-config-generator directly.
+  * Switching to openstack-pkg-tools >= 52~.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 29 Jun 2016 22:44:18 +0200
 

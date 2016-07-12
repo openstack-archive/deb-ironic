@@ -1,9 +1,6 @@
 #!/usr/bin/make -f
 
-PYTHONS:=$(shell pyversions -vr)
 include /usr/share/openstack-pkg-tools/pkgos.make
-
-export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
 	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc,systemd
@@ -22,12 +19,24 @@ override_dh_auto_build:
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func ironic-api.postinst
 
 override_dh_auto_install:
-	dh_auto_install -O--buildsystem=python_distutils
-	# TODO: replace this by generated conf file (see tox.ini)
+	python setup.py install --install-layout=deb --root $(CURDIR)/debian/tmp
 	mkdir -p $(CURDIR)/debian/ironic-common/usr/share/ironic-common
-	bash tools/config/generate_sample.sh -b . -p ironic -o $(CURDIR)/debian/ironic-common/usr/share/ironic-common
-	mv  $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
-	#install -D -m 0664 etc/ironic/ironic.conf.sample $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
+	PYTHONPATH=$(CURDIR)/debian/tmp oslo-config-generator --output-file $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf \
+		--wrap-width 140 \
+		--namespace ironic \
+		--namespace ironic_lib.disk_utils \
+		--namespace ironic_lib.disk_partitioner \
+		--namespace ironic_lib.utils \
+		--namespace oslo.db \
+		--namespace oslo.messaging \
+		--namespace oslo.middleware.cors \
+		--namespace oslo.concurrency \
+		--namespace oslo.policy \
+		--namespace oslo.log \
+		--namespace oslo.service.service \
+		--namespace oslo.service.periodic_task \
+		--namespace oslo.service.sslutils \
+		--namespace keystonemiddleware.auth_token
 	sed -i 's|#connection=<None>|connection=sqlite:////var/lib/ironic/ironicdb|' $(CURDIR)/debian/ironic-common/usr/share/ironic-common/ironic.conf
 	set -e ; for pyvers in $(PYTHONS); do \
 		cp -rf ironic/db/sqlalchemy/alembic $(CURDIR)/debian/tmp/usr/lib/python$$pyvers/dist-packages/ironic/db/sqlalchemy ; \
