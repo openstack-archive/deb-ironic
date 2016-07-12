@@ -4,6 +4,7 @@ ironic (1:6.0.0-1) experimental; urgency=medium
   * Fixed (build-)depends for this release.
   * Added new pt_BR.po Brazilian Portuguese debconf templates translation
     (Closes: #829340).
+  * Rebase allow-any-pytz-version.patch. Add allow-any-fixtures-version.patch.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 29 Jun 2016 22:44:18 +0200
 

@@ -1,0 +1,16 @@
+Description: Allow any fixtures version
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: not-needed
+Last-Update: 2016-06-30
+
+--- ironic-6.0.0.orig/test-requirements.txt
++++ ironic-6.0.0/test-requirements.txt
+@@ -4,7 +4,7 @@
+ hacking<0.11,>=0.10.0
+ coverage>=3.6 # Apache-2.0
+ doc8 # Apache-2.0
+-fixtures>=3.0.0 # Apache-2.0/BSD
++fixtures
+ mock>=2.0 # BSD
+ Babel>=2.3.4 # BSD
+ PyMySQL>=0.6.2 # MIT License
