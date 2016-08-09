@@ -1,0 +1,33 @@
+Description: reproducible builds
+Author: Chris Lamb <lamby@debian.org>
+Forwarded: https://review.openstack.org/#/c/352963/
+Bug-Debian: https://bugs.debian.org/831650
+Last-Update: 2016-08-09
+
+--- ironic-5.1.2.orig/ironic/api/controllers/v1/port.py
++++ ironic-5.1.2/ironic/api/controllers/v1/port.py
+@@ -13,7 +13,9 @@
+ #    License for the specific language governing permissions and limitations
+ #    under the License.
+ 
++import os
+ import datetime
++import time
+ 
+ from oslo_utils import uuidutils
+ import pecan
+@@ -135,11 +137,12 @@ class Port(base.APIBase):
+ 
+     @classmethod
+     def sample(cls, expand=True):
++        now = datetime.datetime.utcfromtimestamp(int(os.environ.get('SOURCE_DATE_EPOCH', time.time())))
+         sample = cls(uuid='27e3153e-d5bf-4b7e-b517-fb518e17f34c',
+                      address='fe:54:00:77:07:d9',
+                      extra={'foo': 'bar'},
+-                     created_at=datetime.datetime.utcnow(),
+-                     updated_at=datetime.datetime.utcnow())
++                     created_at=now,
++                     updated_at=now)
+         # NOTE(lucasagomes): node_uuid getter() method look at the
+         # _node_uuid variable
+         sample._node_uuid = '7ae81bb3-dec3-4289-8d6c-da80bd8001ae'
