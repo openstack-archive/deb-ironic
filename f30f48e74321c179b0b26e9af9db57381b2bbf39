@@ -1,0 +1,10 @@
+Code-Review+1: Yuiko Takada Mori <y-mori@ti.jp.nec.com>
+Code-Review+2: Haomeng,Wang <wanghaomeng@gmail.com>
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Workflow+1: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 05 Jul 2016 09:00:01 +0000
+Reviewed-on: https://review.openstack.org/337465
+Project: openstack/deb-ironic
+Branch: refs/heads/master

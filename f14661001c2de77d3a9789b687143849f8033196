@@ -1,0 +1,10 @@
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 14 Jul 2016 21:56:34 +0000
+Reviewed-on: https://review.openstack.org/339852
+Project: openstack/deb-ironic
+Branch: refs/heads/master

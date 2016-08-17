@@ -1,0 +1,13 @@
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Code-Review+1: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 09 Aug 2016 12:08:44 +0000
+Reviewed-on: https://review.openstack.org/336547
+Project: openstack/deb-ironic
+Branch: refs/heads/master

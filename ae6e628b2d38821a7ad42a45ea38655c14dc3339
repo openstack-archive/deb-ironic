@@ -1,0 +1,9 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Workflow+1: Devananda van der Veen <devananda.vdv@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 29 Jul 2016 00:26:23 +0000
+Reviewed-on: https://review.openstack.org/348459
+Project: openstack/deb-ironic
+Branch: refs/heads/master

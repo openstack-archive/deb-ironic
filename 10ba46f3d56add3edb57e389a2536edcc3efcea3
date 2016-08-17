@@ -1,0 +1,13 @@
+Code-Review+1: Naohiro Tamura <naohirot.openstack@gmail.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 01 Aug 2016 11:27:50 +0000
+Reviewed-on: https://review.openstack.org/348624
+Project: openstack/deb-ironic
+Branch: refs/heads/master

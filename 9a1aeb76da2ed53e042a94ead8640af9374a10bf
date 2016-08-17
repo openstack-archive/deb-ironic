@@ -1,0 +1,13 @@
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Miles Gould <mgould@redhat.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+1: Cao ShuFeng <caosf.fnst@cn.fujitsu.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 28 Jun 2016 00:57:50 +0000
+Reviewed-on: https://review.openstack.org/325732
+Project: openstack/deb-ironic
+Branch: refs/heads/master

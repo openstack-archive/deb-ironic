@@ -1,0 +1,10 @@
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Akilan Pughazhendi <akilan.pughazhendi@intel.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 04 Aug 2016 21:04:03 +0000
+Reviewed-on: https://review.openstack.org/351246
+Project: openstack/deb-ironic
+Branch: refs/heads/master

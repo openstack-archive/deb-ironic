@@ -1,0 +1,11 @@
+Code-Review+1: Yuiko Takada Mori <y-mori@ti.jp.nec.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 27 Jun 2016 13:37:26 +0000
+Reviewed-on: https://review.openstack.org/330938
+Project: openstack/deb-ironic
+Branch: refs/heads/master

@@ -1,0 +1,10 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+1: Mathieu Mitchell <mmitchell@iweb.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 11 Aug 2016 17:50:40 +0000
+Reviewed-on: https://review.openstack.org/352820
+Project: openstack/deb-ironic
+Branch: refs/heads/master

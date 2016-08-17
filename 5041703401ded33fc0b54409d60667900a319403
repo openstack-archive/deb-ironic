@@ -1,0 +1,10 @@
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Workflow+1: Devananda van der Veen <devananda.vdv@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 13 Jul 2016 23:42:42 +0000
+Reviewed-on: https://review.openstack.org/213262
+Project: openstack/deb-ironic
+Branch: refs/heads/master

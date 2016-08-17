@@ -1,0 +1,9 @@
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 12 Jul 2016 14:27:19 +0000
+Reviewed-on: https://review.openstack.org/320848
+Project: openstack/deb-ironic
+Branch: refs/heads/master

@@ -1,0 +1,11 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+1: Miles Gould <mgould@redhat.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 08 Aug 2016 11:59:39 +0000
+Reviewed-on: https://review.openstack.org/350340
+Project: openstack/deb-ironic
+Branch: refs/heads/master

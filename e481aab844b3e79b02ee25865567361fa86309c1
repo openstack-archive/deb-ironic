@@ -1,0 +1,12 @@
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+1: Clenimar Filemon <clenimar@lsd.ufcg.edu.br>
+Code-Review+1: Anton Arefiev <aarefiev@mirantis.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 05 Aug 2016 22:47:57 +0000
+Reviewed-on: https://review.openstack.org/351076
+Project: openstack/deb-ironic
+Branch: refs/heads/master

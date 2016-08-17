@@ -1,0 +1,10 @@
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 25 Jul 2016 17:05:58 +0000
+Reviewed-on: https://review.openstack.org/344973
+Project: openstack/deb-ironic
+Branch: refs/heads/master

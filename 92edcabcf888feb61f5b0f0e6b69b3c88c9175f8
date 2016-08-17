@@ -1,0 +1,9 @@
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 05:17:20 +0000
+Reviewed-on: https://review.openstack.org/350243
+Project: openstack/deb-ironic
+Branch: refs/heads/master

@@ -1,0 +1,11 @@
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+1: Naohiro Tamura <naohirot.openstack@gmail.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 26 Jul 2016 11:13:04 +0000
+Reviewed-on: https://review.openstack.org/309206
+Project: openstack/deb-ironic
+Branch: refs/heads/master

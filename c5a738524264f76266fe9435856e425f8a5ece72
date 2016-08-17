@@ -1,0 +1,16 @@
+Code-Review+1: Thiago Paiva Brito <thiagop@lsd.ufcg.edu.br>
+Code-Review+1: Varun Gadiraju <varun.gadiraju@intel.com>
+Code-Review+1: Xavier <marcusrafael@lsd.ufcg.edu.br>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Stephanie Miller <stephane@alum.mit.edu>
+Code-Review+1: Kyrylo Romanenko <kromanenko@mirantis.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 02 Aug 2016 14:26:10 +0000
+Reviewed-on: https://review.openstack.org/346883
+Project: openstack/deb-ironic
+Branch: refs/heads/master

@@ -1,0 +1,9 @@
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 08 Jul 2016 18:28:41 +0000
+Reviewed-on: https://review.openstack.org/339431
+Project: openstack/deb-ironic
+Branch: refs/heads/master

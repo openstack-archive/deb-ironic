@@ -1,0 +1,8 @@
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Workflow+1: Devananda van der Veen <devananda.vdv@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 15 Jul 2016 08:27:18 +0000
+Reviewed-on: https://review.openstack.org/317392
+Project: openstack/deb-ironic
+Branch: refs/heads/master
