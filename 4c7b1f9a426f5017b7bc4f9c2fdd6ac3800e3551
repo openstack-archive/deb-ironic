@@ -1,0 +1,16 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+1: Zhenguo Niu <Niu.ZGlinux@gmail.com>
+Code-Review+1: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+1: Haomeng,Wang <wanghaomeng@gmail.com>
+Code-Review+1: Pavlo Shchelokovskyy <pshchelokovskyy@mirantis.com>
+Code-Review+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 12 Apr 2016 20:22:11 +0000
+Reviewed-on: https://review.openstack.org/302493
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/mitaka

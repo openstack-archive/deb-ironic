@@ -1,0 +1,10 @@
+Code-Review+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 31 May 2016 19:10:37 +0000
+Reviewed-on: https://review.openstack.org/323506
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/mitaka

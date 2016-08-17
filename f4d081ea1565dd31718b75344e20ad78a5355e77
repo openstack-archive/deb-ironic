@@ -1,0 +1,11 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+1: Tan Lin <lin.tan@intel.com>
+Code-Review+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 19 May 2016 09:08:48 +0000
+Reviewed-on: https://review.openstack.org/318045
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/mitaka

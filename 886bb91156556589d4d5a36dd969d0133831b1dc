@@ -1,0 +1,13 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+1: Naohiro Tamura <naohirot.openstack@gmail.com>
+Code-Review+1: Haomeng,Wang <wanghaomeng@gmail.com>
+Code-Review+1: Shuquan Huang <huang.shuquan@99cloud.net>
+Code-Review+2: Thierry Carrez <thierry@openstack.org>
+Workflow+1: Thierry Carrez <thierry@openstack.org>
+Code-Review+1: Kurt Taylor <kurt.r.taylor@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 14 Oct 2015 18:54:56 +0000
+Reviewed-on: https://review.openstack.org/234389
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/liberty

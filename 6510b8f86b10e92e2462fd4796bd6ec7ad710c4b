@@ -1,0 +1,14 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+1: Sam Betts <sam@code-smash.net>
+Code-Review+2: Matthew Treinish <mtreinish@kortar.org>
+Workflow+1: Matthew Treinish <mtreinish@kortar.org>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 04 Apr 2016 15:49:52 +0000
+Reviewed-on: https://review.openstack.org/299317
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/mitaka
