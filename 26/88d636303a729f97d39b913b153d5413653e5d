@@ -1,0 +1,9 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 29 Aug 2016 22:43:00 +0000
+Reviewed-on: https://review.openstack.org/357425
+Project: openstack/deb-ironic
+Branch: refs/heads/master

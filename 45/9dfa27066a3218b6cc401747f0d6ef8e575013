@@ -1,0 +1,9 @@
+Code-Review+2: Chris Krelle <nobodycam@gmail.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Chris Krelle <nobodycam@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 24 Aug 2016 21:01:25 +0000
+Reviewed-on: https://review.openstack.org/360003
+Project: openstack/deb-ironic
+Branch: refs/heads/master

@@ -1,0 +1,11 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+1: Victor Howard <victor.r.howard@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 19 Aug 2016 13:56:53 +0000
+Reviewed-on: https://review.openstack.org/228496
+Project: openstack/deb-ironic
+Branch: refs/heads/master

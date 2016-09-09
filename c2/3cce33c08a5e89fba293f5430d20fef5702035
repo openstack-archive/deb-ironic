@@ -1,0 +1,11 @@
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review-1: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 31 Aug 2016 23:32:22 +0000
+Reviewed-on: https://review.openstack.org/352648
+Project: openstack/deb-ironic
+Branch: refs/heads/master

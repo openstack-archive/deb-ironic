@@ -1,0 +1,10 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 19 Aug 2016 04:03:49 +0000
+Reviewed-on: https://review.openstack.org/357154
+Project: openstack/deb-ironic
+Branch: refs/heads/master

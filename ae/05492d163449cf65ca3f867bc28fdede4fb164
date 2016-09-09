@@ -1,0 +1,8 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 19 Aug 2016 01:26:24 +0000
+Reviewed-on: https://review.openstack.org/357437
+Project: openstack/deb-ironic
+Branch: refs/heads/master

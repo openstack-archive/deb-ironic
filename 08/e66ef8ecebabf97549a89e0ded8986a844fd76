@@ -1,0 +1,11 @@
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 26 Aug 2016 16:42:50 +0000
+Reviewed-on: https://review.openstack.org/357963
+Project: openstack/deb-ironic
+Branch: refs/heads/master
