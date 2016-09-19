@@ -24,22 +24,18 @@ import inspect
 import json
 import os
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 import six
 
 from ironic.common import exception
-from ironic.common.i18n import _, _LE
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import raid
 
 LOG = logging.getLogger(__name__)
 
 RAID_CONFIG_SCHEMA = os.path.join(os.path.dirname(__file__),
                                   'raid_config_schema.json')
-
-
-CONF = cfg.CONF
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -158,8 +154,14 @@ class BareDriver(BaseDriver):
     Any composable interfaces should be added as class attributes of this
     class, as well as appended to core_interfaces or standard_interfaces here.
     """
+
     def __init__(self):
-        pass
+        self.network = None
+        """`Core` attribute for network connectivity.
+
+        A reference to an instance of :class:NetworkInterface.
+        """
+        self.core_interfaces.append('network')
 
 
 class BaseInterface(object):
@@ -293,9 +295,7 @@ class DeployInterface(BaseInterface):
         this method should be implemented by the driver.
 
         If implemented, this method must be idempotent. It may be called
-        multiple times for the same node on the same conductor, and it may be
-        called by multiple conductors in parallel. Therefore, it must not
-        require an exclusive lock.
+        multiple times for the same node on the same conductor.
 
         This method is called before `deploy`.
 
@@ -374,6 +374,17 @@ class DeployInterface(BaseInterface):
         :param task: a TaskManager instance containing the node to act on.
         """
         pass
+
+    def heartbeat(self, task, callback_url):
+        """Record a heartbeat for the node.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :param callback_url: a URL to use to call to the ramdisk.
+        :return: None
+        """
+        LOG.warning(_LW('Got heartbeat message from node %(node)s, but '
+                        'the driver %(driver)s does not support heartbeating'),
+                    {'node': task.node.uuid, 'driver': task.node.driver})
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -1007,6 +1018,74 @@ class RAIDInterface(BaseInterface):
             logical disks and a textual description for them.
         """
         return raid.get_logical_disk_properties(self.raid_schema)
+
+
+@six.add_metaclass(abc.ABCMeta)
+class NetworkInterface(object):
+    """Base class for network interfaces."""
+
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+        return {}
+
+    def validate(self, task):
+        """Validates the network interface.
+
+        :param task: a TaskManager instance.
+        :raises: InvalidParameterValue, if the network interface configuration
+            is invalid.
+        :raises: MissingParameterValue, if some parameters are missing.
+        """
+
+    @abc.abstractmethod
+    def add_provisioning_network(self, task):
+        """Add the provisioning network to a node.
+
+        :param task: A TaskManager instance.
+        :raises: NetworkError
+        """
+
+    @abc.abstractmethod
+    def remove_provisioning_network(self, task):
+        """Remove the provisioning network from a node.
+
+        :param task: A TaskManager instance.
+        """
+
+    @abc.abstractmethod
+    def configure_tenant_networks(self, task):
+        """Configure tenant networks for a node.
+
+        :param task: A TaskManager instance.
+        :raises: NetworkError
+        """
+
+    @abc.abstractmethod
+    def unconfigure_tenant_networks(self, task):
+        """Unconfigure tenant networks for a node.
+
+        :param task: A TaskManager instance.
+        """
+
+    @abc.abstractmethod
+    def add_cleaning_network(self, task):
+        """Add the cleaning network to a node.
+
+        :param task: A TaskManager instance.
+        :returns: a dictionary in the form {port.uuid: neutron_port['id']}
+        :raises: NetworkError
+        """
+
+    @abc.abstractmethod
+    def remove_cleaning_network(self, task):
+        """Remove the cleaning network from a node.
+
+        :param task: A TaskManager instance.
+        :raises: NetworkError
+        """
 
 
 def _validate_argsinfo(argsinfo):

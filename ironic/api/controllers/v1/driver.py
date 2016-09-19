@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from ironic_lib import metrics_utils
 import pecan
 from pecan import rest
 from six.moves import http_client
@@ -25,7 +26,10 @@ from ironic.api.controllers.v1 import types
 from ironic.api.controllers.v1 import utils as api_utils
 from ironic.api import expose
 from ironic.common import exception
+from ironic.common import policy
 
+
+METRICS = metrics_utils.get_metrics_logger(__name__)
 
 # Property information for drivers:
 #   key = driver name;
@@ -139,6 +143,7 @@ class DriverPassthruController(rest.RestController):
         'methods': ['GET']
     }
 
+    @METRICS.timer('DriverPassthruController.methods')
     @expose.expose(wtypes.text, wtypes.text)
     def methods(self, driver_name):
         """Retrieve information about vendor methods of the given driver.
@@ -149,6 +154,9 @@ class DriverPassthruController(rest.RestController):
         :raises: DriverNotFound if the driver name is invalid or the
                  driver cannot be loaded.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:driver:vendor_passthru', cdict, cdict)
+
         if driver_name not in _VENDOR_METHODS:
             topic = pecan.request.rpcapi.get_topic_for_driver(driver_name)
             ret = pecan.request.rpcapi.get_driver_vendor_passthru_methods(
@@ -157,6 +165,7 @@ class DriverPassthruController(rest.RestController):
 
         return _VENDOR_METHODS[driver_name]
 
+    @METRICS.timer('DriverPassthruController._default')
     @expose.expose(wtypes.text, wtypes.text, wtypes.text,
                    body=wtypes.text)
     def _default(self, driver_name, method, data=None):
@@ -167,6 +176,12 @@ class DriverPassthruController(rest.RestController):
                        implementation.
         :param data: body of data to supply to the specified method.
         """
+        cdict = pecan.request.context.to_dict()
+        if method == "lookup":
+            policy.authorize('baremetal:driver:ipa_lookup', cdict, cdict)
+        else:
+            policy.authorize('baremetal:driver:vendor_passthru', cdict, cdict)
+
         topic = pecan.request.rpcapi.get_topic_for_driver(driver_name)
         return api_utils.vendor_passthru(driver_name, method, topic, data=data,
                                          driver_passthru=True)
@@ -178,6 +193,7 @@ class DriverRaidController(rest.RestController):
         'logical_disk_properties': ['GET']
     }
 
+    @METRICS.timer('DriverRaidController.logical_disk_properties')
     @expose.expose(types.jsontype, wtypes.text)
     def logical_disk_properties(self, driver_name):
         """Returns the logical disk properties for the driver.
@@ -192,6 +208,10 @@ class DriverRaidController(rest.RestController):
         :raises: DriverNotFound, if driver is not loaded on any of the
             conductors.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:driver:get_raid_logical_disk_properties',
+                         cdict, cdict)
+
         if not api_utils.allow_raid_config():
             raise exception.NotAcceptable()
 
@@ -222,6 +242,7 @@ class DriversController(rest.RestController):
         'properties': ['GET'],
     }
 
+    @METRICS.timer('DriversController.get_all')
     @expose.expose(DriverList)
     def get_all(self):
         """Retrieve a list of drivers."""
@@ -229,9 +250,13 @@ class DriversController(rest.RestController):
         #              will break from a single-line doc string.
         #              This is a result of a bug in sphinxcontrib-pecanwsme
         # https://github.com/dreamhost/sphinxcontrib-pecanwsme/issues/8
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:driver:get', cdict, cdict)
+
         driver_list = pecan.request.dbapi.get_active_driver_dict()
         return DriverList.convert_with_links(driver_list)
 
+    @METRICS.timer('DriversController.get_one')
     @expose.expose(Driver, wtypes.text)
     def get_one(self, driver_name):
         """Retrieve a single driver."""
@@ -239,6 +264,8 @@ class DriversController(rest.RestController):
         # retrieving a list of drivers using the current sqlalchemy schema, but
         # this path must be exposed for Pecan to route any paths we might
         # choose to expose below it.
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:driver:get', cdict, cdict)
 
         driver_dict = pecan.request.dbapi.get_active_driver_dict()
         for name, hosts in driver_dict.items():
@@ -247,6 +274,7 @@ class DriversController(rest.RestController):
 
         raise exception.DriverNotFound(driver_name=driver_name)
 
+    @METRICS.timer('DriversController.properties')
     @expose.expose(wtypes.text, wtypes.text)
     def properties(self, driver_name):
         """Retrieve property information of the given driver.
@@ -257,6 +285,9 @@ class DriversController(rest.RestController):
         :raises: DriverNotFound (HTTP 404) if the driver name is invalid or
                  the driver cannot be loaded.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:driver:get_properties', cdict, cdict)
+
         if driver_name not in _DRIVER_PROPERTIES:
             topic = pecan.request.rpcapi.get_topic_for_driver(driver_name)
             properties = pecan.request.rpcapi.get_driver_properties(

@@ -15,6 +15,7 @@
 
 import datetime
 
+from ironic_lib import metrics_utils
 import pecan
 from pecan import rest
 from six.moves import http_client
@@ -30,7 +31,10 @@ from ironic.api.controllers.v1 import utils as api_utils
 from ironic.api import expose
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common import policy
 from ironic import objects
+
+METRICS = metrics_utils.get_metrics_logger(__name__)
 
 
 _DEFAULT_RETURN_FIELDS = ('uuid', 'description')
@@ -190,6 +194,7 @@ class ChassisController(rest.RestController):
                                                     sort_key=sort_key,
                                                     sort_dir=sort_dir)
 
+    @METRICS.timer('ChassisController.get_all')
     @expose.expose(ChassisCollection, types.uuid, int,
                    wtypes.text, wtypes.text, types.listtype)
     def get_all(self, marker=None, limit=None, sort_key='id', sort_dir='asc',
@@ -198,17 +203,24 @@ class ChassisController(rest.RestController):
 
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
+                      This value cannot be larger than the value of max_limit
+                      in the [api] section of the ironic configuration, or only
+                      max_limit resources will be returned.
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         :param fields: Optional, a list with a specified set of fields
             of the resource to be returned.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:chassis:get', cdict, cdict)
+
         api_utils.check_allow_specify_fields(fields)
         if fields is None:
             fields = _DEFAULT_RETURN_FIELDS
         return self._get_chassis_collection(marker, limit, sort_key, sort_dir,
                                             fields=fields)
 
+    @METRICS.timer('ChassisController.detail')
     @expose.expose(ChassisCollection, types.uuid, int,
                    wtypes.text, wtypes.text)
     def detail(self, marker=None, limit=None, sort_key='id', sort_dir='asc'):
@@ -216,9 +228,15 @@ class ChassisController(rest.RestController):
 
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
+                      This value cannot be larger than the value of max_limit
+                      in the [api] section of the ironic configuration, or only
+                      max_limit resources will be returned.
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:chassis:get', cdict, cdict)
+
         # /detail should only work against collections
         parent = pecan.request.path.split('/')[:-1][-1]
         if parent != "chassis":
@@ -228,6 +246,7 @@ class ChassisController(rest.RestController):
         return self._get_chassis_collection(marker, limit, sort_key, sort_dir,
                                             resource_url)
 
+    @METRICS.timer('ChassisController.get_one')
     @expose.expose(Chassis, types.uuid, types.listtype)
     def get_one(self, chassis_uuid, fields=None):
         """Retrieve information about the given chassis.
@@ -236,17 +255,24 @@ class ChassisController(rest.RestController):
         :param fields: Optional, a list with a specified set of fields
             of the resource to be returned.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:chassis:get', cdict, cdict)
+
         api_utils.check_allow_specify_fields(fields)
         rpc_chassis = objects.Chassis.get_by_uuid(pecan.request.context,
                                                   chassis_uuid)
         return Chassis.convert_with_links(rpc_chassis, fields=fields)
 
+    @METRICS.timer('ChassisController.post')
     @expose.expose(Chassis, body=Chassis, status_code=http_client.CREATED)
     def post(self, chassis):
         """Create a new chassis.
 
         :param chassis: a chassis within the request body.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:chassis:create', cdict, cdict)
+
         new_chassis = objects.Chassis(pecan.request.context,
                                       **chassis.as_dict())
         new_chassis.create()
@@ -254,6 +280,7 @@ class ChassisController(rest.RestController):
         pecan.response.location = link.build_url('chassis', new_chassis.uuid)
         return Chassis.convert_with_links(new_chassis)
 
+    @METRICS.timer('ChassisController.patch')
     @wsme.validate(types.uuid, [ChassisPatchType])
     @expose.expose(Chassis, types.uuid, body=[ChassisPatchType])
     def patch(self, chassis_uuid, patch):
@@ -262,6 +289,9 @@ class ChassisController(rest.RestController):
         :param chassis_uuid: UUID of a chassis.
         :param patch: a json PATCH document to apply to this chassis.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:chassis:update', cdict, cdict)
+
         rpc_chassis = objects.Chassis.get_by_uuid(pecan.request.context,
                                                   chassis_uuid)
         try:
@@ -286,12 +316,16 @@ class ChassisController(rest.RestController):
         rpc_chassis.save()
         return Chassis.convert_with_links(rpc_chassis)
 
+    @METRICS.timer('ChassisController.delete')
     @expose.expose(None, types.uuid, status_code=http_client.NO_CONTENT)
     def delete(self, chassis_uuid):
         """Delete a chassis.
 
         :param chassis_uuid: UUID of a chassis.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:chassis:delete', cdict, cdict)
+
         rpc_chassis = objects.Chassis.get_by_uuid(pecan.request.context,
                                                   chassis_uuid)
         rpc_chassis.destroy()

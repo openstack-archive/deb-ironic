@@ -28,7 +28,7 @@ from oslo_log import log
 from oslo_utils import strutils
 from oslo_utils import timeutils
 from oslo_utils import uuidutils
-from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy.orm.exc import NoResultFound, MultipleResultsFound
 from sqlalchemy.orm import joinedload
 from sqlalchemy import sql
 
@@ -214,6 +214,8 @@ class Connection(api.Connection):
             query = query.filter_by(maintenance=filters['maintenance'])
         if 'driver' in filters:
             query = query.filter_by(driver=filters['driver'])
+        if 'resource_class' in filters:
+            query = query.filter_by(resource_class=filters['resource_class'])
         if 'provision_state' in filters:
             query = query.filter_by(provision_state=filters['provision_state'])
         if 'provisioned_before' in filters:
@@ -298,11 +300,8 @@ class Connection(api.Connection):
 
         # TODO(zhenguo): Support creating node with tags
         if 'tags' in values:
-            LOG.warning(
-                _LW('Ignore the specified tags %(tags)s when creating node: '
-                    '%(node)s.'), {'tags': values['tags'],
-                                   'node': values['uuid']})
-            del values['tags']
+            msg = _("Cannot create node with tags.")
+            raise exception.InvalidParameterValue(err=msg)
 
         node = models.Node()
         node.update(values)
@@ -408,7 +407,7 @@ class Connection(api.Connection):
                     instance_uuid=values['instance_uuid'],
                     node=node_id)
             else:
-                raise e
+                raise
 
     def _do_update_node(self, node_id, values):
         with _session_for_write():
@@ -603,7 +602,7 @@ class Connection(api.Connection):
                     raise exception.PortgroupMACAlreadyExists(
                         mac=values['address'])
                 else:
-                    raise exc
+                    raise
             return ref
 
     def destroy_portgroup(self, portgroup_id):
@@ -755,6 +754,25 @@ class Connection(api.Connection):
                 _LW('Cleared reservations held by %(hostname)s: '
                     '%(nodes)s'), {'hostname': hostname, 'nodes': nodes})
 
+    def clear_node_target_power_state(self, hostname):
+        nodes = []
+        with _session_for_write():
+            query = (model_query(models.Node)
+                     .filter_by(reservation=hostname))
+            query = query.filter(models.Node.target_power_state != sql.null())
+            nodes = [node['uuid'] for node in query]
+            query.update({'target_power_state': None,
+                          'last_error': _("Pending power operation was "
+                                          "aborted due to conductor "
+                                          "restart")})
+
+        if nodes:
+            nodes = ', '.join(nodes)
+            LOG.warning(
+                _LW('Cleared target_power_state of the locked nodes in '
+                    'powering process, their power state can be incorrect: '
+                    '%(nodes)s'), {'nodes': nodes})
+
     def get_active_driver_dict(self, interval=None):
         if interval is None:
             interval = CONF.conductor.heartbeat_timeout
@@ -843,3 +861,18 @@ class Connection(api.Connection):
     def node_tag_exists(self, node_id, tag):
         q = model_query(models.NodeTag).filter_by(node_id=node_id, tag=tag)
         return model_query(q.exists()).scalar()
+
+    def get_node_by_port_addresses(self, addresses):
+        q = model_query(models.Node).distinct().join(models.Port)
+        q = q.filter(models.Port.address.in_(addresses))
+
+        try:
+            return q.one()
+        except NoResultFound:
+            raise exception.NodeNotFound(
+                _('Node with port addresses %s was not found')
+                % addresses)
+        except MultipleResultsFound:
+            raise exception.NodeNotFound(
+                _('Multiple nodes with port addresses %s were found')
+                % addresses)

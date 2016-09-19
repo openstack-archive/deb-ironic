@@ -15,18 +15,62 @@
 
 from oslo_config import cfg
 
+from ironic.conf import agent
+from ironic.conf import api
+from ironic.conf import audit
 from ironic.conf import cimc
 from ironic.conf import cisco_ucs
 from ironic.conf import conductor
 from ironic.conf import console
 from ironic.conf import database
+from ironic.conf import default
+from ironic.conf import deploy
 from ironic.conf import dhcp
+from ironic.conf import glance
+from ironic.conf import iboot
+from ironic.conf import ilo
+from ironic.conf import inspector
+from ironic.conf import ipmi
+from ironic.conf import irmc
+from ironic.conf import keystone
+from ironic.conf import metrics
+from ironic.conf import metrics_statsd
+from ironic.conf import neutron
+from ironic.conf import oneview
+from ironic.conf import seamicro
+from ironic.conf import service_catalog
+from ironic.conf import snmp
+from ironic.conf import ssh
+from ironic.conf import swift
+from ironic.conf import virtualbox
 
 CONF = cfg.CONF
 
+agent.register_opts(CONF)
+api.register_opts(CONF)
+audit.register_opts(CONF)
 cimc.register_opts(CONF)
 cisco_ucs.register_opts(CONF)
 conductor.register_opts(CONF)
 console.register_opts(CONF)
 database.register_opts(CONF)
+default.register_opts(CONF)
+deploy.register_opts(CONF)
 dhcp.register_opts(CONF)
+glance.register_opts(CONF)
+iboot.register_opts(CONF)
+ilo.register_opts(CONF)
+inspector.register_opts(CONF)
+ipmi.register_opts(CONF)
+irmc.register_opts(CONF)
+keystone.register_opts(CONF)
+metrics.register_opts(CONF)
+metrics_statsd.register_opts(CONF)
+neutron.register_opts(CONF)
+oneview.register_opts(CONF)
+seamicro.register_opts(CONF)
+service_catalog.register_opts(CONF)
+snmp.register_opts(CONF)
+ssh.register_opts(CONF)
+swift.register_opts(CONF)
+virtualbox.register_opts(CONF)

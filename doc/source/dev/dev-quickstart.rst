@@ -8,23 +8,26 @@ This is a quick walkthrough to get you started developing code for Ironic.
 This assumes you are already familiar with submitting code reviews to
 an OpenStack project.
 
-The gate currently runs the unit tests under both
-Python 2.7 and Python 3.4.  It is strongly encouraged to run the unit tests
-locally under one, the other, or both prior to submitting a patch.
+The gate currently runs the unit tests under Python 2.7, Python 3.4
+and Python 3.5. It is strongly encouraged to run the unit tests locally prior
+to submitting a patch.
 
 .. note::
     Do not run unit tests on the same environment as devstack due to
     conflicting configuration with system dependencies.
 
+.. note::
+    This document is compatible with Python (3.5), Ubuntu (16.04) and Fedora (23).
+
 .. seealso::
 
     http://docs.openstack.org/infra/manual/developers.html#development-workflow
 
-Install prerequisites (for python 2.7):
+Install prerequisites for python 2.7:
 
 - Ubuntu/Debian::
 
-    sudo apt-get install python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev gettext ipmitool psmisc graphviz libjpeg-dev
+    sudo apt-get install build-essential python-dev libssl-dev python-pip libmysqlclient-dev libxml2-dev libxslt-dev libpq-dev git git-review libffi-dev gettext ipmitool psmisc graphviz libjpeg-dev
 
 - Fedora 21/RHEL7/CentOS7::
 
@@ -50,12 +53,25 @@ Install prerequisites (for python 2.7):
   `<https://software.opensuse.org/download.html?project=graphics&package=graphviz-plugins>`_.
 
 
-To use Python 3.4, follow the instructions above to install prerequisites and
+If you need Python 3.4, follow the instructions above to install prerequisites for 2.7 and
 additionally install the following packages:
 
-- On Ubuntu/Debian::
+- On Ubuntu 14.x/Debian::
 
     sudo apt-get install python3-dev
+
+- On Ubuntu 16.04::
+
+    wget https://www.python.org/ftp/python/3.4.4/Python-3.4.4.tgz
+    sudo tar xzf Python-3.4.4.tgz
+    cd Python-3.4.4
+    sudo ./configure
+    sudo make altinstall
+
+    # This will install Python 3.4 without replacing 3.5. To check if 3.4 was installed properly
+    run this command:
+
+    python3.4 -V
 
 - On Fedora 21/RHEL7/CentOS7::
 
@@ -64,6 +80,29 @@ additionally install the following packages:
 - On Fedora 22 and higher::
 
     sudo dnf install python3-devel
+
+If you need Python 3.5, follow the instructions for installing prerequisites for Python 2.7 and
+run the following commands.
+
+- On Ubuntu 14.04::
+
+    wget https://www.python.org/ftp/python/3.5.2/Python-3.5.2.tgz
+    sudo tar xzf Python-3.5.2.tgz
+    cd Python-3.5.2
+    sudo ./configure
+    sudo make altinstall
+
+    # This will install Python 3.5 without replacing 3.4. To check if 3.5 was installed properly
+    run this command:
+
+    python3.5 -V
+
+- On Fedora 23::
+
+    sudo dnf install -y dnf-plugins-core
+    sudo dnf copr enable -y mstuchli/Python3.5
+    dnf install -y python35-python3
+
 
 If your distro has at least tox 1.8, use similar command to install
 ``python-tox`` package. Otherwise install this on all distros::
@@ -95,15 +134,24 @@ All unit tests should be run using tox. To run Ironic's entire test suite::
     # run all tests (unit under both py27 and py34, and pep8)
     tox
 
+To run the unit tests under py34 and also run the pep8 tests::
+
+    # run all tests (unit under py34 and pep8)
+    tox -epy34 -epep8
+
 To run the unit tests under py27 and also run the pep8 tests::
 
     # run all tests (unit under py27 and pep8)
     tox -epy27 -epep8
 
-To run the unit tests under py34 and also run the pep8 tests::
+.. note::
+    If tests are run under py27 and then run under py34 or py35 the following error may occur::
 
-    # run all tests (unit under py34 and pep8)
-    tox -epy34 -epep8
+      db type could not be determined
+      ERROR: InvocationError: '/home/ubuntu/ironic/.tox/py35/bin/ostestr'
+
+    To overcome this error remove the file `.testrepository/times.dbm`
+    and then run the py34 or py35 test.
 
 You may pass options to the test programs using positional arguments.
 To run a specific unit test, this passes the -r option and desired test
@@ -377,9 +425,9 @@ Switch to the stack user and clone DevStack::
     git clone https://git.openstack.org/openstack-dev/devstack.git devstack
 
 Create devstack/local.conf with minimal settings required to enable Ironic.
-You can use either of two drivers for deploy: pxe_* or agent_*, see :ref:`IPA`
+You can use either of two drivers for deploy: agent\_\* or pxe\_\*, see :ref:`IPA`
 for explanation. An example local.conf that enables both types of drivers
-and uses the ``pxe_ssh`` driver by default::
+and uses the ``agent_ipmitool`` driver by default::
 
     cd devstack
     cat >local.conf <<END
@@ -429,14 +477,13 @@ and uses the ``pxe_ssh`` driver by default::
     IRONIC_VM_SSH_PORT=22
     IRONIC_BAREMETAL_BASIC_OPS=True
     DEFAULT_INSTANCE_TYPE=baremetal
-    IRONIC_DEPLOY_DRIVER_ISCSI_WITH_IPA=True
 
     # Enable Ironic drivers.
     IRONIC_ENABLED_DRIVERS=fake,agent_ssh,agent_ipmitool,pxe_ssh,pxe_ipmitool
 
     # Change this to alter the default driver for nodes created by devstack.
     # This driver should be in the enabled list above.
-    IRONIC_DEPLOY_DRIVER=pxe_ssh
+    IRONIC_DEPLOY_DRIVER=agent_ipmitool
 
     # The parameters below represent the minimum possible values to create
     # functional nodes.
@@ -464,6 +511,24 @@ and uses the ``pxe_ssh`` driver by default::
     IRONIC_VM_LOG_DIR=$HOME/ironic-bm-logs
 
     END
+
+.. note::
+    Git protocol requires access to port 9418, which is not a standard port that
+    corporate firewalls always allow. If you are behind a firewall or on a proxy that
+    blocks Git protocol, modify the ``enable_plugin`` line to use ``https://`` instead
+    of ``git://`` and add ``GIT_BASE=https://git.openstack.org`` to the credentials::
+
+      GIT_BASE=https://git.openstack.org
+
+      # Enable Ironic plugin
+      enable_plugin ironic https://git.openstack.org/openstack/ironic
+
+.. note::
+    The agent_ssh and pxe_ssh drivers are being deprecated in favor of the
+    more production-like agent_ipmitool and pxe_ipmitool drivers. When a
+    \*_ipmitool driver is set and IRONIC_IS_HARDWARE variable is false devstack
+    will automatically set up `VirtualBMC <https://github.com/openstack/virtualbmc>`_
+    to control the power state of the virtual baremetal nodes.
 
 .. note::
     When running QEMU as non-root user (e.g. ``qemu`` on Fedora or ``libvirt-qemu`` on Ubuntu),
@@ -642,7 +707,9 @@ Building developer documentation
 
 If you would like to build the documentation locally, eg. to test your
 documentation changes before uploading them for review, run these
-commands to build the documentation set::
+commands to build the documentation set:
+
+- On your local machine::
 
     # activate your development virtualenv
     source .tox/venv/bin/activate
@@ -650,7 +717,26 @@ commands to build the documentation set::
     # build the docs
     tox -edocs
 
-Now use your browser to open the top-level index.html located at::
+    #Now use your browser to open the top-level index.html located at:
 
     ironic/doc/build/html/index.html
+
+
+- On a remote machine::
+
+    # Go to the directory that contains the docs
+    cd ~/ironic/doc/source/
+
+    # Build the docs
+    tox -edocs
+
+    # Change directory to the newly built HTML files
+    cd ~/ironic/doc/build/html/
+
+    # Create a server using python on port 8000
+    python -m SimpleHTTPServer 8000
+
+    #Now use your browser to open the top-level index.html located at:
+
+    http://your_ip:8000
 
