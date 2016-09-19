@@ -81,7 +81,7 @@ class ConductorManager(base_manager.BaseConductorManager):
     """Ironic Conductor manager main class."""
 
     # NOTE(rloo): This must be in sync with rpcapi.ConductorAPI's.
-    RPC_API_VERSION = '1.33'
+    RPC_API_VERSION = '1.34'
 
     target = messaging.Target(version=RPC_API_VERSION)
 
@@ -91,7 +91,8 @@ class ConductorManager(base_manager.BaseConductorManager):
 
     @messaging.expected_exceptions(exception.InvalidParameterValue,
                                    exception.MissingParameterValue,
-                                   exception.NodeLocked)
+                                   exception.NodeLocked,
+                                   exception.InvalidState)
     def update_node(self, context, node_obj):
         """Update a node with the supplied data.
 
@@ -112,6 +113,27 @@ class ConductorManager(base_manager.BaseConductorManager):
         delta = node_obj.obj_what_changed()
         if 'maintenance' in delta and not node_obj.maintenance:
             node_obj.maintenance_reason = None
+
+        if 'network_interface' in delta:
+            allowed_update_states = [states.ENROLL, states.INSPECTING,
+                                     states.MANAGEABLE]
+            if not (node_obj.provision_state in allowed_update_states or
+                    node_obj.maintenance):
+                action = _("Node %(node)s can not have network_interface "
+                           "updated unless it is in one of allowed "
+                           "(%(allowed)s) states or in maintenance mode.")
+                raise exception.InvalidState(
+                    action % {'node': node_obj.uuid,
+                              'allowed': ', '.join(allowed_update_states)})
+            net_iface = node_obj.network_interface
+            if net_iface not in CONF.enabled_network_interfaces:
+                raise exception.InvalidParameterValue(
+                    _("Cannot change network_interface to invalid value "
+                      "%(n_interface)s for node %(node)s, valid interfaces "
+                      "are: %(valid_choices)s.") % {
+                        'n_interface': net_iface, 'node': node_obj.uuid,
+                        'valid_choices': CONF.enabled_network_interfaces,
+                    })
 
         driver_name = node_obj.driver if 'driver' in delta else None
         with task_manager.acquire(context, node_id, shared=False,
@@ -142,8 +164,8 @@ class ConductorManager(base_manager.BaseConductorManager):
 
         """
         LOG.debug("RPC change_node_power_state called for node %(node)s. "
-                  "The desired new state is %(state)s."
-                  % {'node': node_id, 'state': new_state})
+                  "The desired new state is %(state)s.",
+                  {'node': node_id, 'state': new_state})
 
         with task_manager.acquire(context, node_id, shared=False,
                                   purpose='changing node power state') as task:
@@ -446,8 +468,8 @@ class ConductorManager(base_manager.BaseConductorManager):
             except (exception.InvalidParameterValue,
                     exception.MissingParameterValue) as e:
                 raise exception.InstanceDeployFailure(
-                    _("RPC do_node_deploy failed to validate deploy or "
-                      "power info for node %(node_uuid)s. Error: %(msg)s") %
+                    _("Failed to validate deploy or power info for node "
+                      "%(node_uuid)s. Error: %(msg)s") %
                     {'node_uuid': node.uuid, 'msg': e})
 
             LOG.debug("do_node_deploy Calling event: %(event)s for node: "
@@ -644,8 +666,8 @@ class ConductorManager(base_manager.BaseConductorManager):
             try:
                 task.driver.power.validate(task)
             except exception.InvalidParameterValue as e:
-                msg = (_('RPC do_node_clean failed to validate power info.'
-                         ' Cannot clean node %(node)s. Error: %(msg)s') %
+                msg = (_('Failed to validate power info. '
+                         'Cannot clean node %(node)s. Error: %(msg)s') %
                        {'node': node.uuid, 'msg': e})
                 raise exception.InvalidParameterValue(msg)
 
@@ -1558,8 +1580,7 @@ class ConductorManager(base_manager.BaseConductorManager):
                  async task
         """
         LOG.debug('RPC set_console_mode called for node %(node)s with '
-                  'enabled %(enabled)s' % {'node': node_id,
-                                           'enabled': enabled})
+                  'enabled %(enabled)s', {'node': node_id, 'enabled': enabled})
 
         with task_manager.acquire(context, node_id, shared=False,
                                   purpose='setting console mode') as task:
@@ -1994,8 +2015,8 @@ class ConductorManager(base_manager.BaseConductorManager):
                 task.driver.inspect.validate(task)
             except (exception.InvalidParameterValue,
                     exception.MissingParameterValue) as e:
-                error = (_("RPC inspect_hardware failed to validate "
-                           "inspection or power info. Error: %(msg)s")
+                error = (_("Failed to validate inspection or power info. "
+                           "Error: %(msg)s")
                          % {'msg': e})
                 raise exception.HardwareInspectionFailure(error=error)
 
@@ -2093,6 +2114,25 @@ class ConductorManager(base_manager.BaseConductorManager):
 
         return driver.raid.get_logical_disk_properties()
 
+    @messaging.expected_exceptions(exception.NoFreeConductorWorker)
+    def heartbeat(self, context, node_id, callback_url):
+        """Process a heartbeat from the ramdisk.
+
+        :param context: request context.
+        :param node_id: node id or uuid.
+        :param callback_url: URL to reach back to the ramdisk.
+        :raises: NoFreeConductorWorker if there are no conductors to process
+            this heartbeat request.
+        """
+        LOG.debug('RPC heartbeat called for node %s', node_id)
+
+        # NOTE(dtantsur): we acquire a shared lock to begin with, drivers are
+        # free to promote it to an exclusive one.
+        with task_manager.acquire(context, node_id, shared=True,
+                                  purpose='heartbeat') as task:
+            task.spawn_after(self._spawn_worker, task.driver.deploy.heartbeat,
+                             task, callback_url)
+
     def _object_dispatch(self, target, method, context, args, kwargs):
         """Dispatch a call to an object method.
 
@@ -2127,7 +2167,7 @@ class ConductorManager(base_manager.BaseConductorManager):
         :param args: The positional arguments to the action method
         :param kwargs: The keyword arguments to the action method
         :returns: The result of the action method, which may (or may not)
-        be an instance of the implementing VersionedObject class.
+                  be an instance of the implementing VersionedObject class.
         """
         objclass = objects_base.IronicObject.obj_class_from_name(
             objname, object_versions[objname])
@@ -2485,8 +2525,8 @@ def _do_inspect_hardware(task):
 
     if new_state == states.MANAGEABLE:
         task.process_event('done')
-        LOG.info(_LI('Successfully inspected node %(node)s')
-                 % {'node': node.uuid})
+        LOG.info(_LI('Successfully inspected node %(node)s'),
+                 {'node': node.uuid})
     elif new_state != states.INSPECTING:
         error = (_("During inspection, driver returned unexpected "
                    "state %(state)s") % {'state': new_state})

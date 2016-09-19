@@ -1,4 +1,3 @@
-#
 # Copyright 2015 Hewlett Packard Development Company, LP
 # Copyright 2015 Universidade Federal de Campina Grande
 #
@@ -14,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import importutils
 
@@ -23,6 +21,7 @@ from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LW
 from ironic.common import states
+from ironic.conf import CONF
 from ironic.drivers import utils
 
 
@@ -31,27 +30,6 @@ LOG = logging.getLogger(__name__)
 client = importutils.try_import('oneview_client.client')
 oneview_states = importutils.try_import('oneview_client.states')
 oneview_exceptions = importutils.try_import('oneview_client.exceptions')
-
-opts = [
-    cfg.StrOpt('manager_url',
-               help=_('URL where OneView is available')),
-    cfg.StrOpt('username',
-               help=_('OneView username to be used')),
-    cfg.StrOpt('password',
-               secret=True,
-               help=_('OneView password to be used')),
-    cfg.BoolOpt('allow_insecure_connections',
-                default=False,
-                help=_('Option to allow insecure connection with OneView')),
-    cfg.StrOpt('tls_cacert_file',
-               help=_('Path to CA certificate')),
-    cfg.IntOpt('max_polling_attempts',
-               default=12,
-               help=_('Max connection retries to check changes on OneView')),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(opts, group='oneview')
 
 REQUIRED_ON_DRIVER_INFO = {
     'server_hardware_uri': _("Server Hardware URI. Required in driver_info."),
@@ -82,6 +60,15 @@ COMMON_PROPERTIES.update(REQUIRED_ON_DRIVER_INFO)
 COMMON_PROPERTIES.update(REQUIRED_ON_PROPERTIES)
 COMMON_PROPERTIES.update(OPTIONAL_ON_PROPERTIES)
 
+ISCSI_PXE_ONEVIEW = 'iscsi_pxe_oneview'
+AGENT_PXE_ONEVIEW = 'agent_pxe_oneview'
+
+# NOTE(xavierr): We don't want to translate NODE_IN_USE_BY_ONEVIEW and
+# SERVER_HARDWARE_ALLOCATION_ERROR to avoid inconsistency in the nodes
+# caused by updates on translation in upgrades of ironic.
+NODE_IN_USE_BY_ONEVIEW = 'node in use by OneView'
+SERVER_HARDWARE_ALLOCATION_ERROR = 'server hardware allocation error'
+
 
 def get_oneview_client():
     """Generates an instance of the OneView client.
@@ -91,7 +78,6 @@ def get_oneview_client():
 
     :returns: an instance of the OneView client
     """
-
     oneview_client = client.Client(
         manager_url=CONF.oneview.manager_url,
         username=CONF.oneview.username,
@@ -161,12 +147,16 @@ def get_oneview_info(node):
         :enclosure_group_uri: the uri of the enclosure group in OneView
         :server_profile_template_uri: the uri of the server profile template in
             OneView
-    :raises InvalidParameterValue if node capabilities are malformed
+    :raises OneViewInvalidNodeParameter if node capabilities are malformed
     """
 
-    capabilities_dict = utils.capabilities_to_dict(
-        node.properties.get('capabilities', '')
-    )
+    try:
+        capabilities_dict = utils.capabilities_to_dict(
+            node.properties.get('capabilities', '')
+        )
+    except exception.InvalidParameterValue as e:
+        raise exception.OneViewInvalidNodeParameter(node_uuid=node.uuid,
+                                                    error=e)
 
     driver_info = node.driver_info
 
@@ -180,6 +170,8 @@ def get_oneview_info(node):
         'server_profile_template_uri':
             capabilities_dict.get('server_profile_template_uri') or
             driver_info.get('server_profile_template_uri'),
+        'applied_server_profile_uri':
+            driver_info.get('applied_server_profile_uri'),
     }
 
     return oneview_info
@@ -201,25 +193,35 @@ def validate_oneview_resources_compatibility(task):
 
     node = task.node
     node_ports = task.ports
+
+    oneview_info = get_oneview_info(task.node)
+
     try:
         oneview_client = get_oneview_client()
-        oneview_info = get_oneview_info(node)
 
         oneview_client.validate_node_server_hardware(
             oneview_info, node.properties.get('memory_mb'),
             node.properties.get('cpus')
         )
         oneview_client.validate_node_server_hardware_type(oneview_info)
-        oneview_client.check_server_profile_is_applied(oneview_info)
-        oneview_client.is_node_port_mac_compatible_with_server_profile(
-            oneview_info, node_ports
-        )
         oneview_client.validate_node_enclosure_group(oneview_info)
         oneview_client.validate_node_server_profile_template(oneview_info)
+
+        # NOTE(thiagop): Support to pre-allocation will be dropped in 'P'
+        # release
+        if is_dynamic_allocation_enabled(task.node):
+            oneview_client.is_node_port_mac_compatible_with_server_hardware(
+                oneview_info, node_ports
+            )
+            oneview_client.validate_node_server_profile_template(oneview_info)
+        else:
+            oneview_client.check_server_profile_is_applied(oneview_info)
+            oneview_client.is_node_port_mac_compatible_with_server_profile(
+                oneview_info, node_ports
+            )
     except oneview_exceptions.OneViewException as oneview_exc:
-        msg = (_("Error validating node resources with OneView: %s")
-               % oneview_exc)
-        LOG.error(msg)
+        msg = (_("Error validating node resources with OneView: %s") %
+               oneview_exc)
         raise exception.OneViewError(error=msg)
 
 
@@ -293,3 +295,17 @@ def node_has_server_profile(func):
             )
         return func(*args, **kwargs)
     return inner
+
+
+def is_dynamic_allocation_enabled(node):
+    flag = node.driver_info.get('dynamic_allocation')
+    if flag:
+        if isinstance(flag, bool):
+            return flag is True
+        else:
+            msg = (_LE("Invalid dynamic_allocation parameter value in "
+                       "node's %(node_uuid)s driver_info. Valid values "
+                       "are booleans true or false.") %
+                   {"node_uuid": node.uuid})
+            raise exception.InvalidParameterValue(msg)
+    return False

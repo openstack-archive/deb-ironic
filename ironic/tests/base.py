@@ -29,20 +29,19 @@ import tempfile
 import eventlet
 eventlet.monkey_patch(os=False)
 import fixtures
-from oslo_config import cfg
 from oslo_config import fixture as config_fixture
 from oslo_log import log as logging
+from oslo_utils import uuidutils
 import testtools
 
 from ironic.common import config as ironic_config
 from ironic.common import context as ironic_context
 from ironic.common import hash_ring
+from ironic.conf import CONF
 from ironic.objects import base as objects_base
 from ironic.tests.unit import policy_fixture
 
 
-CONF = cfg.CONF
-CONF.import_opt('host', 'ironic.common.service')
 logging.register_options(CONF)
 logging.setup(CONF, 'ironic')
 
@@ -115,6 +114,11 @@ class TestCase(testtools.TestCase):
         self.config(use_stderr=False,
                     fatal_exception_format_errors=True,
                     tempdir=tempfile.tempdir)
+        self.config(cleaning_network_uuid=uuidutils.generate_uuid(),
+                    group='neutron')
+        self.config(provisioning_network_uuid=uuidutils.generate_uuid(),
+                    group='neutron')
+        self.config(enabled_network_interfaces=['flat', 'noop', 'neutron'])
         self.set_defaults(host='fake-mini',
                           debug=True)
         self.set_defaults(connection="sqlite://",
@@ -130,7 +134,7 @@ class TestCase(testtools.TestCase):
         # Delete attributes that don't start with _ so they don't pin
         # memory around unnecessarily for the duration of the test
         # suite
-        for key in [k for k in self.__dict__.keys() if k[0] != '_']:
+        for key in [k for k in self.__dict__ if k[0] != '_']:
             del self.__dict__[key]
 
     def config(self, **kw):

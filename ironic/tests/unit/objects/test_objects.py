@@ -404,11 +404,11 @@ class TestObject(_LocalTest, _TestObject):
 # version bump. It is md5 hash of object fields and remotable methods.
 # The fingerprint values should only be changed if there is a version bump.
 expected_object_fingerprints = {
-    'Node': '1.14-9ee8ab283b06398545880dfdedb49891',
+    'Node': '1.18-37a1d39ba8a4957f505dda936ac9146b',
     'MyObj': '1.5-4f5efe8f0fcaf182bbe1c7fe3ba858db',
     'Chassis': '1.3-d656e039fd8ae9f34efc232ab3980905',
-    'Port': '1.5-a224755c3da5bc5cf1a14a11c0d00f3f',
-    'Portgroup': '1.0-1ac4db8fa31edd9e1637248ada4c25a1',
+    'Port': '1.6-609504503d68982a10f495659990084b',
+    'Portgroup': '1.1-e57da9ca808d3696c34dad8125564696',
     'Conductor': '1.1-5091f249719d4a465062a1b3dc7f860d'
 }
 

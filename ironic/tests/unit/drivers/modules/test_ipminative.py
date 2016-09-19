@@ -51,11 +51,12 @@ class IPMINativePrivateMethodTestCase(db_base.DbTestCase):
 
     def test__parse_driver_info(self):
         # make sure we get back the expected things
-        self.assertIsNotNone(self.info['address'])
-        self.assertIsNotNone(self.info['username'])
-        self.assertIsNotNone(self.info['password'])
-        self.assertIsNotNone(self.info['uuid'])
-        self.assertIsNotNone(self.info['force_boot_device'])
+        self.assertEqual('1.2.3.4', self.info['address'])
+        self.assertEqual('admin', self.info['username'])
+        self.assertEqual('fake', self.info['password'])
+        self.assertEqual('1be26c0b-03f2-4d2e-ae87-c02d7f33c123',
+                         self.info['uuid'])
+        self.assertEqual(False, self.info['force_boot_device'])
 
         # make sure error is raised when info, eg. username, is missing
         info = dict(INFO_DICT)
@@ -509,8 +510,8 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
     @mock.patch.object(console_utils, 'start_shellinabox_console',
                        autospec=True)
     def test_start_console_fail(self, mock_exec):
-        mock_exec.side_effect = iter(
-            [exception.ConsoleSubprocessFailed(error='error')])
+        mock_exec.side_effect = exception.ConsoleSubprocessFailed(
+            error='error')
 
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:
@@ -533,7 +534,7 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
     @mock.patch.object(console_utils, 'stop_shellinabox_console',
                        autospec=True)
     def test_stop_console_fail(self, mock_stop):
-        mock_stop.side_effect = iter([exception.ConsoleError()])
+        mock_stop.side_effect = exception.ConsoleError()
 
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:

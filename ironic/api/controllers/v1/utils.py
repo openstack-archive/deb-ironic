@@ -99,6 +99,20 @@ def get_patch_values(patch, path):
             if p['path'] == path and p['op'] != 'remove']
 
 
+def is_path_removed(patch, path):
+    """Returns whether the patch includes removal of the path (or subpath of).
+
+    :param patch: HTTP PATCH request body.
+    :param path: the path to check.
+    :returns: True if path or subpath being removed, False otherwise.
+    """
+    path = path.rstrip('/')
+    for p in patch:
+        if ((p['path'] == path or p['path'].startswith(path + '/')) and
+                p['op'] == 'remove'):
+            return True
+
+
 def allow_node_logical_names():
     # v1.5 added logical name aliases
     return pecan.request.version.minor >= versions.MINOR_5_NODE_NAME
@@ -226,6 +240,35 @@ def check_allow_specify_fields(fields):
         raise exception.NotAcceptable()
 
 
+def check_allowed_fields(fields):
+    """Check if fetching a particular field is allowed.
+
+    This method checks if the required version is being requested for fields
+    that are only allowed to be fetched in a particular API version.
+    """
+    if fields is None:
+        return
+    if 'network_interface' in fields and not allow_network_interface():
+        raise exception.NotAcceptable()
+    if 'resource_class' in fields and not allow_resource_class():
+        raise exception.NotAcceptable()
+
+
+# NOTE(vsaienko) The validation is performed on API side, all conductors
+# and api should have the same list of enabled_network_interfaces.
+# TODO(vsaienko) remove it once driver-composition-reform is implemented.
+def is_valid_network_interface(network_interface):
+    """Determine if the provided network_interface is valid.
+
+    Check to see that the provided network_interface is in the enabled
+    network interfaces list.
+
+    :param: network_interface: the node network interface to check.
+    :returns: True if the network_interface is valid, False otherwise.
+    """
+    return network_interface in CONF.enabled_network_interfaces
+
+
 def check_allow_management_verbs(verb):
     min_version = MIN_VERB_VERSIONS.get(verb)
     if min_version is not None and pecan.request.version.minor < min_version:
@@ -261,6 +304,20 @@ def check_allow_specify_driver(driver):
              'opr': versions.MINOR_16_DRIVER_FILTER})
 
 
+def check_allow_specify_resource_class(resource_class):
+    """Check if filtering nodes by resource_class is allowed.
+
+    Version 1.21 of the API allows filtering nodes by resource_class.
+    """
+    if (resource_class is not None and pecan.request.version.minor <
+            versions.MINOR_21_RESOURCE_CLASS):
+        raise exception.NotAcceptable(_(
+            "Request not acceptable. The minimal required API version "
+            "should be %(base)s.%(opr)s") %
+            {'base': versions.BASE_VERSION,
+             'opr': versions.MINOR_21_RESOURCE_CLASS})
+
+
 def initial_node_provision_state():
     """Return node state to use by default when creating new nodes.
 
@@ -288,6 +345,50 @@ def allow_links_node_states_and_driver_properties():
     """
     return (pecan.request.version.minor >=
             versions.MINOR_14_LINKS_NODESTATES_DRIVERPROPERTIES)
+
+
+def allow_port_internal_info():
+    """Check if accessing internal_info is allowed for the port.
+
+    Version 1.18 of the API exposes internal_info readonly field for the port.
+    """
+    return (pecan.request.version.minor >=
+            versions.MINOR_18_PORT_INTERNAL_INFO)
+
+
+def allow_port_advanced_net_fields():
+    """Check if we should return local_link_connection and pxe_enabled fields.
+
+    Version 1.19 of the API added support for these new fields in port object.
+    """
+    return (pecan.request.version.minor >=
+            versions.MINOR_19_PORT_ADVANCED_NET_FIELDS)
+
+
+def allow_network_interface():
+    """Check if we should support network_interface node field.
+
+    Version 1.20 of the API added support for network interfaces.
+    """
+    return (pecan.request.version.minor >=
+            versions.MINOR_20_NETWORK_INTERFACE)
+
+
+def allow_resource_class():
+    """Check if we should support resource_class node field.
+
+    Version 1.21 of the API added support for resource_class.
+    """
+    return (pecan.request.version.minor >=
+            versions.MINOR_21_RESOURCE_CLASS)
+
+
+def allow_ramdisk_endpoints():
+    """Check if heartbeat and lookup endpoints are allowed.
+
+    Version 1.22 of the API introduced them.
+    """
+    return pecan.request.version.minor >= versions.MINOR_22_LOOKUP_HEARTBEAT
 
 
 def get_controller_reserved_names(cls):

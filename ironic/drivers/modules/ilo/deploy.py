@@ -15,16 +15,18 @@
 iLO Deploy Driver(s) and supporting methods.
 """
 
-from oslo_config import cfg
 from oslo_log import log as logging
 
 from ironic.common import boot_devices
 from ironic.common import exception
+from ironic.common.glance_service import service_utils
 from ironic.common.i18n import _
 from ironic.common.i18n import _LW
+from ironic.common import image_service
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
+from ironic.conf import CONF
 from ironic.drivers.modules import agent
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules.ilo import boot as ilo_boot
@@ -34,20 +36,8 @@ from ironic.drivers.modules import pxe
 
 LOG = logging.getLogger(__name__)
 
-CONF = cfg.CONF
-
-clean_opts = [
-    cfg.IntOpt('clean_priority_erase_devices',
-               help=_('Priority for erase devices clean step. If unset, '
-                      'it defaults to 10. If set to 0, the step will be '
-                      'disabled and will not run during cleaning.'))
-]
-
 CONF.import_opt('pxe_append_params', 'ironic.drivers.modules.iscsi_deploy',
                 group='pxe')
-CONF.import_opt('swift_ilo_container', 'ironic.drivers.modules.ilo.common',
-                group='ilo')
-CONF.register_opts(clean_opts, group='ilo')
 
 
 def _prepare_agent_vmedia_boot(task):
@@ -143,10 +133,52 @@ def _disable_secure_boot_if_supported(task):
                     task.node.uuid)
 
 
+def _validate(task):
+    """Validate the prerequisites for virtual media based deploy.
+
+    This method validates whether the 'driver_info' property of the
+    supplied node contains the required information for this driver.
+
+    :param task: a TaskManager instance containing the node to act on.
+    :raises: InvalidParameterValue if any parameters are incorrect
+    :raises: MissingParameterValue if some mandatory information
+        is missing on the node
+    """
+    node = task.node
+    ilo_common.parse_driver_info(node)
+    if 'ilo_deploy_iso' not in node.driver_info:
+        raise exception.MissingParameterValue(_(
+            "Missing 'ilo_deploy_iso' parameter in node's 'driver_info'."))
+    deploy_iso = node.driver_info['ilo_deploy_iso']
+    if not service_utils.is_glance_image(deploy_iso):
+        try:
+            image_service.HttpImageService().validate_href(deploy_iso)
+        except exception.ImageRefValidationFailed:
+            raise exception.InvalidParameterValue(_(
+                "Virtual media deploy accepts only Glance images or "
+                "HTTP(S) as driver_info['ilo_deploy_iso']. Either '%s' "
+                "is not a glance UUID or not a valid HTTP(S) URL or "
+                "the given URL is not reachable.") % deploy_iso)
+
+
 class IloVirtualMediaIscsiDeploy(iscsi_deploy.ISCSIDeploy):
 
     def get_properties(self):
         return {}
+
+    def validate(self, task):
+        """Validate the prerequisites for virtual media based deploy.
+
+        This method validates whether the 'driver_info' property of the
+        supplied node contains the required information for this driver.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :raises: InvalidParameterValue if any parameters are incorrect
+        :raises: MissingParameterValue if some mandatory information
+            is missing on the node
+        """
+        _validate(task)
+        super(IloVirtualMediaIscsiDeploy, self).validate(task)
 
     @task_manager.require_exclusive_lock
     def tear_down(self, task):
@@ -200,6 +232,20 @@ class IloVirtualMediaAgentDeploy(agent.AgentDeploy):
         """
         return ilo_boot.COMMON_PROPERTIES
 
+    def validate(self, task):
+        """Validate the prerequisites for virtual media based deploy.
+
+        This method validates whether the 'driver_info' property of the
+        supplied node contains the required information for this driver.
+
+        :param task: a TaskManager instance containing the node to act on.
+        :raises: InvalidParameterValue if any parameters are incorrect
+        :raises: MissingParameterValue if some mandatory information
+            is missing on the node
+        """
+        _validate(task)
+        super(IloVirtualMediaAgentDeploy, self).validate(task)
+
     @task_manager.require_exclusive_lock
     def tear_down(self, task):
         """Tear down a previous deployment on the task's node.
@@ -228,8 +274,8 @@ class IloVirtualMediaAgentDeploy(agent.AgentDeploy):
 
         :param task: a TaskManager object containing the node
         :returns: states.CLEANWAIT to signify an asynchronous prepare.
-        :raises NodeCleaningFailure: if the previous cleaning ports cannot
-            be removed or if new cleaning ports cannot be created
+        :raises: NodeCleaningFailure, NetworkError if the previous cleaning
+            ports cannot be removed or if new cleaning ports cannot be created
         :raises: IloOperationError, if some operation on iLO failed.
         """
         # Powering off the Node before initiating boot for node cleaning.
@@ -247,12 +293,12 @@ class IloVirtualMediaAgentDeploy(agent.AgentDeploy):
         :returns: A list of clean step dictionaries
         """
 
-        # TODO(stendulker): All drivers use CONF.deploy.erase_devices_priority
-        # agent_ilo driver should also use the same. Defect has been filed for
-        # the same.
-        # https://bugs.launchpad.net/ironic/+bug/1515871
+        priority = CONF.ilo.clean_priority_erase_devices
+        if priority is None:
+            priority = CONF.deploy.erase_devices_priority
+
         new_priorities = {
-            'erase_devices': CONF.ilo.clean_priority_erase_devices,
+            'erase_devices': priority,
         }
         return deploy_utils.agent_get_clean_steps(
             task, interface='deploy',

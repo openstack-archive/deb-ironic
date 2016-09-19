@@ -17,8 +17,6 @@
 import time
 
 from neutronclient.common import exceptions as neutron_client_exc
-from neutronclient.v2_0 import client as clientv20
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import netutils
 
@@ -26,72 +24,17 @@ from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LW
-from ironic.common import keystone
 from ironic.common import network
+from ironic.common import neutron
+from ironic.conf import CONF
 from ironic.dhcp import base
 from ironic.drivers.modules import ssh
-from ironic.objects.port import Port
+from ironic import objects
 
-
-neutron_opts = [
-    cfg.StrOpt('url',
-               default='http://$my_ip:9696',
-               help=_('URL for connecting to neutron.')),
-    cfg.IntOpt('url_timeout',
-               default=30,
-               help=_('Timeout value for connecting to neutron in seconds.')),
-    cfg.IntOpt('port_setup_delay',
-               default=0,
-               min=0,
-               help=_('Delay value to wait for Neutron agents to setup '
-                      'sufficient DHCP configuration for port.')),
-    cfg.IntOpt('retries',
-               default=3,
-               help=_('Client retries in the case of a failed request.')),
-    cfg.StrOpt('auth_strategy',
-               default='keystone',
-               choices=['keystone', 'noauth'],
-               help=_('Default authentication strategy to use when connecting '
-                      'to neutron. '
-                      'Running neutron in noauth mode (related to but not '
-                      'affected by this setting) is insecure and should only '
-                      'be used for testing.')),
-    cfg.StrOpt('cleaning_network_uuid',
-               help=_('UUID of the network to create Neutron ports on, when '
-                      'booting to a ramdisk for cleaning using Neutron DHCP.'))
-]
-
-CONF = cfg.CONF
-CONF.import_opt('my_ip', 'ironic.netconf')
-CONF.register_opts(neutron_opts, group='neutron')
 LOG = logging.getLogger(__name__)
 
-
-def _build_client(token=None):
-    """Utility function to create Neutron client."""
-    params = {
-        'timeout': CONF.neutron.url_timeout,
-        'retries': CONF.neutron.retries,
-        'insecure': CONF.keystone_authtoken.insecure,
-        'ca_cert': CONF.keystone_authtoken.certfile,
-    }
-
-    if CONF.neutron.auth_strategy == 'noauth':
-        params['endpoint_url'] = CONF.neutron.url
-        params['auth_strategy'] = 'noauth'
-    else:
-        params['endpoint_url'] = (
-            CONF.neutron.url or
-            keystone.get_service_url(service_type='network'))
-        params['username'] = CONF.keystone_authtoken.admin_user
-        params['tenant_name'] = CONF.keystone_authtoken.admin_tenant_name
-        params['password'] = CONF.keystone_authtoken.admin_password
-        params['auth_url'] = (CONF.keystone_authtoken.auth_uri or '')
-        if CONF.keystone.region_name:
-            params['region_name'] = CONF.keystone.region_name
-        params['token'] = token
-
-    return clientv20.Client(**params)
+create_cleaning_ports_deprecation = False
+delete_cleaning_ports_deprecation = False
 
 
 class NeutronDHCPApi(base.BaseDHCP):
@@ -122,7 +65,7 @@ class NeutronDHCPApi(base.BaseDHCP):
         """
         port_req_body = {'port': {'extra_dhcp_opts': dhcp_options}}
         try:
-            _build_client(token).update_port(port_id, port_req_body)
+            neutron.get_client(token).update_port(port_id, port_req_body)
         except neutron_client_exc.NeutronClientException:
             LOG.exception(_LE("Failed to update Neutron port %s."), port_id)
             raise exception.FailedToUpdateDHCPOptOnPort(port_id=port_id)
@@ -137,7 +80,7 @@ class NeutronDHCPApi(base.BaseDHCP):
         """
         port_req_body = {'port': {'mac_address': address}}
         try:
-            _build_client(token).update_port(port_id, port_req_body)
+            neutron.get_client(token).update_port(port_id, port_req_body)
         except neutron_client_exc.NeutronClientException:
             LOG.exception(_LE("Failed to update MAC address on Neutron "
                               "port %s."), port_id)
@@ -149,25 +92,26 @@ class NeutronDHCPApi(base.BaseDHCP):
         :param task: A TaskManager instance.
         :param options: this will be a list of dicts, e.g.
 
-                          ::
+                        ::
 
-                           [{'opt_name': 'bootfile-name',
-                             'opt_value': 'pxelinux.0'},
-                            {'opt_name': 'server-ip-address',
-                             'opt_value': '123.123.123.456'},
-                            {'opt_name': 'tftp-server',
-                             'opt_value': '123.123.123.123'}]
+                         [{'opt_name': 'bootfile-name',
+                           'opt_value': 'pxelinux.0'},
+                          {'opt_name': 'server-ip-address',
+                           'opt_value': '123.123.123.456'},
+                          {'opt_name': 'tftp-server',
+                           'opt_value': '123.123.123.123'}]
         :param vifs: a dict of Neutron port/portgroup dicts
-            to update DHCP options on. The port/portgroup dict key
-            should be Ironic port UUIDs, and the values should be
-            Neutron port UUIDs, e.g.
+                     to update DHCP options on. The port/portgroup dict
+                     key should be Ironic port UUIDs, and the values
+                     should be Neutron port UUIDs, e.g.
 
-            ::
+                     ::
 
-            {'ports': {'port.uuid': vif.id},
-             'portgroups': {'portgroup.uuid': vif.id}}
-            If the value is None, will get the list of ports/portgroups
-            from the Ironic port/portgroup objects.
+                      {'ports': {'port.uuid': vif.id},
+                       'portgroups': {'portgroup.uuid': vif.id}}
+                      If the value is None, will get the list of
+                      ports/portgroups from the Ironic port/portgroup
+                      objects.
         """
         if vifs is None:
             vifs = network.get_node_vif_ids(task)
@@ -259,15 +203,21 @@ class NeutronDHCPApi(base.BaseDHCP):
         :param p_obj: Ironic port or portgroup object.
         :param client: Neutron client instance.
         :returns: List of Neutron vif ip address associated with
-            Node's port/portgroup.
+                  Node's port/portgroup.
         :raises: FailedToGetIPAddressOnPort
         :raises: InvalidIPv4Address
         """
 
-        vif = p_obj.extra.get('vif_port_id')
+        # NOTE(vdrok): We are booting the node only in one network at a time,
+        # and presence of cleaning_vif_port_id means we're doing cleaning, of
+        # provisioning_vif_port_id - provisioning. Otherwise it's a tenant
+        # network
+        vif = (p_obj.internal_info.get('cleaning_vif_port_id') or
+               p_obj.internal_info.get('provisioning_vif_port_id') or
+               p_obj.extra.get('vif_port_id'))
         if not vif:
             obj_name = 'portgroup'
-            if isinstance(p_obj, Port):
+            if isinstance(p_obj, objects.Port):
                 obj_name = 'port'
             LOG.warning(_LW("No VIFs found for node %(node)s when attempting "
                             "to get IP address for %(obj_name)s: %(obj_id)."),
@@ -300,7 +250,7 @@ class NeutronDHCPApi(base.BaseDHCP):
 
         if failures:
             obj_name = 'portgroups'
-            if isinstance(pobj_list[0], Port):
+            if isinstance(pobj_list[0], objects.Port):
                 obj_name = 'ports'
 
             LOG.warning(_LW(
@@ -319,7 +269,7 @@ class NeutronDHCPApi(base.BaseDHCP):
         :returns: List of IP addresses associated with
                   task's ports/portgroups.
         """
-        client = _build_client(task.context.auth_token)
+        client = neutron.get_client(task.context.auth_token)
 
         port_ip_addresses = self._get_ip_addresses(task, task.ports, client)
         portgroup_ip_addresses = self._get_ip_addresses(
@@ -327,95 +277,37 @@ class NeutronDHCPApi(base.BaseDHCP):
 
         return port_ip_addresses + portgroup_ip_addresses
 
+    # TODO(vsaienko) Remove this method when deprecation period is passed
+    # in Ocata.
     def create_cleaning_ports(self, task):
         """Create neutron ports for each port on task.node to boot the ramdisk.
 
         :param task: a TaskManager instance.
-        :raises: InvalidParameterValue if the cleaning network is None
+        :raises: NetworkError, InvalidParameterValue
         :returns: a dictionary in the form {port.uuid: neutron_port['id']}
         """
-        if not CONF.neutron.cleaning_network_uuid:
-            raise exception.InvalidParameterValue(_('Valid cleaning network '
-                                                    'UUID not provided'))
-        neutron_client = _build_client(task.context.auth_token)
-        body = {
-            'port': {
-                'network_id': CONF.neutron.cleaning_network_uuid,
-                'admin_state_up': True,
-            }
-        }
-        ports = {}
-        for ironic_port in task.ports:
-            body['port']['mac_address'] = ironic_port.address
-            try:
-                port = neutron_client.create_port(body)
-            except neutron_client_exc.ConnectionFailed as e:
-                self._rollback_cleaning_ports(task)
-                msg = (_('Could not create cleaning port on network %(net)s '
-                         'from %(node)s. %(exc)s') %
-                       {'net': CONF.neutron.cleaning_network_uuid,
-                        'node': task.node.uuid,
-                        'exc': e})
-                LOG.exception(msg)
-                raise exception.NodeCleaningFailure(msg)
-            if not port.get('port') or not port['port'].get('id'):
-                self._rollback_cleaning_ports(task)
-                msg = (_('Failed to create cleaning ports for node '
-                         '%(node)s') % {'node': task.node.uuid})
-                LOG.error(msg)
-                raise exception.NodeCleaningFailure(msg)
-            # Match return value of get_node_vif_ids()
-            ports[ironic_port.uuid] = port['port']['id']
-        return ports
+        global create_cleaning_ports_deprecation
+        if not create_cleaning_ports_deprecation:
+            LOG.warning(_LW('create_cleaning_ports via dhcp provider is '
+                            'deprecated. The node.network_interface setting '
+                            'should be used instead.'))
+            create_cleaning_ports_deprecation = True
 
+        return task.driver.network.add_cleaning_network(task)
+
+    # TODO(vsaienko) Remove this method when deprecation period is passed
+    # in Ocata.
     def delete_cleaning_ports(self, task):
         """Deletes the neutron port created for booting the ramdisk.
 
         :param task: a TaskManager instance.
+        :raises: NetworkError, InvalidParameterValue
         """
-        neutron_client = _build_client(task.context.auth_token)
-        macs = [p.address for p in task.ports]
-        params = {
-            'network_id': CONF.neutron.cleaning_network_uuid
-        }
-        try:
-            ports = neutron_client.list_ports(**params)
-        except neutron_client_exc.ConnectionFailed as e:
-            msg = (_('Could not get cleaning network vif for %(node)s '
-                     'from Neutron, possible network issue. %(exc)s') %
-                   {'node': task.node.uuid,
-                    'exc': e})
-            LOG.exception(msg)
-            raise exception.NodeCleaningFailure(msg)
+        global delete_cleaning_ports_deprecation
+        if not delete_cleaning_ports_deprecation:
+            LOG.warning(_LW('delete_cleaning_ports via dhcp provider is '
+                            'deprecated. The node.network_interface setting '
+                            'should be used instead.'))
+            delete_cleaning_ports_deprecation = True
 
-        # Iterate the list of Neutron port dicts, remove the ones we added
-        for neutron_port in ports.get('ports', []):
-            # Only delete ports using the node's mac addresses
-            if neutron_port.get('mac_address') in macs:
-                try:
-                    neutron_client.delete_port(neutron_port.get('id'))
-                except neutron_client_exc.ConnectionFailed as e:
-                    msg = (_('Could not remove cleaning ports on network '
-                             '%(net)s from %(node)s, possible network issue. '
-                             '%(exc)s') %
-                           {'net': CONF.neutron.cleaning_network_uuid,
-                            'node': task.node.uuid,
-                            'exc': e})
-                    LOG.exception(msg)
-                    raise exception.NodeCleaningFailure(msg)
-
-    def _rollback_cleaning_ports(self, task):
-        """Attempts to delete any ports created by cleaning
-
-        Purposefully will not raise any exceptions so error handling can
-        continue.
-
-        :param task: a TaskManager instance.
-        """
-        try:
-            self.delete_cleaning_ports(task)
-        except Exception:
-            # Log the error, but let the caller invoke the
-            # manager.cleaning_error_handler().
-            LOG.exception(_LE('Failed to rollback cleaning port '
-                              'changes for node %s') % task.node.uuid)
+        task.driver.network.remove_cleaning_network(task)

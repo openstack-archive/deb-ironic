@@ -31,6 +31,7 @@ from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import fake
 from ironic.drivers.modules import pxe
+from ironic.drivers import utils as driver_utils
 from ironic.tests.unit.conductor import mgr_utils
 from ironic.tests.unit.db import base as db_base
 from ironic.tests.unit.db import utils as db_utils
@@ -217,9 +218,8 @@ class TestAgentMethods(db_base.DbTestCase):
                        autospec=True)
     def test_build_instance_info_for_deploy_nonsupported_image(
             self, validate_href_mock):
-        validate_href_mock.side_effect = iter(
-            [exception.ImageRefValidationFailed(
-                image_href='file://img.qcow2', reason='fail')])
+        validate_href_mock.side_effect = exception.ImageRefValidationFailed(
+            image_href='file://img.qcow2', reason='fail')
         i_info = self.node.instance_info
         i_info['image_source'] = 'file://img.qcow2'
         i_info['image_checksum'] = 'aa'
@@ -440,19 +440,25 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.assertEqual(driver_return, states.DEPLOYWAIT)
             power_mock.assert_called_once_with(task, states.REBOOT)
 
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'unconfigure_tenant_networks', autospec=True)
     @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
-    def test_tear_down(self, power_mock):
+    def test_tear_down(self, power_mock, unconfigure_tenant_nets_mock):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             driver_return = self.driver.tear_down(task)
             power_mock.assert_called_once_with(task, states.POWER_OFF)
             self.assertEqual(driver_return, states.DELETED)
+            unconfigure_tenant_nets_mock.assert_called_once_with(mock.ANY,
+                                                                 task)
 
     @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk')
     @mock.patch.object(deploy_utils, 'build_agent_options')
     @mock.patch.object(agent, 'build_instance_info_for_deploy')
-    def test_prepare(self, build_instance_info_mock, build_options_mock,
-                     pxe_prepare_ramdisk_mock):
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'add_provisioning_network', autospec=True)
+    def test_prepare(self, add_provisioning_net_mock, build_instance_info_mock,
+                     build_options_mock, pxe_prepare_ramdisk_mock):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             task.node.provision_state = states.DEPLOYING
@@ -465,6 +471,7 @@ class TestAgentDeploy(db_base.DbTestCase):
             build_options_mock.assert_called_once_with(task.node)
             pxe_prepare_ramdisk_mock.assert_called_once_with(
                 task, {'a': 'b'})
+            add_provisioning_net_mock.assert_called_once_with(mock.ANY, task)
 
         self.node.refresh()
         self.assertEqual('bar', self.node.instance_info['foo'])
@@ -490,12 +497,14 @@ class TestAgentDeploy(db_base.DbTestCase):
         self.node.refresh()
         self.assertEqual('bar', self.node.instance_info['foo'])
 
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'add_provisioning_network', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk')
     @mock.patch.object(deploy_utils, 'build_agent_options')
     @mock.patch.object(agent, 'build_instance_info_for_deploy')
     def test_prepare_active(
             self, build_instance_info_mock, build_options_mock,
-            pxe_prepare_ramdisk_mock):
+            pxe_prepare_ramdisk_mock, add_provisioning_net_mock):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=False) as task:
             task.node.provision_state = states.ACTIVE
@@ -505,6 +514,26 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.assertFalse(build_instance_info_mock.called)
             self.assertFalse(build_options_mock.called)
             self.assertFalse(pxe_prepare_ramdisk_mock.called)
+            self.assertFalse(add_provisioning_net_mock.called)
+
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'add_provisioning_network', autospec=True)
+    @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk')
+    @mock.patch.object(deploy_utils, 'build_agent_options')
+    @mock.patch.object(agent, 'build_instance_info_for_deploy')
+    def test_prepare_adopting(
+            self, build_instance_info_mock, build_options_mock,
+            pxe_prepare_ramdisk_mock, add_provisioning_net_mock):
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            task.node.provision_state = states.ADOPTING
+
+            self.driver.prepare(task)
+
+            self.assertFalse(build_instance_info_mock.called)
+            self.assertFalse(build_options_mock.called)
+            self.assertFalse(pxe_prepare_ramdisk_mock.called)
+            self.assertFalse(add_provisioning_net_mock.called)
 
     @mock.patch('ironic.common.dhcp_factory.DHCPFactory._set_dhcp_provider')
     @mock.patch('ironic.common.dhcp_factory.DHCPFactory.clean_dhcp')
@@ -598,6 +627,12 @@ class TestAgentDeploy(db_base.DbTestCase):
             self.driver.tear_down_cleaning(task)
             tear_down_cleaning_mock.assert_called_once_with(
                 task, manage_boot=False)
+
+    def test_heartbeat(self):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            self.driver.heartbeat(task, 'url')
+            self.assertFalse(task.shared)
 
 
 class TestAgentVendor(db_base.DbTestCase):
@@ -767,7 +802,7 @@ class TestAgentVendor(db_base.DbTestCase):
             power_off_mock.assert_called_once_with(task.node)
             get_power_state_mock.assert_called_once_with(task)
             node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+                task, states.POWER_ON)
             self.assertFalse(prepare_mock.called)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
@@ -812,7 +847,7 @@ class TestAgentVendor(db_base.DbTestCase):
             power_off_mock.assert_called_once_with(task.node)
             get_power_state_mock.assert_called_once_with(task)
             node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+                task, states.POWER_ON)
             prepare_mock.assert_called_once_with(task.driver.boot, task)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
@@ -861,11 +896,12 @@ class TestAgentVendor(db_base.DbTestCase):
 
             get_power_state_mock.assert_called_once_with(task)
             node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+                task, states.POWER_ON)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
             self.assertFalse(uuid_mock.called)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(agent.AgentVendorInterface, '_get_uuid_from_result',
                        autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
@@ -878,12 +914,10 @@ class TestAgentVendor(db_base.DbTestCase):
     @mock.patch('ironic.drivers.modules.agent.AgentVendorInterface'
                 '.check_deploy_success', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'clean_up_ramdisk', autospec=True)
-    def test_reboot_to_instance_boot_error(self, clean_pxe_mock,
-                                           check_deploy_mock,
-                                           prepare_mock, power_off_mock,
-                                           get_power_state_mock,
-                                           node_power_action_mock,
-                                           uuid_mock):
+    def test_reboot_to_instance_boot_error(
+            self, clean_pxe_mock, check_deploy_mock, prepare_mock,
+            power_off_mock, get_power_state_mock, node_power_action_mock,
+            uuid_mock, collect_ramdisk_logs_mock):
         check_deploy_mock.return_value = "Error"
         uuid_mock.return_value = None
         self.node.provision_state = states.DEPLOYWAIT
@@ -902,6 +936,7 @@ class TestAgentVendor(db_base.DbTestCase):
             check_deploy_mock.assert_called_once_with(mock.ANY, task.node)
             self.assertEqual(states.DEPLOYFAIL, task.node.provision_state)
             self.assertEqual(states.ACTIVE, task.node.target_provision_state)
+            collect_ramdisk_logs_mock.assert_called_once_with(task.node)
 
     @mock.patch.object(agent_base_vendor.BaseAgentVendor,
                        'configure_local_boot', autospec=True)
@@ -946,7 +981,7 @@ class TestAgentVendor(db_base.DbTestCase):
             power_off_mock.assert_called_once_with(task.node)
             get_power_state_mock.assert_called_once_with(task)
             node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+                task, states.POWER_ON)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
 
