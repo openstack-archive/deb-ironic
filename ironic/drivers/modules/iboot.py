@@ -21,7 +21,6 @@ Ironic iBoot PDU power manager.
 
 import time
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_service import loopingcall
 from oslo_utils import importutils
@@ -32,30 +31,10 @@ from ironic.common.i18n import _LW
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
+from ironic.conf import CONF
 from ironic.drivers import base
 
 iboot = importutils.try_import('iboot')
-
-opts = [
-    cfg.IntOpt('max_retry',
-               default=3,
-               help=_('Maximum retries for iBoot operations')),
-    cfg.IntOpt('retry_interval',
-               default=1,
-               help=_('Time (in seconds) between retry attempts for iBoot '
-                      'operations')),
-    cfg.IntOpt('reboot_delay',
-               default=5,
-               min=0,
-               help=_('Time (in seconds) to sleep between when rebooting '
-                      '(powering off and on again).'))
-]
-
-CONF = cfg.CONF
-opt_group = cfg.OptGroup(name='iboot',
-                         title='Options for the iBoot power driver')
-CONF.register_group(opt_group)
-CONF.register_opts(opts, opt_group)
 
 LOG = logging.getLogger(__name__)
 
@@ -226,7 +205,6 @@ class IBootPower(base.PowerInterface):
 
         :param task: a TaskManager instance containing the node to act on.
         :returns: one of ironic.common.states POWER_OFF, POWER_ON or ERROR.
-        :raises: IBootOperationError on an error from iBoot.
         :raises: InvalidParameterValue if iboot parameters are invalid.
         :raises: MissingParameterValue if required iboot parameters are
             missing.
@@ -242,7 +220,6 @@ class IBootPower(base.PowerInterface):
         :param task: a TaskManager instance containing the node to act on.
         :param pstate: The desired power state, one of ironic.common.states
             POWER_ON, POWER_OFF.
-        :raises: IBootOperationError on an error from iBoot.
         :raises: InvalidParameterValue if iboot parameters are invalid or if
             an invalid power state was specified.
         :raises: MissingParameterValue if required iboot parameters are
@@ -267,7 +244,6 @@ class IBootPower(base.PowerInterface):
         """Cycles the power to the task's node.
 
         :param task: a TaskManager instance containing the node to act on.
-        :raises: IBootOperationError on an error from iBoot.
         :raises: InvalidParameterValue if iboot parameters are invalid.
         :raises: MissingParameterValue if required iboot parameters are
             missing.

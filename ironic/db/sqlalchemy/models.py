@@ -118,6 +118,7 @@ class Node(Base):
     driver_info = Column(db_types.JsonEncodedDict)
     driver_internal_info = Column(db_types.JsonEncodedDict)
     clean_step = Column(db_types.JsonEncodedDict)
+    resource_class = Column(String(80), nullable=True)
 
     raid_config = Column(db_types.JsonEncodedDict)
     target_raid_config = Column(db_types.JsonEncodedDict)
@@ -143,6 +144,8 @@ class Node(Base):
     inspection_started_at = Column(DateTime, nullable=True)
     extra = Column(db_types.JsonEncodedDict)
 
+    network_interface = Column(String(255), nullable=True)
+
 
 class Port(Base):
     """Represents a network port of a bare metal node."""
@@ -160,6 +163,7 @@ class Port(Base):
     local_link_connection = Column(db_types.JsonEncodedDict)
     portgroup_id = Column(Integer, ForeignKey('portgroups.id'), nullable=True)
     pxe_enabled = Column(Boolean, default=True)
+    internal_info = Column(db_types.JsonEncodedDict)
 
 
 class Portgroup(Base):
@@ -177,6 +181,7 @@ class Portgroup(Base):
     node_id = Column(Integer, ForeignKey('nodes.id'), nullable=True)
     address = Column(String(18))
     extra = Column(db_types.JsonEncodedDict)
+    internal_info = Column(db_types.JsonEncodedDict)
 
 
 class NodeTag(Base):

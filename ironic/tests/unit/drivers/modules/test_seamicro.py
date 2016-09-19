@@ -87,11 +87,12 @@ class SeaMicroValidateParametersTestCase(db_base.DbTestCase):
             driver='fake_seamicro',
             driver_info=INFO_DICT)
         info = seamicro._parse_driver_info(node)
-        self.assertIsNotNone(info['api_endpoint'])
-        self.assertIsNotNone(info['username'])
-        self.assertIsNotNone(info['password'])
-        self.assertIsNotNone(info['server_id'])
-        self.assertIsNotNone(info['uuid'])
+        self.assertEqual('http://1.2.3.4', info['api_endpoint'])
+        self.assertEqual('admin', info['username'])
+        self.assertEqual('fake', info['password'])
+        self.assertEqual('0/0', info['server_id'])
+        self.assertEqual('1be26c0b-03f2-4d2e-ae87-c02d7f33c123',
+                         info['uuid'])
 
     def test__parse_driver_info_missing_api_endpoint(self):
         # make sure error is raised when info is missing
@@ -330,7 +331,7 @@ class SeaMicroPowerDriverTestCase(db_base.DbTestCase):
 
     @mock.patch.object(seamicro, '_parse_driver_info', autospec=True)
     def test_power_interface_validate_fails(self, parse_drv_info_mock):
-        side_effect = iter([exception.InvalidParameterValue("Bad input")])
+        side_effect = exception.InvalidParameterValue("Bad input")
         parse_drv_info_mock.side_effect = side_effect
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=True) as task:
@@ -414,7 +415,7 @@ class SeaMicroPowerDriverTestCase(db_base.DbTestCase):
 
     @mock.patch.object(seamicro, '_parse_driver_info', autospec=True)
     def test_vendor_passthru_validate_parse_driver_info_fail(self, mock_info):
-        mock_info.side_effect = iter([exception.InvalidParameterValue("bad")])
+        mock_info.side_effect = exception.InvalidParameterValue("bad")
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=True) as task:
             method = list(task.driver.vendor.vendor_routes)[0]
@@ -629,8 +630,8 @@ class SeaMicroDriverTestCase(db_base.DbTestCase):
     @mock.patch.object(console_utils, 'start_shellinabox_console',
                        autospec=True)
     def test_start_console_fail(self, mock_exec):
-        mock_exec.side_effect = iter(
-            [exception.ConsoleSubprocessFailed(error='error')])
+        mock_exec.side_effect = exception.ConsoleSubprocessFailed(
+            error='error')
 
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:
@@ -651,7 +652,7 @@ class SeaMicroDriverTestCase(db_base.DbTestCase):
     @mock.patch.object(console_utils, 'stop_shellinabox_console',
                        autospec=True)
     def test_stop_console_fail(self, mock_stop):
-        mock_stop.side_effect = iter([exception.ConsoleError()])
+        mock_stop.side_effect = exception.ConsoleError()
 
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:
@@ -664,7 +665,7 @@ class SeaMicroDriverTestCase(db_base.DbTestCase):
     @mock.patch.object(console_utils, 'start_shellinabox_console',
                        autospec=True)
     def test_start_console_fail_nodir(self, mock_exec):
-        mock_exec.side_effect = iter([exception.ConsoleError()])
+        mock_exec.side_effect = exception.ConsoleError()
 
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:

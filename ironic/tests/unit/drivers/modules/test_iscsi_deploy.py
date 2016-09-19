@@ -27,7 +27,6 @@ from oslo_utils import fileutils
 from ironic.common import dhcp_factory
 from ironic.common import driver_factory
 from ironic.common import exception
-from ironic.common import keystone
 from ironic.common import pxe_utils
 from ironic.common import states
 from ironic.common import utils
@@ -38,6 +37,7 @@ from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import iscsi_deploy
 from ironic.drivers.modules import pxe
+from ironic.drivers import utils as driver_utils
 from ironic.tests.unit.conductor import mgr_utils
 from ironic.tests.unit.db import base as db_base
 from ironic.tests.unit.db import utils as db_utils
@@ -158,15 +158,17 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         mock_unlink.assert_called_once_with('/path/uuid/disk')
         mock_rmtree.assert_called_once_with('/path/uuid')
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(iscsi_deploy, '_save_disk_layout', autospec=True)
     @mock.patch.object(iscsi_deploy, 'InstanceImageCache', autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(deploy_utils, 'deploy_partition_image', autospec=True)
-    def test_continue_deploy_fail(self, deploy_mock, power_mock,
-                                  mock_image_cache, mock_disk_layout):
+    def test_continue_deploy_fail(
+            self, deploy_mock, power_mock, mock_image_cache, mock_disk_layout,
+            mock_collect_logs):
         kwargs = {'address': '123456', 'iqn': 'aaa-bbb'}
-        deploy_mock.side_effect = iter([
-            exception.InstanceDeployFailure("test deploy error")])
+        deploy_mock.side_effect = exception.InstanceDeployFailure(
+            "test deploy error")
         self.node.provision_state = states.DEPLOYWAIT
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
@@ -185,13 +187,16 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             mock_image_cache.assert_called_once_with()
             mock_image_cache.return_value.clean_up.assert_called_once_with()
             self.assertFalse(mock_disk_layout.called)
+            mock_collect_logs.assert_called_once_with(task.node)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(iscsi_deploy, '_save_disk_layout', autospec=True)
     @mock.patch.object(iscsi_deploy, 'InstanceImageCache', autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(deploy_utils, 'deploy_partition_image', autospec=True)
     def test_continue_deploy_fail_no_root_uuid_or_disk_id(
-            self, deploy_mock, power_mock, mock_image_cache, mock_disk_layout):
+            self, deploy_mock, power_mock, mock_image_cache, mock_disk_layout,
+            mock_collect_logs):
         kwargs = {'address': '123456', 'iqn': 'aaa-bbb'}
         deploy_mock.return_value = {}
         self.node.provision_state = states.DEPLOYWAIT
@@ -212,13 +217,16 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             mock_image_cache.assert_called_once_with()
             mock_image_cache.return_value.clean_up.assert_called_once_with()
             self.assertFalse(mock_disk_layout.called)
+            mock_collect_logs.assert_called_once_with(task.node)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(iscsi_deploy, '_save_disk_layout', autospec=True)
     @mock.patch.object(iscsi_deploy, 'InstanceImageCache', autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(deploy_utils, 'deploy_partition_image', autospec=True)
     def test_continue_deploy_fail_empty_root_uuid(
-            self, deploy_mock, power_mock, mock_image_cache, mock_disk_layout):
+            self, deploy_mock, power_mock, mock_image_cache,
+            mock_disk_layout, mock_collect_logs):
         kwargs = {'address': '123456', 'iqn': 'aaa-bbb'}
         deploy_mock.return_value = {'root uuid': ''}
         self.node.provision_state = states.DEPLOYWAIT
@@ -239,6 +247,7 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             mock_image_cache.assert_called_once_with()
             mock_image_cache.return_value.clean_up.assert_called_once_with()
             self.assertFalse(mock_disk_layout.called)
+            mock_collect_logs.assert_called_once_with(task.node)
 
     @mock.patch.object(iscsi_deploy, '_save_disk_layout', autospec=True)
     @mock.patch.object(iscsi_deploy, 'LOG', autospec=True)
@@ -425,7 +434,9 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             agent_client_mock.start_iscsi_target.assert_called_once_with(
                 task.node, expected_iqn, 3260, wipe_disk_metadata=False)
 
-    def test_do_agent_iscsi_deploy_start_iscsi_failure(self):
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
+    def test_do_agent_iscsi_deploy_start_iscsi_failure(
+            self, mock_collect_logs):
         agent_client_mock = mock.MagicMock(spec_set=agent_client.AgentClient)
         agent_client_mock.start_iscsi_target.return_value = {
             'command_status': 'FAILED', 'command_error': 'booom'}
@@ -445,39 +456,24 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
             self.assertEqual(states.DEPLOYFAIL, self.node.provision_state)
             self.assertEqual(states.ACTIVE, self.node.target_provision_state)
             self.assertIsNotNone(self.node.last_error)
+            mock_collect_logs.assert_called_once_with(task.node)
 
-    @mock.patch.object(keystone, 'get_service_url', autospec=True)
-    def test_validate_good_api_url_from_config_file(self, mock_ks):
-        # not present in the keystone catalog
-        mock_ks.side_effect = exception.KeystoneFailure
-        self.config(group='conductor', api_url='http://foo')
+    @mock.patch('ironic.drivers.modules.deploy_utils.get_ironic_api_url')
+    def test_validate_good_api_url(self, mock_get_url):
+        mock_get_url.return_value = 'http://127.0.0.1:1234'
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             iscsi_deploy.validate(task)
-            self.assertFalse(mock_ks.called)
+        mock_get_url.assert_called_once_with()
 
-    @mock.patch.object(keystone, 'get_service_url', autospec=True)
-    def test_validate_good_api_url_from_keystone(self, mock_ks):
-        # present in the keystone catalog
-        mock_ks.return_value = 'http://127.0.0.1:1234'
-        # not present in the config file
-        self.config(group='conductor', api_url=None)
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=True) as task:
-            iscsi_deploy.validate(task)
-            mock_ks.assert_called_once_with()
-
-    @mock.patch.object(keystone, 'get_service_url', autospec=True)
-    def test_validate_fail_no_api_url(self, mock_ks):
-        # not present in the keystone catalog
-        mock_ks.side_effect = exception.KeystoneFailure
-        # not present in the config file
-        self.config(group='conductor', api_url=None)
+    @mock.patch('ironic.drivers.modules.deploy_utils.get_ironic_api_url')
+    def test_validate_fail_no_api_url(self, mock_get_url):
+        mock_get_url.side_effect = exception.InvalidParameterValue('Ham!')
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             self.assertRaises(exception.InvalidParameterValue,
                               iscsi_deploy.validate, task)
-            mock_ks.assert_called_once_with()
+        mock_get_url.assert_called_once_with()
 
     def test_validate_invalid_root_device_hints(self):
         with task_manager.acquire(self.context, self.node.uuid,
@@ -527,31 +523,51 @@ class ISCSIDeployTestCase(db_base.DbTestCase):
             validate_capabilities_mock.assert_called_once_with(task.node)
             validate_mock.assert_called_once_with(task)
 
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'add_provisioning_network', spec_set=True, autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'prepare_instance', autospec=True)
-    def test_prepare_node_active(self, prepare_instance_mock):
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=True) as task:
+    def test_prepare_node_active(self, prepare_instance_mock,
+                                 add_provisioning_net_mock):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
             task.node.provision_state = states.ACTIVE
 
             task.driver.deploy.prepare(task)
 
             prepare_instance_mock.assert_called_once_with(
                 task.driver.boot, task)
+            self.assertEqual(0, add_provisioning_net_mock.call_count)
+
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'add_provisioning_network', spec_set=True, autospec=True)
+    @mock.patch.object(pxe.PXEBoot, 'prepare_instance', autospec=True)
+    def test_prepare_node_adopting(self, prepare_instance_mock,
+                                   add_provisioning_net_mock):
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node.provision_state = states.ADOPTING
+
+            task.driver.deploy.prepare(task)
+
+            prepare_instance_mock.assert_called_once_with(
+                task.driver.boot, task)
+            self.assertEqual(0, add_provisioning_net_mock.call_count)
 
     @mock.patch.object(deploy_utils, 'build_agent_options', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk', autospec=True)
-    def test_prepare_node_deploying(self, mock_prepare_ramdisk,
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'add_provisioning_network', spec_set=True, autospec=True)
+    def test_prepare_node_deploying(self, add_provisioning_net_mock,
+                                    mock_prepare_ramdisk,
                                     mock_agent_options):
         mock_agent_options.return_value = {'c': 'd'}
-        with task_manager.acquire(self.context, self.node.uuid,
-                                  shared=True) as task:
-            task.node.provision_state = states.DEPLOYWAIT
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            task.node.provision_state = states.DEPLOYING
 
             task.driver.deploy.prepare(task)
 
             mock_agent_options.assert_called_once_with(task.node)
             mock_prepare_ramdisk.assert_called_once_with(
                 task.driver.boot, task, {'c': 'd'})
+            add_provisioning_net_mock.assert_called_once_with(mock.ANY, task)
 
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(iscsi_deploy, 'check_image_size', autospec=True)
@@ -567,14 +583,19 @@ class ISCSIDeployTestCase(db_base.DbTestCase):
             mock_check_image_size.assert_called_once_with(task)
             mock_node_power_action.assert_called_once_with(task, states.REBOOT)
 
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'unconfigure_tenant_networks', autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
-    def test_tear_down(self, node_power_action_mock):
+    def test_tear_down(self, node_power_action_mock,
+                       unconfigure_tenant_nets_mock):
         with task_manager.acquire(self.context,
                                   self.node.uuid, shared=False) as task:
             state = task.driver.deploy.tear_down(task)
             self.assertEqual(state, states.DELETED)
             node_power_action_mock.assert_called_once_with(task,
                                                            states.POWER_OFF)
+            unconfigure_tenant_nets_mock.assert_called_once_with(mock.ANY,
+                                                                 task)
 
     @mock.patch('ironic.common.dhcp_factory.DHCPFactory._set_dhcp_provider')
     @mock.patch('ironic.common.dhcp_factory.DHCPFactory.clean_dhcp')
@@ -637,6 +658,12 @@ class ISCSIDeployTestCase(db_base.DbTestCase):
                 task, {'some-step': 'step-info'})
             agent_execute_clean_step_mock.assert_called_once_with(
                 task, {'some-step': 'step-info'})
+
+    def test_heartbeat(self):
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=True) as task:
+            self.driver.deploy.heartbeat(task, 'url')
+            self.assertFalse(task.shared)
 
 
 class TestVendorPassthru(db_base.DbTestCase):

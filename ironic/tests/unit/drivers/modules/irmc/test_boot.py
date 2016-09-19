@@ -448,7 +448,7 @@ class IRMCDeployPrivateMethodsTestCase(db_base.DbTestCase):
         mock_image_file_obj = mock.MagicMock()
         mock_image_file_obj.name = 'image-tmp-file'
         mock_image_file_handle.__enter__.return_value = mock_image_file_obj
-        tempfile_mock.side_effect = iter([mock_image_file_handle])
+        tempfile_mock.side_effect = [mock_image_file_handle]
 
         deploy_args = {'arg1': 'val1', 'arg2': 'val2'}
         CONF.irmc.remote_image_share_name = '/remote_image_share_root'
@@ -476,11 +476,11 @@ class IRMCDeployPrivateMethodsTestCase(db_base.DbTestCase):
         mock_image_file_obj = mock.MagicMock()
         mock_image_file_obj.name = 'image-tmp-file'
         mock_image_file_handle.__enter__.return_value = mock_image_file_obj
-        tempfile_mock.side_effect = iter([mock_image_file_handle])
+        tempfile_mock.side_effect = [mock_image_file_handle]
 
         deploy_args = {'arg1': 'val1', 'arg2': 'val2'}
         CONF.irmc.remote_image_share_name = '/remote_image_share_root'
-        copyfile_mock.side_effect = iter([IOError("fake error")])
+        copyfile_mock.side_effect = IOError("fake error")
 
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
@@ -900,14 +900,13 @@ class IRMCVirtualMediaBootTestCase(db_base.DbTestCase):
                        spec_set=True, autospec=True)
     @mock.patch.object(deploy_utils, 'get_single_nic_with_vif_port_id',
                        spec_set=True, autospec=True)
-    def test_prepare_ramdisk(self,
-                             get_single_nic_with_vif_port_id_mock,
-                             _setup_deploy_iso_mock):
+    def _test_prepare_ramdisk(self,
+                              get_single_nic_with_vif_port_id_mock,
+                              _setup_deploy_iso_mock):
         instance_info = self.node.instance_info
         instance_info['irmc_boot_iso'] = 'glance://abcdef'
         instance_info['image_source'] = '6b2f0c0c-79e8-4db6-842e-43c9764204af'
         self.node.instance_info = instance_info
-        self.node.provision_state = states.DEPLOYING
         self.node.save()
 
         ramdisk_params = {'a': 'b'}
@@ -924,10 +923,20 @@ class IRMCVirtualMediaBootTestCase(db_base.DbTestCase):
             self.assertEqual('glance://abcdef',
                              self.node.instance_info['irmc_boot_iso'])
 
+    def test_prepare_ramdisk_glance_image_deploying(self):
+        self.node.provision_state = states.DEPLOYING
+        self.node.save()
+        self._test_prepare_ramdisk()
+
+    def test_prepare_ramdisk_glance_image_cleaning(self):
+        self.node.provision_state = states.CLEANING
+        self.node.save()
+        self._test_prepare_ramdisk()
+
     @mock.patch.object(irmc_boot, '_setup_deploy_iso', spec_set=True,
                        autospec=True)
-    def test_prepare_ramdisk_not_deploying(self, mock_is_image):
-        """Ensure ramdisk build operations are blocked when not deploying"""
+    def test_prepare_ramdisk_not_deploying_not_cleaning(self, mock_is_image):
+        """Ensure deploy ops are blocked when not deploying and not cleaning"""
 
         for state in states.STABLE_STATES:
             mock_is_image.reset_mock()

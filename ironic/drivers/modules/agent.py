@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from oslo_config import cfg
+from ironic_lib import metrics_utils
 from oslo_log import log
 from oslo_utils import excutils
 from oslo_utils import units
@@ -32,46 +32,15 @@ from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as manager_utils
+from ironic.conf import CONF
 from ironic.drivers import base
 from ironic.drivers.modules import agent_base_vendor
 from ironic.drivers.modules import deploy_utils
 
 
-agent_opts = [
-    cfg.BoolOpt('manage_agent_boot',
-                default=True,
-                help=_('Whether Ironic will manage booting of the agent '
-                       'ramdisk. If set to False, you will need to configure '
-                       'your mechanism to allow booting the agent '
-                       'ramdisk.')),
-    cfg.IntOpt('memory_consumed_by_agent',
-               default=0,
-               help=_('The memory size in MiB consumed by agent when it is '
-                      'booted on a bare metal node. This is used for '
-                      'checking if the image can be downloaded and deployed '
-                      'on the bare metal node after booting agent ramdisk. '
-                      'This may be set according to the memory consumed by '
-                      'the agent ramdisk image.')),
-    cfg.BoolOpt('stream_raw_images',
-                default=True,
-                help=_('Whether the agent ramdisk should stream raw images '
-                       'directly onto the disk or not. By streaming raw '
-                       'images directly onto the disk the agent ramdisk will '
-                       'not spend time copying the image to a tmpfs partition '
-                       '(therefore consuming less memory) prior to writing it '
-                       'to the disk. Unless the disk where the image will be '
-                       'copied to is really slow, this option should be set '
-                       'to True. Defaults to True.')),
-]
-
-CONF = cfg.CONF
-CONF.import_opt('my_ip', 'ironic.netconf')
-CONF.import_opt('erase_devices_priority',
-                'ironic.drivers.modules.deploy_utils', group='deploy')
-CONF.register_opts(agent_opts, group='agent')
-
 LOG = log.getLogger(__name__)
 
+METRICS = metrics_utils.get_metrics_logger(__name__)
 
 REQUIRED_PROPERTIES = {
     'deploy_kernel': _('UUID (from Glance) of the deployment kernel. '
@@ -102,6 +71,7 @@ PARTITION_IMAGE_LABELS = ('kernel', 'ramdisk', 'root_gb', 'root_mb', 'swap_mb',
                           'deploy_boot_mode')
 
 
+@METRICS.timer('build_instance_info_for_deploy')
 def build_instance_info_for_deploy(task):
     """Build instance_info necessary for deploying to a node.
 
@@ -151,6 +121,7 @@ def build_instance_info_for_deploy(task):
     return instance_info
 
 
+@METRICS.timer('check_image_size')
 def check_image_size(task, image_source):
     """Check if the requested image is larger than the ram size.
 
@@ -188,6 +159,7 @@ def check_image_size(task, image_source):
         raise exception.InvalidParameterValue(msg)
 
 
+@METRICS.timer('validate_image_proxies')
 def validate_image_proxies(node):
     """Check that the provided proxy parameters are valid.
 
@@ -224,182 +196,9 @@ def validate_image_proxies(node):
         raise exception.InvalidParameterValue(msg)
 
 
-class AgentDeploy(base.DeployInterface):
-    """Interface for deploy-related actions."""
+class AgentDeployMixin(agent_base_vendor.AgentDeployMixin):
 
-    def get_properties(self):
-        """Return the properties of the interface.
-
-        :returns: dictionary of <property name>:<property description> entries.
-        """
-        return COMMON_PROPERTIES
-
-    def validate(self, task):
-        """Validate the driver-specific Node deployment info.
-
-        This method validates whether the properties of the supplied node
-        contain the required information for this driver to deploy images to
-        the node.
-
-        :param task: a TaskManager instance
-        :raises: MissingParameterValue, if any of the required parameters are
-            missing.
-        :raises: InvalidParameterValue, if any of the parameters have invalid
-            value.
-        """
-        if CONF.agent.manage_agent_boot:
-            task.driver.boot.validate(task)
-
-        node = task.node
-        params = {}
-        image_source = node.instance_info.get('image_source')
-        params['instance_info.image_source'] = image_source
-        error_msg = _('Node %s failed to validate deploy image info. Some '
-                      'parameters were missing') % node.uuid
-
-        deploy_utils.check_for_missing_params(params, error_msg)
-
-        if not service_utils.is_glance_image(image_source):
-            if not node.instance_info.get('image_checksum'):
-                raise exception.MissingParameterValue(_(
-                    "image_source's image_checksum must be provided in "
-                    "instance_info for node %s") % node.uuid)
-
-        check_image_size(task, image_source)
-        # Validate the root device hints
-        deploy_utils.parse_root_device_hints(node)
-
-        # Validate node capabilities
-        deploy_utils.validate_capabilities(node)
-
-        validate_image_proxies(node)
-
-    @task_manager.require_exclusive_lock
-    def deploy(self, task):
-        """Perform a deployment to a node.
-
-        Perform the necessary work to deploy an image onto the specified node.
-        This method will be called after prepare(), which may have already
-        performed any preparatory steps, such as pre-caching some data for the
-        node.
-
-        :param task: a TaskManager instance.
-        :returns: status of the deploy. One of ironic.common.states.
-        """
-        manager_utils.node_power_action(task, states.REBOOT)
-        return states.DEPLOYWAIT
-
-    @task_manager.require_exclusive_lock
-    def tear_down(self, task):
-        """Tear down a previous deployment on the task's node.
-
-        :param task: a TaskManager instance.
-        :returns: status of the deploy. One of ironic.common.states.
-        """
-        manager_utils.node_power_action(task, states.POWER_OFF)
-        return states.DELETED
-
-    @task_manager.require_exclusive_lock
-    def prepare(self, task):
-        """Prepare the deployment environment for this node.
-
-        :param task: a TaskManager instance.
-        """
-        # Nodes deployed by AgentDeploy always boot from disk now. So there
-        # is nothing to be done in prepare() when it's called during
-        # take over.
-        node = task.node
-        if node.provision_state != states.ACTIVE:
-            node.instance_info = build_instance_info_for_deploy(task)
-            node.save()
-            if CONF.agent.manage_agent_boot:
-                deploy_opts = deploy_utils.build_agent_options(node)
-                task.driver.boot.prepare_ramdisk(task, deploy_opts)
-
-    @task_manager.require_exclusive_lock
-    def clean_up(self, task):
-        """Clean up the deployment environment for this node.
-
-        If preparation of the deployment environment ahead of time is possible,
-        this method should be implemented by the driver. It should erase
-        anything cached by the `prepare` method.
-
-        If implemented, this method must be idempotent. It may be called
-        multiple times for the same node on the same conductor, and it may be
-        called by multiple conductors in parallel. Therefore, it must not
-        require an exclusive lock.
-
-        This method is called before `tear_down`.
-
-        :param task: a TaskManager instance.
-        """
-        if CONF.agent.manage_agent_boot:
-            task.driver.boot.clean_up_ramdisk(task)
-        provider = dhcp_factory.DHCPFactory()
-        provider.clean_dhcp(task)
-
-    def take_over(self, task):
-        """Take over management of this node from a dead conductor.
-
-        Since this deploy interface only does local boot, there's no need
-        for this conductor to do anything when it takes over management
-        of this node.
-
-        :param task: a TaskManager instance.
-        """
-        pass
-
-    def get_clean_steps(self, task):
-        """Get the list of clean steps from the agent.
-
-        :param task: a TaskManager object containing the node
-        :raises NodeCleaningFailure: if the clean steps are not yet
-            available (cached), for example, when a node has just been
-            enrolled and has not been cleaned yet.
-        :returns: A list of clean step dictionaries
-        """
-        new_priorities = {
-            'erase_devices': CONF.deploy.erase_devices_priority,
-        }
-        return deploy_utils.agent_get_clean_steps(
-            task, interface='deploy',
-            override_priorities=new_priorities)
-
-    def execute_clean_step(self, task, step):
-        """Execute a clean step asynchronously on the agent.
-
-        :param task: a TaskManager object containing the node
-        :param step: a clean step dictionary to execute
-        :raises: NodeCleaningFailure if the agent does not return a command
-            status
-        :returns: states.CLEANWAIT to signify the step will be completed async
-        """
-        return deploy_utils.agent_execute_clean_step(task, step)
-
-    def prepare_cleaning(self, task):
-        """Boot into the agent to prepare for cleaning.
-
-        :param task: a TaskManager object containing the node
-        :raises NodeCleaningFailure: if the previous cleaning ports cannot
-            be removed or if new cleaning ports cannot be created
-        :returns: states.CLEANWAIT to signify an asynchronous prepare
-        """
-        return deploy_utils.prepare_inband_cleaning(
-            task, manage_boot=CONF.agent.manage_agent_boot)
-
-    def tear_down_cleaning(self, task):
-        """Clean up the PXE and DHCP files after cleaning.
-
-        :param task: a TaskManager object containing the node
-        :raises NodeCleaningFailure: if the cleaning ports cannot be
-            removed
-        """
-        deploy_utils.tear_down_inband_cleaning(
-            task, manage_boot=CONF.agent.manage_agent_boot)
-
-
-class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
-
+    @METRICS.timer('AgentDeployMixin.deploy_has_started')
     def deploy_has_started(self, task):
         commands = self._client.get_commands_status(task.node)
 
@@ -409,6 +208,7 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
                 return True
         return False
 
+    @METRICS.timer('AgentDeployMixin.deploy_is_done')
     def deploy_is_done(self, task):
         commands = self._client.get_commands_status(task.node)
         if not commands:
@@ -426,8 +226,9 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
 
         return False
 
+    @METRICS.timer('AgentDeployMixin.continue_deploy')
     @task_manager.require_exclusive_lock
-    def continue_deploy(self, task, **kwargs):
+    def continue_deploy(self, task):
         task.process_event('resume')
         node = task.node
         image_source = node.instance_info.get('image_source')
@@ -502,6 +303,7 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
                         return
                     return result
 
+    @METRICS.timer('AgentDeployMixin.check_deploy_success')
     def check_deploy_success(self, node):
         # should only ever be called after we've validated that
         # the prepare_image command is complete
@@ -509,7 +311,8 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
         if command['command_status'] == 'FAILED':
             return command['command_error']
 
-    def reboot_to_instance(self, task, **kwargs):
+    @METRICS.timer('AgentDeployMixin.reboot_to_instance')
+    def reboot_to_instance(self, task):
         task.process_event('resume')
         node = task.node
         iwdi = task.node.driver_internal_info.get('is_whole_disk_image')
@@ -550,6 +353,224 @@ class AgentVendorInterface(agent_base_vendor.BaseAgentVendor):
             task.driver.boot.clean_up_ramdisk(task)
 
 
+class AgentDeploy(AgentDeployMixin, base.DeployInterface):
+    """Interface for deploy-related actions."""
+
+    def get_properties(self):
+        """Return the properties of the interface.
+
+        :returns: dictionary of <property name>:<property description> entries.
+        """
+        return COMMON_PROPERTIES
+
+    @METRICS.timer('AgentDeploy.validate')
+    def validate(self, task):
+        """Validate the driver-specific Node deployment info.
+
+        This method validates whether the properties of the supplied node
+        contain the required information for this driver to deploy images to
+        the node.
+
+        :param task: a TaskManager instance
+        :raises: MissingParameterValue, if any of the required parameters are
+            missing.
+        :raises: InvalidParameterValue, if any of the parameters have invalid
+            value.
+        """
+        if CONF.agent.manage_agent_boot:
+            task.driver.boot.validate(task)
+
+        node = task.node
+        params = {}
+        image_source = node.instance_info.get('image_source')
+        params['instance_info.image_source'] = image_source
+        error_msg = _('Node %s failed to validate deploy image info. Some '
+                      'parameters were missing') % node.uuid
+
+        deploy_utils.check_for_missing_params(params, error_msg)
+
+        if not service_utils.is_glance_image(image_source):
+            if not node.instance_info.get('image_checksum'):
+                raise exception.MissingParameterValue(_(
+                    "image_source's image_checksum must be provided in "
+                    "instance_info for node %s") % node.uuid)
+
+        check_image_size(task, image_source)
+        # Validate the root device hints
+        deploy_utils.parse_root_device_hints(node)
+
+        # Validate node capabilities
+        deploy_utils.validate_capabilities(node)
+
+        validate_image_proxies(node)
+
+    @METRICS.timer('AgentDeploy.deploy')
+    @task_manager.require_exclusive_lock
+    def deploy(self, task):
+        """Perform a deployment to a node.
+
+        Perform the necessary work to deploy an image onto the specified node.
+        This method will be called after prepare(), which may have already
+        performed any preparatory steps, such as pre-caching some data for the
+        node.
+
+        :param task: a TaskManager instance.
+        :returns: status of the deploy. One of ironic.common.states.
+        """
+        manager_utils.node_power_action(task, states.REBOOT)
+        return states.DEPLOYWAIT
+
+    @METRICS.timer('AgentDeploy.tear_down')
+    @task_manager.require_exclusive_lock
+    def tear_down(self, task):
+        """Tear down a previous deployment on the task's node.
+
+        :param task: a TaskManager instance.
+        :returns: status of the deploy. One of ironic.common.states.
+        :raises: NetworkError if the cleaning ports cannot be removed.
+        :raises: InvalidParameterValue when the wrong power state is specified
+             or the wrong driver info is specified for power management.
+        :raises: other exceptions by the node's power driver if something
+             wrong occurred during the power action.
+        """
+        manager_utils.node_power_action(task, states.POWER_OFF)
+
+        task.driver.network.unconfigure_tenant_networks(task)
+
+        return states.DELETED
+
+    @METRICS.timer('AgentDeploy.prepare')
+    @task_manager.require_exclusive_lock
+    def prepare(self, task):
+        """Prepare the deployment environment for this node.
+
+        :param task: a TaskManager instance.
+        :raises: NetworkError: if the previous cleaning ports cannot be removed
+            or if new cleaning ports cannot be created.
+        :raises: InvalidParameterValue when the wrong power state is specified
+             or the wrong driver info is specified for power management.
+        :raises: other exceptions by the node's power driver if something
+             wrong occurred during the power action.
+        :raises: exception.ImageRefValidationFailed if image_source is not
+            Glance href and is not HTTP(S) URL.
+        :raises: any boot interface's prepare_ramdisk exceptions.
+        """
+        # Nodes deployed by AgentDeploy always boot from disk now. So there
+        # is nothing to be done in prepare() when it's called during
+        # take over.
+        node = task.node
+        if node.provision_state == states.DEPLOYING:
+            # Adding the node to provisioning network so that the dhcp
+            # options get added for the provisioning port.
+            manager_utils.node_power_action(task, states.POWER_OFF)
+            task.driver.network.add_provisioning_network(task)
+        if node.provision_state not in [states.ACTIVE, states.ADOPTING]:
+            node.instance_info = build_instance_info_for_deploy(task)
+            node.save()
+            if CONF.agent.manage_agent_boot:
+                deploy_opts = deploy_utils.build_agent_options(node)
+                task.driver.boot.prepare_ramdisk(task, deploy_opts)
+
+    @METRICS.timer('AgentDeploy.clean_up')
+    @task_manager.require_exclusive_lock
+    def clean_up(self, task):
+        """Clean up the deployment environment for this node.
+
+        If preparation of the deployment environment ahead of time is possible,
+        this method should be implemented by the driver. It should erase
+        anything cached by the `prepare` method.
+
+        If implemented, this method must be idempotent. It may be called
+        multiple times for the same node on the same conductor, and it may be
+        called by multiple conductors in parallel. Therefore, it must not
+        require an exclusive lock.
+
+        This method is called before `tear_down`.
+
+        :param task: a TaskManager instance.
+        """
+        if CONF.agent.manage_agent_boot:
+            task.driver.boot.clean_up_ramdisk(task)
+        provider = dhcp_factory.DHCPFactory()
+        provider.clean_dhcp(task)
+
+    def take_over(self, task):
+        """Take over management of this node from a dead conductor.
+
+        Since this deploy interface only does local boot, there's no need
+        for this conductor to do anything when it takes over management
+        of this node.
+
+        :param task: a TaskManager instance.
+        """
+        pass
+
+    @METRICS.timer('AgentDeploy.get_clean_steps')
+    def get_clean_steps(self, task):
+        """Get the list of clean steps from the agent.
+
+        :param task: a TaskManager object containing the node
+        :raises NodeCleaningFailure: if the clean steps are not yet
+            available (cached), for example, when a node has just been
+            enrolled and has not been cleaned yet.
+        :returns: A list of clean step dictionaries
+        """
+        new_priorities = {
+            'erase_devices': CONF.deploy.erase_devices_priority,
+        }
+        return deploy_utils.agent_get_clean_steps(
+            task, interface='deploy',
+            override_priorities=new_priorities)
+
+    @METRICS.timer('AgentDeploy.execute_clean_step')
+    def execute_clean_step(self, task, step):
+        """Execute a clean step asynchronously on the agent.
+
+        :param task: a TaskManager object containing the node
+        :param step: a clean step dictionary to execute
+        :raises: NodeCleaningFailure if the agent does not return a command
+            status
+        :returns: states.CLEANWAIT to signify the step will be completed async
+        """
+        return deploy_utils.agent_execute_clean_step(task, step)
+
+    @METRICS.timer('AgentDeploy.prepare_cleaning')
+    def prepare_cleaning(self, task):
+        """Boot into the agent to prepare for cleaning.
+
+        :param task: a TaskManager object containing the node
+        :raises: NodeCleaningFailure, NetworkError if the previous cleaning
+            ports cannot be removed or if new cleaning ports cannot be created.
+        :raises: InvalidParameterValue if cleaning network UUID config option
+            has an invalid value.
+        :returns: states.CLEANWAIT to signify an asynchronous prepare
+        """
+        return deploy_utils.prepare_inband_cleaning(
+            task, manage_boot=CONF.agent.manage_agent_boot)
+
+    @METRICS.timer('AgentDeploy.tear_down_cleaning')
+    def tear_down_cleaning(self, task):
+        """Clean up the PXE and DHCP files after cleaning.
+
+        :param task: a TaskManager object containing the node
+        :raises: NodeCleaningFailure, NetworkError if the cleaning ports cannot
+            be removed
+        """
+        deploy_utils.tear_down_inband_cleaning(
+            task, manage_boot=CONF.agent.manage_agent_boot)
+
+
+class AgentVendorInterface(agent_base_vendor.BaseAgentVendor,
+                           AgentDeployMixin):
+    """Implementation of agent vendor interface.
+
+    Contains old lookup and heartbeat endpoints currently pending deprecation.
+
+    WARNING: This class is deprecated and will be removed in the Ocata release.
+    Drivers should stop relying on it.
+    """
+
+
 class AgentRAID(base.RAIDInterface):
     """Implementation of RAIDInterface which uses agent ramdisk."""
 
@@ -557,6 +578,7 @@ class AgentRAID(base.RAIDInterface):
         """Return the properties of the interface."""
         return {}
 
+    @METRICS.timer('AgentRAID.create_configuration')
     @base.clean_step(priority=0)
     def create_configuration(self, task,
                              create_root_volume=True,
@@ -653,6 +675,7 @@ class AgentRAID(base.RAIDInterface):
 
         raid.update_raid_info(task.node, clean_result)
 
+    @METRICS.timer('AgentRAID.delete_configuration')
     @base.clean_step(priority=0)
     def delete_configuration(self, task):
         """Deletes RAID configuration on the given node.

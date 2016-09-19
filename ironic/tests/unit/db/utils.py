@@ -102,7 +102,7 @@ def get_test_ilo_info():
 def get_test_drac_info():
     return {
         "drac_host": "1.2.3.4",
-        "drac_port": "443",
+        "drac_port": 443,
         "drac_path": "/wsman",
         "drac_protocol": "https",
         "drac_username": "admin",
@@ -226,6 +226,8 @@ def get_test_node(**kw):
         'raid_config': kw.get('raid_config'),
         'target_raid_config': kw.get('target_raid_config'),
         'tags': kw.get('tags', []),
+        'resource_class': kw.get('resource_class'),
+        'network_interface': kw.get('network_interface'),
     }
 
 
@@ -242,6 +244,10 @@ def create_test_node(**kw):
     # Let DB generate ID if it isn't specified explicitly
     if 'id' not in kw:
         del node['id']
+    # Create node with tags will raise an exception. If tags are not
+    # specified explicitly just delete it.
+    if 'tags' not in kw:
+        del node['tags']
     dbapi = db_api.get_instance()
     return dbapi.create_node(node)
 
@@ -261,6 +267,7 @@ def get_test_port(**kw):
                                          'switch_info': 'switch1'}),
         'portgroup_id': kw.get('portgroup_id'),
         'pxe_enabled': kw.get('pxe_enabled', True),
+        'internal_info': kw.get('internal_info', {"bar": "buzz"}),
     }
 
 
@@ -364,6 +371,7 @@ def get_test_portgroup(**kw):
         'extra': kw.get('extra', {}),
         'created_at': kw.get('created_at'),
         'updated_at': kw.get('updated_at'),
+        'internal_info': kw.get('internal_info', {"bar": "buzz"}),
     }
 
 

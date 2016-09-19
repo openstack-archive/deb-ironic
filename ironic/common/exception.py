@@ -20,28 +20,15 @@ SHOULD include dedicated exception logging.
 
 """
 
-from oslo_config import cfg
 from oslo_log import log as logging
 import six
 from six.moves import http_client
 
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
-
+from ironic.conf import CONF
 
 LOG = logging.getLogger(__name__)
-
-exc_log_opts = [
-    cfg.BoolOpt('fatal_exception_format_errors',
-                default=False,
-                help=_('Used if there is a formatting error when generating '
-                       'an exception message (a programming error). If True, '
-                       'raise an exception; if False, use the unformatted '
-                       'message.')),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(exc_log_opts)
 
 
 class IronicException(Exception):
@@ -173,11 +160,11 @@ class DuplicateName(Conflict):
 
 
 class InvalidUUID(Invalid):
-    _msg_fmt = _("Expected a uuid but received %(uuid)s.")
+    _msg_fmt = _("Expected a UUID but received %(uuid)s.")
 
 
 class InvalidUuidOrName(Invalid):
-    _msg_fmt = _("Expected a logical name or uuid but received %(name)s.")
+    _msg_fmt = _("Expected a logical name or UUID but received %(name)s.")
 
 
 class InvalidName(Invalid):
@@ -185,11 +172,21 @@ class InvalidName(Invalid):
 
 
 class InvalidIdentity(Invalid):
-    _msg_fmt = _("Expected an uuid or int but received %(identity)s.")
+    _msg_fmt = _("Expected a UUID or int but received %(identity)s.")
 
 
 class InvalidMAC(Invalid):
     _msg_fmt = _("Expected a MAC address but received %(mac)s.")
+
+
+class InvalidSwitchID(Invalid):
+    _msg_fmt = _("Expected a MAC address or OpenFlow datapath ID but "
+                 "received %(switch_id)s.")
+
+
+class InvalidDatapathID(Invalid):
+    _msg_fmt = _("Expected an OpenFlow datapath ID but received "
+                 "%(datapath_id)s.")
 
 
 class InvalidStateRequested(Invalid):
@@ -241,6 +238,11 @@ class DriverNotFound(NotFound):
     _msg_fmt = _("Could not find the following driver(s): %(driver_name)s.")
 
 
+class DriverNotFoundInEntrypoint(DriverNotFound):
+    _msg_fmt = _("Could not find the following driver(s) in the "
+                 "'%(entrypoint)s' entrypoint: %(driver_name)s.")
+
+
 class ImageNotFound(NotFound):
     _msg_fmt = _("Image %(image_id)s could not be found.")
 
@@ -251,6 +253,10 @@ class NoValidHost(NotFound):
 
 class InstanceNotFound(NotFound):
     _msg_fmt = _("Instance %(instance)s could not be found.")
+
+
+class InputFileError(IronicException):
+    _msg_fmt = _("Error with file %(file_name)s. Reason: %(reason)s")
 
 
 class NodeNotFound(NotFound):
@@ -424,8 +430,8 @@ class CommunicationError(IronicException):
     _msg_fmt = _("Unable to communicate with the server.")
 
 
-class HTTPForbidden(Forbidden):
-    pass
+class HTTPForbidden(NotAuthorized):
+    _msg_fmt = _("Access was denied to the following resource: %(resource)s")
 
 
 class Unauthorized(IronicException):
@@ -481,10 +487,6 @@ class ConsoleSubprocessFailed(ConsoleError):
 
 class PasswordFileFailedToCreate(IronicException):
     _msg_fmt = _("Failed to create the password file. %(error)s")
-
-
-class IBootOperationError(IronicException):
-    pass
 
 
 class IloOperationError(IronicException):
@@ -593,5 +595,19 @@ class OneViewError(IronicException):
     _msg_fmt = _("OneView exception occurred. Error: %(error)s")
 
 
+class OneViewInvalidNodeParameter(OneViewError):
+    _msg_fmt = _("Error while obtaining OneView info from node %(node_uuid)s. "
+                 "Error: %(error)s")
+
+
 class NodeTagNotFound(IronicException):
     _msg_fmt = _("Node %(node_id)s doesn't have a tag '%(tag)s'")
+
+
+class NetworkError(IronicException):
+    _msg_fmt = _("Network operation failure.")
+
+
+class IncompleteLookup(Invalid):
+    _msg_fmt = _("At least one of 'addresses' and 'node_uuid' parameters "
+                 "is required")

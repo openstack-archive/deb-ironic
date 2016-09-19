@@ -41,6 +41,27 @@ class TestMacAddressType(base.TestCase):
                           types.MacAddressType.validate, 'invalid-mac')
 
 
+class TestListOfMacAddressesType(base.TestCase):
+
+    def test_valid_mac_addr(self):
+        test_mac = 'aa:bb:cc:11:22:33'
+        self.assertEqual([test_mac],
+                         types.ListOfMacAddressesType.validate(test_mac))
+
+    def test_valid_list(self):
+        test_mac = 'aa:bb:cc:11:22:33,11:22:33:44:55:66'
+        self.assertEqual(
+            sorted(test_mac.split(',')),
+            sorted(types.ListOfMacAddressesType.validate(test_mac)))
+
+    def test_invalid_mac_addr(self):
+        self.assertRaises(exception.InvalidMAC,
+                          types.ListOfMacAddressesType.validate, 'invalid-mac')
+        self.assertRaises(exception.InvalidMAC,
+                          types.ListOfMacAddressesType.validate,
+                          'aa:bb:cc:11:22:33,invalid-mac')
+
+
 class TestUuidType(base.TestCase):
 
     def test_valid_uuid(self):
@@ -287,3 +308,55 @@ class TestListType(base.TestCase):
         self.assertItemsEqual(['foo', 'bar'],
                               v.validate("foo,foo,foo,bar"))
         self.assertIsInstance(v.validate('foo,bar'), list)
+
+
+class TestLocalLinkConnectionType(base.TestCase):
+
+    def test_local_link_connection_type(self):
+        v = types.locallinkconnectiontype
+        value = {'switch_id': '0a:1b:2c:3d:4e:5f',
+                 'port_id': 'value2',
+                 'switch_info': 'value3'}
+        self.assertItemsEqual(value, v.validate(value))
+
+    def test_local_link_connection_type_datapath_id(self):
+        v = types.locallinkconnectiontype
+        value = {'switch_id': '0000000000000000',
+                 'port_id': 'value2',
+                 'switch_info': 'value3'}
+        self.assertItemsEqual(value,
+                              v.validate(value))
+
+    def test_local_link_connection_type_not_mac_or_datapath_id(self):
+        v = types.locallinkconnectiontype
+        value = {'switch_id': 'badid',
+                 'port_id': 'value2',
+                 'switch_info': 'value3'}
+        self.assertRaises(exception.InvalidSwitchID, v.validate, value)
+
+    def test_local_link_connection_type_invalid_key(self):
+        v = types.locallinkconnectiontype
+        value = {'switch_id': '0a:1b:2c:3d:4e:5f',
+                 'port_id': 'value2',
+                 'switch_info': 'value3',
+                 'invalid_key': 'value'}
+        self.assertRaisesRegex(exception.Invalid, 'are invalid keys',
+                               v.validate, value)
+
+    def test_local_link_connection_type_missing_mandatory_key(self):
+        v = types.locallinkconnectiontype
+        value = {'switch_id': '0a:1b:2c:3d:4e:5f',
+                 'switch_info': 'value3'}
+        self.assertRaisesRegex(exception.Invalid, 'Missing mandatory',
+                               v.validate, value)
+
+    def test_local_link_connection_type_without_optional_key(self):
+        v = types.locallinkconnectiontype
+        value = {'switch_id': '0a:1b:2c:3d:4e:5f',
+                 'port_id': 'value2'}
+        self.assertItemsEqual(value, v.validate(value))
+
+    def test_local_link_connection_type_empty_value(self):
+        v = types.locallinkconnectiontype
+        value = {}
+        self.assertItemsEqual(value, v.validate(value))

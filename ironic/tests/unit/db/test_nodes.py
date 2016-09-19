@@ -24,7 +24,6 @@ import six
 
 from ironic.common import exception
 from ironic.common import states
-from ironic.db.sqlalchemy import api
 from ironic.tests.unit.db import base
 from ironic.tests.unit.db import utils
 
@@ -34,10 +33,10 @@ class DbNodeTestCase(base.DbTestCase):
     def test_create_node(self):
         utils.create_test_node()
 
-    @mock.patch.object(api.LOG, 'warning', autospec=True)
-    def test_create_node_with_tags(self, mock_log):
-        utils.create_test_node(tags=['tag1', 'tag2'])
-        self.assertTrue(mock_log.called)
+    def test_create_node_with_tags(self):
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.create_test_node,
+                          tags=['tag1', 'tag2'])
 
     def test_create_node_already_exists(self):
         utils.create_test_node()
@@ -124,7 +123,8 @@ class DbNodeTestCase(base.DbTestCase):
         node2 = utils.create_test_node(
             driver='driver-two',
             uuid=uuidutils.generate_uuid(),
-            maintenance=True)
+            maintenance=True,
+            resource_class='foo')
         node3 = utils.create_test_node(
             driver='driver-one',
             uuid=uuidutils.generate_uuid(),
@@ -157,6 +157,9 @@ class DbNodeTestCase(base.DbTestCase):
         res = self.dbapi.get_node_list(filters={'maintenance': False})
         self.assertEqual(sorted([node1.id, node3.id]),
                          sorted([r.id for r in res]))
+
+        res = self.dbapi.get_node_list(filters={'resource_class': 'foo'})
+        self.assertEqual([node2.id], [r.id for r in res])
 
         res = self.dbapi.get_node_list(
             filters={'reserved_by_any_of': ['fake-host',
@@ -570,3 +573,57 @@ class DbNodeTestCase(base.DbTestCase):
         self.assertRaises(
             exception.NodeNotFound,
             self.dbapi.touch_node_provisioning, uuidutils.generate_uuid())
+
+    def test_get_node_by_port_addresses(self):
+        wrong_node = utils.create_test_node(
+            driver='driver-one',
+            uuid=uuidutils.generate_uuid())
+        node = utils.create_test_node(
+            driver='driver-two',
+            uuid=uuidutils.generate_uuid())
+        addresses = []
+        for i in (1, 2, 3):
+            address = '52:54:00:cf:2d:4%s' % i
+            utils.create_test_port(uuid=uuidutils.generate_uuid(),
+                                   node_id=node.id, address=address)
+            if i > 1:
+                addresses.append(address)
+        utils.create_test_port(uuid=uuidutils.generate_uuid(),
+                               node_id=wrong_node.id,
+                               address='aa:bb:cc:dd:ee:ff')
+
+        res = self.dbapi.get_node_by_port_addresses(addresses)
+        self.assertEqual(node.uuid, res.uuid)
+
+    def test_get_node_by_port_addresses_not_found(self):
+        node = utils.create_test_node(
+            driver='driver',
+            uuid=uuidutils.generate_uuid())
+        utils.create_test_port(uuid=uuidutils.generate_uuid(),
+                               node_id=node.id,
+                               address='aa:bb:cc:dd:ee:ff')
+
+        self.assertRaisesRegexp(exception.NodeNotFound,
+                                'was not found',
+                                self.dbapi.get_node_by_port_addresses,
+                                ['11:22:33:44:55:66'])
+
+    def test_get_node_by_port_addresses_multiple_found(self):
+        node1 = utils.create_test_node(
+            driver='driver',
+            uuid=uuidutils.generate_uuid())
+        node2 = utils.create_test_node(
+            driver='driver',
+            uuid=uuidutils.generate_uuid())
+        addresses = ['52:54:00:cf:2d:4%s' % i for i in (1, 2)]
+        utils.create_test_port(uuid=uuidutils.generate_uuid(),
+                               node_id=node1.id,
+                               address=addresses[0])
+        utils.create_test_port(uuid=uuidutils.generate_uuid(),
+                               node_id=node2.id,
+                               address=addresses[1])
+
+        self.assertRaisesRegexp(exception.NodeNotFound,
+                                'Multiple nodes',
+                                self.dbapi.get_node_by_port_addresses,
+                                addresses)

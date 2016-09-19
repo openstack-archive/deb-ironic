@@ -32,6 +32,11 @@ API microversion 1.8 added the ``fields`` Request parameter. When specified,
 this causes the content of the Response to include only the specified fields,
 rather than the default set.
 
+API microversion 1.19 added the ``pxe_enabled`` and ``local_link_connection``
+fields.
+
+.. TODO: add pxe_enabled and local_link_connection to all sample files
+
 Normal response code: 200
 
 Request
@@ -97,6 +102,9 @@ Response
     - uuid: uuid
     - address: port_address
     - node_uuid: node_uuid
+    - local_link_connection: local_link_connection
+    - pxe_enabled: pxe_enabled
+    - internal_info: internal_info
     - extra: extra
     - created_at: created_at
     - updated_at: updated_at
@@ -143,6 +151,9 @@ Response
     - uuid: uuid
     - address: port_address
     - node_uuid: node_uuid
+    - local_link_connection: local_link_connection
+    - pxe_enabled: pxe_enabled
+    - internal_info: internal_info
     - extra: extra
     - created_at: created_at
     - updated_at: updated_at
@@ -183,6 +194,9 @@ Response
     - uuid: uuid
     - address: port_address
     - node_uuid: node_uuid
+    - local_link_connection: local_link_connection
+    - pxe_enabled: pxe_enabled
+    - internal_info: internal_info
     - extra: extra
     - created_at: created_at
     - updated_at: updated_at
@@ -226,6 +240,9 @@ Response
     - uuid: uuid
     - address: port_address
     - node_uuid: node_uuid
+    - local_link_connection: local_link_connection
+    - pxe_enabled: pxe_enabled
+    - internal_info: internal_info
     - extra: extra
     - created_at: created_at
     - updated_at: updated_at

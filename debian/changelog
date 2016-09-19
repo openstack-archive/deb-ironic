@@ -1,3 +1,15 @@
+ironic (1:6.1.0-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Fixed (build-)depends for this release.
+  * Using OpenStack's Gerrit as VCS URLs.
+  * Blacklist 2 unit tests until the issue is solved upstream (see launchpad
+    bug 1626089):
+    - IloCommonMethodsTestCase.test_get_ilo_object_cafile
+    - IloCommonMethodsTestCase.test_get_ilo_object_no_cafile
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 19 Sep 2016 23:06:38 +0200
+
 ironic (1:6.0.0-1) experimental; urgency=medium
 
   * New upstream release.

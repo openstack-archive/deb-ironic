@@ -21,7 +21,6 @@ import shutil
 import tempfile
 
 from ironic_lib import utils as ironic_utils
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import importutils
 import six
@@ -39,6 +38,7 @@ from ironic.common import images
 from ironic.common import swift
 from ironic.common import utils
 from ironic.conductor import utils as manager_utils
+from ironic.conf import CONF
 from ironic.drivers.modules import deploy_utils
 
 ilo_client = importutils.try_import('proliantutils.ilo.client')
@@ -47,34 +47,6 @@ ilo_error = importutils.try_import('proliantutils.exception')
 STANDARD_LICENSE = 1
 ESSENTIALS_LICENSE = 2
 ADVANCED_LICENSE = 3
-
-opts = [
-    cfg.IntOpt('client_timeout',
-               default=60,
-               help=_('Timeout (in seconds) for iLO operations')),
-    cfg.PortOpt('client_port',
-                default=443,
-                help=_('Port to be used for iLO operations')),
-    cfg.StrOpt('swift_ilo_container',
-               default='ironic_ilo_container',
-               help=_('The Swift iLO container to store data.')),
-    cfg.IntOpt('swift_object_expiry_timeout',
-               default=900,
-               help=_('Amount of time in seconds for Swift objects to '
-                      'auto-expire.')),
-    cfg.BoolOpt('use_web_server_for_images',
-                default=False,
-                help=_('Set this to True to use http web server to host '
-                       'floppy images and generated boot ISO. This '
-                       'requires http_root and http_url to be configured '
-                       'in the [deploy] section of the config file. If this '
-                       'is set to False, then Ironic will use Swift '
-                       'to host the floppy images and generated '
-                       'boot_iso.')),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(opts, group='ilo')
 
 LOG = logging.getLogger(__name__)
 
@@ -87,6 +59,7 @@ REQUIRED_PROPERTIES = {
 OPTIONAL_PROPERTIES = {
     'client_port': _("port to be used for iLO operations. Optional."),
     'client_timeout': _("timeout (in seconds) for iLO operations. Optional."),
+    'ca_file': _("CA certificate file to validate iLO. optional"),
 }
 CONSOLE_PROPERTIES = {
     'console_port': _("node's UDP port to connect to. Only required for "
@@ -239,6 +212,12 @@ def parse_driver_info(node):
         value = info.get(param, CONF.ilo.get(param))
         if param == "client_port":
             d_info[param] = utils.validate_network_port(value, param)
+        elif param == "ca_file":
+            if value and not os.path.isfile(value):
+                raise exception.InvalidParameterValue(_(
+                    '%(param)s "%(value)s" is not found.') %
+                    {'param': param, 'value': value})
+            d_info[param] = value
         else:
             try:
                 d_info[param] = int(value)
@@ -278,7 +257,8 @@ def get_ilo_object(node):
                                       driver_info['ilo_username'],
                                       driver_info['ilo_password'],
                                       driver_info['client_timeout'],
-                                      driver_info['client_port'])
+                                      driver_info['client_port'],
+                                      cacert=driver_info.get('ca_file'))
     return ilo_object
 
 
@@ -736,7 +716,7 @@ def verify_image_checksum(image_location, expected_checksum):
         LOG.error(_LE("Error opening file: %(file)s"),
                   {'file': image_location})
         raise exception.ImageRefValidationFailed(image_href=image_location,
-                                                 reason=six.text_type(e))
+                                                 reason=e)
 
     if actual_checksum != expected_checksum:
         msg = (_('Error verifying image checksum. Image %(image)s failed to '
