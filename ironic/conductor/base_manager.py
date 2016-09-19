@@ -83,8 +83,12 @@ class BaseConductorManager(object):
         self.ring_manager = hash.HashRingManager()
         """Consistent hash ring which maps drivers to conductors."""
 
-        # NOTE(deva): this call may raise DriverLoadError or DriverNotFound
+        # NOTE(deva): these calls may raise DriverLoadError or DriverNotFound
+        # NOTE(vdrok): instantiate network interface factory on startup so that
+        # all the network interfaces are loaded at the very beginning, and
+        # failures prevent the conductor from starting.
         drivers = driver_factory.drivers()
+        driver_factory.NetworkInterfaceFactory()
         if not drivers:
             msg = _LE("Conductor %s cannot be started because no drivers "
                       "were loaded.  This could be because no drivers were "
@@ -106,6 +110,8 @@ class BaseConductorManager(object):
         periodic_task_classes = set()
         self._collect_periodic_tasks(self, (admin_context,))
         for driver_obj in drivers.values():
+            # TODO(dtantsur): collecting tasks from driver objects is
+            # deprecated and should be removed in Ocata.
             self._collect_periodic_tasks(driver_obj, (self, admin_context))
             for iface_name in driver_obj.all_interfaces:
                 iface = getattr(driver_obj, iface_name, None)
@@ -125,6 +131,8 @@ class BaseConductorManager(object):
             self._periodic_task_callables,
             executor_factory=periodics.ExistingExecutor(self._executor))
 
+        # clear all target_power_state with locks by this conductor
+        self.dbapi.clear_node_target_power_state(self.host)
         # clear all locks held by this conductor before registering
         self.dbapi.clear_node_reservations_for_conductor(self.host)
         try:

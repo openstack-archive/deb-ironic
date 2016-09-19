@@ -15,6 +15,7 @@
 
 import datetime
 
+from ironic_lib import metrics_utils
 from oslo_utils import uuidutils
 import pecan
 from pecan import rest
@@ -30,10 +31,24 @@ from ironic.api.controllers.v1 import utils as api_utils
 from ironic.api import expose
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common import policy
 from ironic import objects
+
+METRICS = metrics_utils.get_metrics_logger(__name__)
 
 
 _DEFAULT_RETURN_FIELDS = ('uuid', 'address')
+
+
+def hide_fields_in_newer_versions(obj):
+    # if requested version is < 1.18, hide internal_info field
+    if not api_utils.allow_port_internal_info():
+        obj.internal_info = wsme.Unset
+    # if requested version is < 1.19, hide local_link_connection and
+    # pxe_enabled fields
+    if not api_utils.allow_port_advanced_net_fields():
+        obj.pxe_enabled = wsme.Unset
+        obj.local_link_connection = wsme.Unset
 
 
 class Port(base.APIBase):
@@ -64,7 +79,7 @@ class Port(base.APIBase):
                 # Change error code because 404 (NotFound) is inappropriate
                 # response for a POST request to create a Port
                 e.code = http_client.BAD_REQUEST  # BadRequest
-                raise e
+                raise
         elif value == wtypes.Unset:
             self._node_uuid = wtypes.Unset
 
@@ -77,9 +92,18 @@ class Port(base.APIBase):
     extra = {wtypes.text: types.jsontype}
     """This port's meta data"""
 
+    internal_info = wsme.wsattr({wtypes.text: types.jsontype}, readonly=True)
+    """This port's internal information maintained by ironic"""
+
     node_uuid = wsme.wsproperty(types.uuid, _get_node_uuid, _set_node_uuid,
                                 mandatory=True)
     """The UUID of the node this port belongs to"""
+
+    pxe_enabled = types.boolean
+    """Indicates whether pxe is enabled or disabled on the node."""
+
+    local_link_connection = types.locallinkconnectiontype
+    """The port binding profile for the port"""
 
     links = wsme.wsattr([link.Link], readonly=True)
     """A list containing a self link and associated port links"""
@@ -130,6 +154,8 @@ class Port(base.APIBase):
         if fields is not None:
             api_utils.check_for_invalid_fields(fields, port.as_dict())
 
+        hide_fields_in_newer_versions(port)
+
         return cls._convert_with_links(port, pecan.request.public_url,
                                        fields=fields)
 
@@ -138,8 +164,13 @@ class Port(base.APIBase):
         sample = cls(uuid='27e3153e-d5bf-4b7e-b517-fb518e17f34c',
                      address='fe:54:00:77:07:d9',
                      extra={'foo': 'bar'},
+                     internal_info={},
                      created_at=datetime.datetime.utcnow(),
-                     updated_at=datetime.datetime.utcnow())
+                     updated_at=datetime.datetime.utcnow(),
+                     pxe_enabled=True,
+                     local_link_connection={
+                         'switch_info': 'host', 'port_id': 'Gig0/1',
+                         'switch_id': 'aa:bb:cc:dd:ee:ff'})
         # NOTE(lucasagomes): node_uuid getter() method look at the
         # _node_uuid variable
         sample._node_uuid = '7ae81bb3-dec3-4289-8d6c-da80bd8001ae'
@@ -150,6 +181,11 @@ class Port(base.APIBase):
 
 class PortPatchType(types.JsonPatchType):
     _api_base = Port
+
+    @staticmethod
+    def internal_attrs():
+        defaults = types.JsonPatchType.internal_attrs()
+        return defaults + ['/internal_info']
 
 
 class PortCollection(collection.Collection):
@@ -187,7 +223,9 @@ class PortsController(rest.RestController):
         'detail': ['GET'],
     }
 
-    invalid_sort_key_list = ['extra']
+    invalid_sort_key_list = ['extra', 'internal_info', 'local_link_connection']
+
+    advanced_net_fields = ['pxe_enabled', 'local_link_connection']
 
     def _get_ports_collection(self, node_ident, address, marker, limit,
                               sort_key, sort_dir, resource_url=None,
@@ -246,6 +284,7 @@ class PortsController(rest.RestController):
         except exception.PortNotFound:
             return []
 
+    @METRICS.timer('PortsController.get_all')
     @expose.expose(PortCollection, types.uuid_or_name, types.uuid,
                    types.macaddress, types.uuid, int, wtypes.text,
                    wtypes.text, types.listtype)
@@ -264,12 +303,23 @@ class PortsController(rest.RestController):
                         this MAC address.
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
+                      This value cannot be larger than the value of max_limit
+                      in the [api] section of the ironic configuration, or only
+                      max_limit resources will be returned.
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         :param fields: Optional, a list with a specified set of fields
             of the resource to be returned.
+        :raises: NotAcceptable
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:port:get', cdict, cdict)
+
         api_utils.check_allow_specify_fields(fields)
+        if (fields and not api_utils.allow_port_advanced_net_fields() and
+                set(fields).intersection(self.advanced_net_fields)):
+            raise exception.NotAcceptable()
+
         if fields is None:
             fields = _DEFAULT_RETURN_FIELDS
 
@@ -285,6 +335,7 @@ class PortsController(rest.RestController):
                                           limit, sort_key, sort_dir,
                                           fields=fields)
 
+    @METRICS.timer('PortsController.detail')
     @expose.expose(PortCollection, types.uuid_or_name, types.uuid,
                    types.macaddress, types.uuid, int, wtypes.text,
                    wtypes.text)
@@ -303,9 +354,16 @@ class PortsController(rest.RestController):
                         this MAC address.
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
+                      This value cannot be larger than the value of max_limit
+                      in the [api] section of the ironic configuration, or only
+                      max_limit resources will be returned.
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
+        :raises: NotAcceptable, HTTPNotFound
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:port:get', cdict, cdict)
+
         if not node_uuid and node:
             # We're invoking this interface using positional notation, or
             # explicitly using 'node'.  Try and determine which one.
@@ -324,6 +382,7 @@ class PortsController(rest.RestController):
                                           limit, sort_key, sort_dir,
                                           resource_url)
 
+    @METRICS.timer('PortsController.get_one')
     @expose.expose(Port, types.uuid, types.listtype)
     def get_one(self, port_uuid, fields=None):
         """Retrieve information about the given port.
@@ -331,7 +390,11 @@ class PortsController(rest.RestController):
         :param port_uuid: UUID of a port.
         :param fields: Optional, a list with a specified set of fields
             of the resource to be returned.
+        :raises: NotAcceptable
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:port:get', cdict, cdict)
+
         if self.from_nodes:
             raise exception.OperationNotPermitted()
 
@@ -340,22 +403,34 @@ class PortsController(rest.RestController):
         rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
         return Port.convert_with_links(rpc_port, fields=fields)
 
+    @METRICS.timer('PortsController.post')
     @expose.expose(Port, body=Port, status_code=http_client.CREATED)
     def post(self, port):
         """Create a new port.
 
         :param port: a port within the request body.
+        :raises: NotAcceptable
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:port:create', cdict, cdict)
+
         if self.from_nodes:
             raise exception.OperationNotPermitted()
 
+        pdict = port.as_dict()
+        if not api_utils.allow_port_advanced_net_fields():
+            if set(pdict).intersection(self.advanced_net_fields):
+                raise exception.NotAcceptable()
+
         new_port = objects.Port(pecan.request.context,
-                                **port.as_dict())
+                                **pdict)
+
         new_port.create()
         # Set the HTTP Location Header
         pecan.response.location = link.build_url('ports', new_port.uuid)
         return Port.convert_with_links(new_port)
 
+    @METRICS.timer('PortsController.patch')
     @wsme.validate(types.uuid, [PortPatchType])
     @expose.expose(Port, types.uuid, body=[PortPatchType])
     def patch(self, port_uuid, patch):
@@ -363,9 +438,19 @@ class PortsController(rest.RestController):
 
         :param port_uuid: UUID of a port.
         :param patch: a json PATCH document to apply to this port.
+        :raises: NotAcceptable
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:port:update', cdict, cdict)
+
         if self.from_nodes:
             raise exception.OperationNotPermitted()
+        if not api_utils.allow_port_advanced_net_fields():
+            for field in self.advanced_net_fields:
+                field_path = '/%s' % field
+                if (api_utils.get_patch_values(patch, field_path) or
+                        api_utils.is_path_removed(patch, field_path)):
+                    raise exception.NotAcceptable()
 
         rpc_port = objects.Port.get_by_uuid(pecan.request.context, port_uuid)
         try:
@@ -400,12 +485,16 @@ class PortsController(rest.RestController):
 
         return Port.convert_with_links(new_port)
 
+    @METRICS.timer('PortsController.delete')
     @expose.expose(None, types.uuid, status_code=http_client.NO_CONTENT)
     def delete(self, port_uuid):
         """Delete a port.
 
         :param port_uuid: UUID of a port.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:port:delete', cdict, cdict)
+
         if self.from_nodes:
             raise exception.OperationNotPermitted()
         rpc_port = objects.Port.get_by_uuid(pecan.request.context,
