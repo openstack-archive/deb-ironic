@@ -34,6 +34,7 @@ For postgres on Ubuntu this can be done with the following commands:
 
 """
 
+import collections
 import contextlib
 
 from alembic import script
@@ -261,6 +262,33 @@ class MigrationCheckersMixin(object):
         self.assertRaises(db_exc.DBDuplicateEntry,
                           nodes.insert().execute, data)
 
+    def _check_487deb87cc9d(self, engine, data):
+        conductors = db_utils.get_table(engine, 'conductors')
+        column_names = [column.name for column in conductors.c]
+
+        self.assertIn('online', column_names)
+        self.assertIsInstance(conductors.c.online.type,
+                              (sqlalchemy.types.Boolean,
+                               sqlalchemy.types.Integer))
+        nodes = db_utils.get_table(engine, 'nodes')
+        column_names = [column.name for column in nodes.c]
+        self.assertIn('conductor_affinity', column_names)
+        self.assertIsInstance(nodes.c.conductor_affinity.type,
+                              sqlalchemy.types.Integer)
+
+        data_conductor = {'hostname': 'test_host'}
+        conductors.insert().execute(data_conductor)
+        conductor = conductors.select(
+            conductors.c.hostname ==
+            data_conductor['hostname']).execute().first()
+
+        data_node = {'uuid': uuidutils.generate_uuid(),
+                     'conductor_affinity': conductor['id']}
+        nodes.insert().execute(data_node)
+        node = nodes.select(
+            nodes.c.uuid == data_node['uuid']).execute().first()
+        self.assertEqual(conductor['id'], node['conductor_affinity'])
+
     def _check_242cc6a923b3(self, engine, data):
         nodes = db_utils.get_table(engine, 'nodes')
         col_names = [column.name for column in nodes.c]
@@ -306,6 +334,31 @@ class MigrationCheckersMixin(object):
         self.assertIn('driver_internal_info', col_names)
         self.assertIsInstance(nodes.c.driver_internal_info.type,
                               sqlalchemy.types.TEXT)
+
+    def _check_3ae36a5f5131(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        column_names = [column.name for column in nodes.c]
+        self.assertIn('name', column_names)
+        self.assertIsInstance(nodes.c.name.type,
+                              sqlalchemy.types.String)
+        data = {'driver': 'fake',
+                'uuid': uuidutils.generate_uuid(),
+                'name': 'node'
+                }
+        nodes.insert().values(data).execute()
+        data['uuid'] = uuidutils.generate_uuid()
+        self.assertRaises(db_exc.DBDuplicateEntry,
+                          nodes.insert().execute, data)
+
+    def _check_1e1d5ace7dc6(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        column_names = [column.name for column in nodes.c]
+        self.assertIn('inspection_started_at', column_names)
+        self.assertIn('inspection_finished_at', column_names)
+        self.assertIsInstance(nodes.c.inspection_started_at.type,
+                              sqlalchemy.types.DateTime)
+        self.assertIsInstance(nodes.c.inspection_finished_at.type,
+                              sqlalchemy.types.DateTime)
 
     def _check_4f399b21ae71(self, engine, data):
         nodes = db_utils.get_table(engine, 'nodes')
@@ -413,6 +466,63 @@ class MigrationCheckersMixin(object):
         for row in result:
             if _was_inserted(row['uuid']):
                 self.assertTrue(row['pxe_enabled'])
+
+    def _check_e294876e8028(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        col_names = [column.name for column in nodes.c]
+        self.assertIn('network_interface', col_names)
+        self.assertIsInstance(nodes.c.network_interface.type,
+                              sqlalchemy.types.String)
+
+    def _check_10b163d4481e(self, engine, data):
+        ports = db_utils.get_table(engine, 'ports')
+        portgroups = db_utils.get_table(engine, 'portgroups')
+        port_col_names = [column.name for column in ports.c]
+        portgroup_col_names = [column.name for column in portgroups.c]
+        self.assertIn('internal_info', port_col_names)
+        self.assertIn('internal_info', portgroup_col_names)
+        self.assertIsInstance(ports.c.internal_info.type,
+                              sqlalchemy.types.TEXT)
+        self.assertIsInstance(portgroups.c.internal_info.type,
+                              sqlalchemy.types.TEXT)
+
+    def _check_dd34e1f1303b(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        col_names = [column.name for column in nodes.c]
+        self.assertIn('resource_class', col_names)
+        self.assertIsInstance(nodes.c.resource_class.type,
+                              sqlalchemy.types.String)
+
+    def _pre_upgrade_c14cef6dfedf(self, engine):
+        # add some nodes.
+        nodes = db_utils.get_table(engine, 'nodes')
+        data = [{'uuid': uuidutils.generate_uuid(),
+                 'network_interface': None},
+                {'uuid': uuidutils.generate_uuid(),
+                 'network_interface': None},
+                {'uuid': uuidutils.generate_uuid(),
+                 'network_interface': 'neutron'}]
+        nodes.insert().values(data).execute()
+        return data
+
+    def _check_c14cef6dfedf(self, engine, data):
+        nodes = db_utils.get_table(engine, 'nodes')
+        result = engine.execute(nodes.select())
+        counts = collections.defaultdict(int)
+
+        def _was_inserted(uuid):
+            for row in data:
+                if row['uuid'] == uuid:
+                    return True
+
+        for row in result:
+            if _was_inserted(row['uuid']):
+                counts[row['network_interface']] += 1
+
+        # using default config values, we should have 2 flat and one neutron
+        self.assertEqual(2, counts['flat'])
+        self.assertEqual(1, counts['neutron'])
+        self.assertEqual(0, counts[None])
 
     def test_upgrade_and_version(self):
         with patch_with_engine(self.engine):

@@ -40,6 +40,8 @@ from ironic.tests.unit.db import base as db_base
 from ironic.tests.unit.db import utils as db_utils
 from ironic.tests.unit.objects import utils as obj_utils
 
+INFO_DICT = db_utils.get_test_ilo_info()
+
 ilo_client = importutils.try_import('proliantutils.ilo.client')
 ilo_error = importutils.try_import('proliantutils.exception')
 
@@ -57,16 +59,27 @@ class IloValidateParametersTestCase(db_base.DbTestCase):
         super(IloValidateParametersTestCase, self).setUp()
         self.node = obj_utils.create_test_node(
             self.context, driver='fake_ilo',
-            driver_info=db_utils.get_test_ilo_info())
+            driver_info=INFO_DICT)
 
-    def test_parse_driver_info(self):
+    @mock.patch.object(os.path, 'isfile', return_value=True, autospec=True)
+    def _test_parse_driver_info(self, isFile_mock):
+
         info = ilo_common.parse_driver_info(self.node)
 
-        self.assertIsNotNone(info['ilo_address'])
-        self.assertIsNotNone(info['ilo_username'])
-        self.assertIsNotNone(info['ilo_password'])
-        self.assertIsNotNone(info['client_timeout'])
-        self.assertIsNotNone(info['client_port'])
+        self.assertEqual(INFO_DICT['ilo_address'], info['ilo_address'])
+        self.assertEqual(INFO_DICT['ilo_username'], info['ilo_username'])
+        self.assertEqual(INFO_DICT['ilo_password'], info['ilo_password'])
+        self.assertEqual(60, info['client_timeout'])
+        self.assertEqual(443, info['client_port'])
+        self.assertEqual('/home/user/cafile.pem', info['ca_file'])
+
+    def test_parse_driver_info_ca_file_in_driver_info(self):
+        self.node.driver_info['ca_file'] = '/home/user/cafile.pem'
+        self._test_parse_driver_info()
+
+    def test_parse_driver_info_ca_file_in_conf_file(self):
+        self.config(ca_file='/home/user/cafile.pem', group='ilo')
+        self._test_parse_driver_info()
 
     def test_parse_driver_info_missing_address(self):
         del self.node.driver_info['ilo_address']
@@ -82,6 +95,13 @@ class IloValidateParametersTestCase(db_base.DbTestCase):
         del self.node.driver_info['ilo_password']
         self.assertRaises(exception.MissingParameterValue,
                           ilo_common.parse_driver_info, self.node)
+
+    @mock.patch.object(os.path, 'isfile', return_value=False, autospec=True)
+    def test_parse_driver_info_invalid_cafile(self, isFile_mock):
+        self.node.driver_info['ca_file'] = '/home/missing.pem'
+        self.assertRaisesRegex(exception.InvalidParameterValue,
+                               'ca_file "/home/missing.pem" is not found.',
+                               ilo_common.parse_driver_info, self.node)
 
     def test_parse_driver_info_invalid_timeout(self):
         self.node.driver_info['client_timeout'] = 'qwe'
@@ -130,11 +150,13 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
         self.node = obj_utils.create_test_node(
             self.context, driver='fake_ilo', driver_info=self.info)
 
+    @mock.patch.object(os.path, 'isfile', return_value=True, autospec=True)
     @mock.patch.object(ilo_client, 'IloClient', spec_set=True,
                        autospec=True)
-    def test_get_ilo_object(self, ilo_client_mock):
+    def _test_get_ilo_object(self, ilo_client_mock, isFile_mock, ca_file=None):
         self.info['client_timeout'] = 60
         self.info['client_port'] = 443
+        self.info['ca_file'] = ca_file
         ilo_client_mock.return_value = 'ilo_object'
         returned_ilo_object = ilo_common.get_ilo_object(self.node)
         ilo_client_mock.assert_called_with(
@@ -144,6 +166,12 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
             self.info['client_timeout'],
             self.info['client_port'])
         self.assertEqual('ilo_object', returned_ilo_object)
+
+    def test_get_ilo_object_cafile(self):
+        self._test_get_ilo_object(ca_file='/home/user/ilo.pem')
+
+    def test_get_ilo_object_no_cafile(self):
+        self._test_get_ilo_object()
 
     @mock.patch.object(ilo_common, 'get_ilo_object', spec_set=True,
                        autospec=True)

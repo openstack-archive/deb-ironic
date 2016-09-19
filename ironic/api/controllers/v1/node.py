@@ -13,9 +13,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import ast
 import datetime
 
+from ironic_lib import metrics_utils
 import jsonschema
 from oslo_config import cfg
 from oslo_log import log
@@ -37,6 +37,7 @@ from ironic.api.controllers.v1 import versions
 from ironic.api import expose
 from ironic.common import exception
 from ironic.common.i18n import _
+from ironic.common import policy
 from ironic.common import states as ir_states
 from ironic.conductor import utils as conductor_utils
 from ironic import objects
@@ -45,6 +46,7 @@ from ironic import objects
 CONF = cfg.CONF
 CONF.import_opt('heartbeat_timeout', 'ironic.conductor.manager',
                 group='conductor')
+CONF.import_opt('enabled_network_interfaces', 'ironic.common.driver_factory')
 
 LOG = log.getLogger(__name__)
 _CLEAN_STEPS_SCHEMA = {
@@ -78,6 +80,8 @@ _CLEAN_STEPS_SCHEMA = {
     }
 }
 
+METRICS = metrics_utils.get_metrics_logger(__name__)
+
 # Vendor information for node's driver:
 #   key = driver name;
 #   value = dictionary of node vendor methods of that driver:
@@ -109,7 +113,12 @@ def get_nodes_controller_reserved_names():
 
 
 def hide_fields_in_newer_versions(obj):
-    # if requested version is < 1.3, hide driver_internal_info
+    """This method hides fields that were added in newer API versions.
+
+    Certain node fields were introduced at certain API versions.
+    These fields are only made available when the request's API version
+    matches or exceeds the versions when these fields were introduced.
+    """
     if pecan.request.version.minor < versions.MINOR_3_DRIVER_INTERNAL_INFO:
         obj.driver_internal_info = wsme.Unset
 
@@ -127,6 +136,12 @@ def hide_fields_in_newer_versions(obj):
     if pecan.request.version.minor < versions.MINOR_12_RAID_CONFIG:
         obj.raid_config = wsme.Unset
         obj.target_raid_config = wsme.Unset
+
+    if pecan.request.version.minor < versions.MINOR_20_NETWORK_INTERFACE:
+        obj.network_interface = wsme.Unset
+
+    if not api_utils.allow_resource_class():
+        obj.resource_class = wsme.Unset
 
 
 def update_state_in_older_versions(obj):
@@ -167,6 +182,7 @@ class BootDeviceController(rest.RestController):
             return pecan.request.rpcapi.get_boot_device(pecan.request.context,
                                                         rpc_node.uuid, topic)
 
+    @METRICS.timer('BootDeviceController.put')
     @expose.expose(None, types.uuid_or_name, wtypes.text, types.boolean,
                    status_code=http_client.NO_CONTENT)
     def put(self, node_ident, boot_device, persistent=False):
@@ -182,6 +198,9 @@ class BootDeviceController(rest.RestController):
                            Default: False.
 
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:set_boot_device', cdict, cdict)
+
         rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         pecan.request.rpcapi.set_boot_device(pecan.request.context,
@@ -190,6 +209,7 @@ class BootDeviceController(rest.RestController):
                                              persistent=persistent,
                                              topic=topic)
 
+    @METRICS.timer('BootDeviceController.get')
     @expose.expose(wtypes.text, types.uuid_or_name)
     def get(self, node_ident):
         """Get the current boot device for a node.
@@ -203,8 +223,12 @@ class BootDeviceController(rest.RestController):
                 future boots or not, None if it is unknown.
 
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:get_boot_device', cdict, cdict)
+
         return self._get_boot_device(node_ident)
 
+    @METRICS.timer('BootDeviceController.supported')
     @expose.expose(wtypes.text, types.uuid_or_name)
     def supported(self, node_ident):
         """Get a list of the supported boot devices.
@@ -214,6 +238,9 @@ class BootDeviceController(rest.RestController):
                   devices.
 
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:get_boot_device', cdict, cdict)
+
         boot_devices = self._get_boot_device(node_ident, supported=True)
         return {'supported_boot_devices': boot_devices}
 
@@ -242,12 +269,16 @@ class ConsoleInfo(base.APIBase):
 
 class NodeConsoleController(rest.RestController):
 
+    @METRICS.timer('NodeConsoleController.get')
     @expose.expose(ConsoleInfo, types.uuid_or_name)
     def get(self, node_ident):
         """Get connection information about the console.
 
         :param node_ident: UUID or logical name of a node.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:get_console', cdict, cdict)
+
         rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         try:
@@ -260,6 +291,7 @@ class NodeConsoleController(rest.RestController):
 
         return ConsoleInfo(console_enabled=console_state, console_info=console)
 
+    @METRICS.timer('NodeConsoleController.put')
     @expose.expose(None, types.uuid_or_name, types.boolean,
                    status_code=http_client.ACCEPTED)
     def put(self, node_ident, enabled):
@@ -269,6 +301,9 @@ class NodeConsoleController(rest.RestController):
         :param enabled: Boolean value; whether to enable or disable the
                 console.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:set_console_state', cdict, cdict)
+
         rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         pecan.request.rpcapi.set_console_mode(pecan.request.context,
@@ -350,18 +385,23 @@ class NodeStatesController(rest.RestController):
     console = NodeConsoleController()
     """Expose console as a sub-element of states"""
 
+    @METRICS.timer('NodeStatesController.get')
     @expose.expose(NodeStates, types.uuid_or_name)
     def get(self, node_ident):
         """List the states of the node.
 
         :param node_ident: the UUID or logical_name of a node.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:get_states', cdict, cdict)
+
         # NOTE(lucasagomes): All these state values come from the
         # DB. Ironic counts with a periodic task that verify the current
         # power states of the nodes and update the DB accordingly.
         rpc_node = api_utils.get_rpc_node(node_ident)
         return NodeStates.convert(rpc_node)
 
+    @METRICS.timer('NodeStatesController.raid')
     @expose.expose(None, types.uuid_or_name, body=types.jsontype)
     def raid(self, node_ident, target_raid_config):
         """Set the target raid config of the node.
@@ -376,6 +416,9 @@ class NodeStatesController(rest.RestController):
         :raises: NotAcceptable, if requested version of the API is less than
             1.12.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:set_raid_state', cdict, cdict)
+
         if not api_utils.allow_raid_config():
             raise exception.NotAcceptable()
         rpc_node = api_utils.get_rpc_node(node_ident)
@@ -388,8 +431,9 @@ class NodeStatesController(rest.RestController):
             # Change error code as 404 seems appropriate because RAID is a
             # standard interface and all drivers might not have it.
             e.code = http_client.NOT_FOUND
-            raise e
+            raise
 
+    @METRICS.timer('NodeStatesController.power')
     @expose.expose(None, types.uuid_or_name, wtypes.text,
                    status_code=http_client.ACCEPTED)
     def power(self, node_ident, target):
@@ -403,6 +447,9 @@ class NodeStatesController(rest.RestController):
                  state is not valid or if the node is in CLEANING state.
 
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:set_power_state', cdict, cdict)
+
         # TODO(lucasagomes): Test if it's able to transition to the
         #                    target state from the current one
         rpc_node = api_utils.get_rpc_node(node_ident)
@@ -429,6 +476,7 @@ class NodeStatesController(rest.RestController):
         url_args = '/'.join([node_ident, 'states'])
         pecan.response.location = link.build_url('nodes', url_args)
 
+    @METRICS.timer('NodeStatesController.provision')
     @expose.expose(None, types.uuid_or_name, wtypes.text,
                    wtypes.text, types.jsontype,
                    status_code=http_client.ACCEPTED)
@@ -479,6 +527,9 @@ class NodeStatesController(rest.RestController):
         :raises: NotAcceptable (HTTP 406) if the API version specified does
                  not allow the requested state transition.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:set_provision_state', cdict, cdict)
+
         api_utils.check_allow_management_verbs(target)
         rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
@@ -599,7 +650,7 @@ class Node(base.APIBase):
                 # Change error code because 404 (NotFound) is inappropriate
                 # response for a POST request to create a Port
                 e.code = http_client.BAD_REQUEST
-                raise e
+                raise
         elif value == wtypes.Unset:
             self._chassis_uuid = wtypes.Unset
 
@@ -678,6 +729,11 @@ class Node(base.APIBase):
     extra = {wtypes.text: types.jsontype}
     """This node's meta data"""
 
+    resource_class = wsme.wsattr(wtypes.StringType(max_length=80))
+    """The resource class for the node, useful for classifying or grouping
+       nodes. Used, for example, to classify nodes in Nova's placement
+       engine."""
+
     # NOTE: properties should use a class to enforce required properties
     #       current list: arch, cpus, disk, ram, image
     properties = {wtypes.text: types.jsontype}
@@ -695,6 +751,9 @@ class Node(base.APIBase):
 
     states = wsme.wsattr([link.Link], readonly=True)
     """Links to endpoint for retrieving and setting node states"""
+
+    network_interface = wsme.wsattr(wtypes.text)
+    """The network interface to be used for this node"""
 
     # NOTE(deva): "conductor_affinity" shouldn't be presented on the
     #             API because it's an internal value. Don't add it here.
@@ -742,9 +801,8 @@ class Node(base.APIBase):
                                                    bookmark=True)]
 
         if not show_password and node.driver_info != wtypes.Unset:
-            node.driver_info = ast.literal_eval(strutils.mask_password(
-                                                node.driver_info,
-                                                "******"))
+            node.driver_info = strutils.mask_dict_password(node.driver_info,
+                                                           "******")
 
         # NOTE(lucasagomes): The numeric ID should not be exposed to
         #                    the user, it's internal only.
@@ -794,7 +852,8 @@ class Node(base.APIBase):
                      maintenance=False, maintenance_reason=None,
                      inspection_finished_at=None, inspection_started_at=time,
                      console_enabled=False, clean_step={},
-                     raid_config=None, target_raid_config=None)
+                     raid_config=None, target_raid_config=None,
+                     network_interface='flat', resource_class='baremetal-gold')
         # NOTE(matty_dubs): The chassis_uuid getter() is based on the
         # _chassis_uuid variable:
         sample._chassis_uuid = 'edcad704-b2da-41d5-96d9-afd580ecfa12'
@@ -860,6 +919,7 @@ class NodeVendorPassthruController(rest.RestController):
         'methods': ['GET']
     }
 
+    @METRICS.timer('NodeVendorPassthruController.methods')
     @expose.expose(wtypes.text, types.uuid_or_name)
     def methods(self, node_ident):
         """Retrieve information about vendor methods of the given node.
@@ -869,6 +929,9 @@ class NodeVendorPassthruController(rest.RestController):
                   entries.
         :raises: NodeNotFound if the node is not found.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:vendor_passthru', cdict, cdict)
+
         # Raise an exception if node is not found
         rpc_node = api_utils.get_rpc_node(node_ident)
 
@@ -880,6 +943,7 @@ class NodeVendorPassthruController(rest.RestController):
 
         return _VENDOR_METHODS[rpc_node.driver]
 
+    @METRICS.timer('NodeVendorPassthruController._default')
     @expose.expose(wtypes.text, types.uuid_or_name, wtypes.text,
                    body=wtypes.text)
     def _default(self, node_ident, method, data=None):
@@ -889,6 +953,12 @@ class NodeVendorPassthruController(rest.RestController):
         :param method: name of the method in vendor driver.
         :param data: body of data to supply to the specified method.
         """
+        cdict = pecan.request.context.to_dict()
+        if method == 'heartbeat':
+            policy.authorize('baremetal:node:ipa_heartbeat', cdict, cdict)
+        else:
+            policy.authorize('baremetal:node:vendor_passthru', cdict, cdict)
+
         # Raise an exception if node is not found
         rpc_node = api_utils.get_rpc_node(node_ident)
         topic = pecan.request.rpcapi.get_topic_for(rpc_node)
@@ -907,10 +977,11 @@ class NodeMaintenanceController(rest.RestController):
             topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         except exception.NoValidHost as e:
             e.code = http_client.BAD_REQUEST
-            raise e
+            raise
         pecan.request.rpcapi.update_node(pecan.request.context,
                                          rpc_node, topic=topic)
 
+    @METRICS.timer('NodeMaintenanceController.put')
     @expose.expose(None, types.uuid_or_name, wtypes.text,
                    status_code=http_client.ACCEPTED)
     def put(self, node_ident, reason=None):
@@ -920,8 +991,12 @@ class NodeMaintenanceController(rest.RestController):
         :param reason: Optional, the reason why it's in maintenance.
 
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:set_maintenance', cdict, cdict)
+
         self._set_maintenance(node_ident, True, reason=reason)
 
+    @METRICS.timer('NodeMaintenanceController.delete')
     @expose.expose(None, types.uuid_or_name, status_code=http_client.ACCEPTED)
     def delete(self, node_ident):
         """Remove the node from maintenance mode.
@@ -929,6 +1004,9 @@ class NodeMaintenanceController(rest.RestController):
         :param node_ident: the UUID or logical name of a node.
 
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:clear_maintenance', cdict, cdict)
+
         self._set_maintenance(node_ident, False)
 
 
@@ -977,6 +1055,7 @@ class NodesController(rest.RestController):
     def _get_nodes_collection(self, chassis_uuid, instance_uuid, associated,
                               maintenance, provision_state, marker, limit,
                               sort_key, sort_dir, driver=None,
+                              resource_class=None,
                               resource_url=None, fields=None):
         if self.from_chassis and not chassis_uuid:
             raise exception.MissingParameterValue(
@@ -1009,6 +1088,8 @@ class NodesController(rest.RestController):
                 filters['provision_state'] = provision_state
             if driver:
                 filters['driver'] = driver
+            if resource_class is not None:
+                filters['resource_class'] = resource_class
 
             nodes = objects.Node.list(pecan.request.context, limit, marker_obj,
                                       sort_key=sort_key, sort_dir=sort_dir,
@@ -1096,13 +1177,14 @@ class NodesController(rest.RestController):
                   "enabled. Please stop the console first.") % node_ident,
                 status_code=http_client.CONFLICT)
 
+    @METRICS.timer('NodesController.get_all')
     @expose.expose(NodeCollection, types.uuid, types.uuid, types.boolean,
                    types.boolean, wtypes.text, types.uuid, int, wtypes.text,
-                   wtypes.text, wtypes.text, types.listtype)
+                   wtypes.text, wtypes.text, types.listtype, wtypes.text)
     def get_all(self, chassis_uuid=None, instance_uuid=None, associated=None,
                 maintenance=None, provision_state=None, marker=None,
                 limit=None, sort_key='id', sort_dir='asc', driver=None,
-                fields=None):
+                fields=None, resource_class=None):
         """Retrieve a list of nodes.
 
         :param chassis_uuid: Optional UUID of a chassis, to get only nodes for
@@ -1119,30 +1201,44 @@ class NodesController(rest.RestController):
                                 that provision state.
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
+                      This value cannot be larger than the value of max_limit
+                      in the [api] section of the ironic configuration, or only
+                      max_limit resources will be returned.
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         :param driver: Optional string value to get only nodes using that
                        driver.
+        :param resource_class: Optional string value to get only nodes with
+                               that resource_class.
         :param fields: Optional, a list with a specified set of fields
                        of the resource to be returned.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:get', cdict, cdict)
+
         api_utils.check_allow_specify_fields(fields)
+        api_utils.check_allowed_fields(fields)
         api_utils.check_for_invalid_state_and_allow_filter(provision_state)
         api_utils.check_allow_specify_driver(driver)
+        api_utils.check_allow_specify_resource_class(resource_class)
         if fields is None:
             fields = _DEFAULT_RETURN_FIELDS
         return self._get_nodes_collection(chassis_uuid, instance_uuid,
                                           associated, maintenance,
                                           provision_state, marker,
                                           limit, sort_key, sort_dir,
-                                          driver, fields=fields)
+                                          driver=driver,
+                                          resource_class=resource_class,
+                                          fields=fields)
 
+    @METRICS.timer('NodesController.detail')
     @expose.expose(NodeCollection, types.uuid, types.uuid, types.boolean,
                    types.boolean, wtypes.text, types.uuid, int, wtypes.text,
-                   wtypes.text, wtypes.text)
+                   wtypes.text, wtypes.text, wtypes.text)
     def detail(self, chassis_uuid=None, instance_uuid=None, associated=None,
                maintenance=None, provision_state=None, marker=None,
-               limit=None, sort_key='id', sort_dir='asc', driver=None):
+               limit=None, sort_key='id', sort_dir='asc', driver=None,
+               resource_class=None):
         """Retrieve a list of nodes with detail.
 
         :param chassis_uuid: Optional UUID of a chassis, to get only nodes for
@@ -1159,13 +1255,22 @@ class NodesController(rest.RestController):
                                 that provision state.
         :param marker: pagination marker for large data sets.
         :param limit: maximum number of resources to return in a single result.
+                      This value cannot be larger than the value of max_limit
+                      in the [api] section of the ironic configuration, or only
+                      max_limit resources will be returned.
         :param sort_key: column to sort results by. Default: id.
         :param sort_dir: direction to sort. "asc" or "desc". Default: asc.
         :param driver: Optional string value to get only nodes using that
                        driver.
+        :param resource_class: Optional string value to get only nodes with
+                               that resource_class.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:get', cdict, cdict)
+
         api_utils.check_for_invalid_state_and_allow_filter(provision_state)
         api_utils.check_allow_specify_driver(driver)
+        api_utils.check_allow_specify_resource_class(resource_class)
         # /detail should only work against collections
         parent = pecan.request.path.split('/')[:-1][-1]
         if parent != "nodes":
@@ -1176,8 +1281,11 @@ class NodesController(rest.RestController):
                                           associated, maintenance,
                                           provision_state, marker,
                                           limit, sort_key, sort_dir,
-                                          driver, resource_url)
+                                          driver=driver,
+                                          resource_class=resource_class,
+                                          resource_url=resource_url)
 
+    @METRICS.timer('NodesController.validate')
     @expose.expose(wtypes.text, types.uuid_or_name, types.uuid)
     def validate(self, node=None, node_uuid=None):
         """Validate the driver interfaces, using the node's UUID or name.
@@ -1188,6 +1296,9 @@ class NodesController(rest.RestController):
         :param node: UUID or name of a node.
         :param node_uuid: UUID of a node.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:validate', cdict, cdict)
+
         if node is not None:
             # We're invoking this interface using positional notation, or
             # explicitly using 'node'.  Try and determine which one.
@@ -1201,6 +1312,7 @@ class NodesController(rest.RestController):
         return pecan.request.rpcapi.validate_driver_interfaces(
             pecan.request.context, rpc_node.uuid, topic)
 
+    @METRICS.timer('NodesController.get_one')
     @expose.expose(Node, types.uuid_or_name, types.listtype)
     def get_one(self, node_ident, fields=None):
         """Retrieve information about the given node.
@@ -1209,22 +1321,54 @@ class NodesController(rest.RestController):
         :param fields: Optional, a list with a specified set of fields
             of the resource to be returned.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:get', cdict, cdict)
+
         if self.from_chassis:
             raise exception.OperationNotPermitted()
 
         api_utils.check_allow_specify_fields(fields)
+        api_utils.check_allowed_fields(fields)
 
         rpc_node = api_utils.get_rpc_node(node_ident)
         return Node.convert_with_links(rpc_node, fields=fields)
 
+    @METRICS.timer('NodesController.post')
     @expose.expose(Node, body=Node, status_code=http_client.CREATED)
     def post(self, node):
         """Create a new node.
 
         :param node: a node within the request body.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:create', cdict, cdict)
+
         if self.from_chassis:
             raise exception.OperationNotPermitted()
+
+        if (not api_utils.allow_resource_class() and
+                node.resource_class is not wtypes.Unset):
+            raise exception.NotAcceptable()
+
+        n_interface = node.network_interface
+        if (not api_utils.allow_network_interface() and
+                n_interface is not wtypes.Unset):
+            raise exception.NotAcceptable()
+
+        # NOTE(vsaienko) The validation is performed on API side,
+        # all conductors and api should have the same list of
+        # enabled_network_interfaces.
+        # TODO(vsaienko) remove it once driver-composition-reform
+        # is implemented.
+        if (n_interface is not wtypes.Unset and
+            not api_utils.is_valid_network_interface(n_interface)):
+            error_msg = _("Cannot create node with the invalid network "
+                          "interface '%(n_interface)s'. Enabled network "
+                          "interfaces are: %(enabled_int)s")
+            raise wsme.exc.ClientSideError(
+                error_msg % {'n_interface': n_interface,
+                             'enabled_int': CONF.enabled_network_interfaces},
+                status_code=http_client.BAD_REQUEST)
 
         # NOTE(deva): get_topic_for checks if node.driver is in the hash ring
         #             and raises NoValidHost if it is not.
@@ -1240,7 +1384,7 @@ class NodesController(rest.RestController):
             #             list of available drivers and shouldn't request
             #             one that doesn't exist.
             e.code = http_client.BAD_REQUEST
-            raise e
+            raise
 
         if node.name != wtypes.Unset and node.name is not None:
             error_msg = _("Cannot create node with invalid name '%(name)s'")
@@ -1254,6 +1398,7 @@ class NodesController(rest.RestController):
         pecan.response.location = link.build_url('nodes', new_node.uuid)
         return Node.convert_with_links(new_node)
 
+    @METRICS.timer('NodesController.patch')
     @wsme.validate(types.uuid, [NodePatchType])
     @expose.expose(Node, types.uuid_or_name, body=[NodePatchType])
     def patch(self, node_ident, patch):
@@ -1262,8 +1407,30 @@ class NodesController(rest.RestController):
         :param node_ident: UUID or logical name of a node.
         :param patch: a json PATCH document to apply to this node.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:update', cdict, cdict)
+
         if self.from_chassis:
             raise exception.OperationNotPermitted()
+
+        resource_class = api_utils.get_patch_values(patch, '/resource_class')
+        if resource_class and not api_utils.allow_resource_class():
+            raise exception.NotAcceptable()
+
+        n_interfaces = api_utils.get_patch_values(patch, '/network_interface')
+        if n_interfaces and not api_utils.allow_network_interface():
+            raise exception.NotAcceptable()
+
+        for n_interface in n_interfaces:
+            if (n_interface is not None and
+                not api_utils.is_valid_network_interface(n_interface)):
+                error_msg = _("Node %(node)s: Cannot change "
+                              "network_interface to invalid value: "
+                              "%(n_interface)s")
+                raise wsme.exc.ClientSideError(
+                    error_msg % {'node': node_ident,
+                                 'n_interface': n_interface},
+                    status_code=http_client.BAD_REQUEST)
 
         rpc_node = api_utils.get_rpc_node(node_ident)
 
@@ -1309,13 +1476,14 @@ class NodesController(rest.RestController):
             #             list of available drivers and shouldn't request
             #             one that doesn't exist.
             e.code = http_client.BAD_REQUEST
-            raise e
+            raise
         self._check_driver_changed_and_console_enabled(rpc_node, node_ident)
         new_node = pecan.request.rpcapi.update_node(
             pecan.request.context, rpc_node, topic)
 
         return Node.convert_with_links(new_node)
 
+    @METRICS.timer('NodesController.delete')
     @expose.expose(None, types.uuid_or_name,
                    status_code=http_client.NO_CONTENT)
     def delete(self, node_ident):
@@ -1323,6 +1491,9 @@ class NodesController(rest.RestController):
 
         :param node_ident: UUID or logical name of a node.
         """
+        cdict = pecan.request.context.to_dict()
+        policy.authorize('baremetal:node:delete', cdict, cdict)
+
         if self.from_chassis:
             raise exception.OperationNotPermitted()
 
@@ -1332,7 +1503,7 @@ class NodesController(rest.RestController):
             topic = pecan.request.rpcapi.get_topic_for(rpc_node)
         except exception.NoValidHost as e:
             e.code = http_client.BAD_REQUEST
-            raise e
+            raise
 
         pecan.request.rpcapi.destroy_node(pecan.request.context,
                                           rpc_node.uuid, topic)

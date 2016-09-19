@@ -1,3 +1,13 @@
+ironic (1:6.1.0-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Fixed (build-)depends for this release.
+  * Using OpenStack's Gerrit as VCS URLs.
+  * Add upstream patch:
+    - Fix-broken-unit-tests-for-get_ilo_object.patch
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 19 Sep 2016 23:06:38 +0200
+
 ironic (1:6.0.0-1) experimental; urgency=medium
 
   * New upstream release.

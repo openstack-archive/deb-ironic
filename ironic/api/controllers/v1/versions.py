@@ -47,6 +47,11 @@ BASE_VERSION = 1
 # v1.15: Add ability to do manual cleaning of nodes
 # v1.16: Add ability to filter nodes by driver.
 # v1.17: Add 'adopt' verb for ADOPTING active nodes.
+# v1.18: Add port.internal_info.
+# v1.19: Add port.local_link_connection and port.pxe_enabled.
+# v1.20: Add node.network_interface
+# v1.21: Add node.resource_class
+# v1.22: Ramdisk lookup and heartbeat endpoints.
 
 MINOR_0_JUNO = 0
 MINOR_1_INITIAL_VERSION = 1
@@ -66,11 +71,16 @@ MINOR_14_LINKS_NODESTATES_DRIVERPROPERTIES = 14
 MINOR_15_MANUAL_CLEAN = 15
 MINOR_16_DRIVER_FILTER = 16
 MINOR_17_ADOPT_VERB = 17
+MINOR_18_PORT_INTERNAL_INFO = 18
+MINOR_19_PORT_ADVANCED_NET_FIELDS = 19
+MINOR_20_NETWORK_INTERFACE = 20
+MINOR_21_RESOURCE_CLASS = 21
+MINOR_22_LOOKUP_HEARTBEAT = 22
 
 # When adding another version, update MINOR_MAX_VERSION and also update
 # doc/source/webapi/v1.rst with a detailed explanation of what the version has
 # changed.
-MINOR_MAX_VERSION = MINOR_17_ADOPT_VERB
+MINOR_MAX_VERSION = MINOR_22_LOOKUP_HEARTBEAT
 
 # String representations of the minor and maximum versions
 MIN_VERSION_STRING = '{}.{}'.format(BASE_VERSION, MINOR_1_INITIAL_VERSION)

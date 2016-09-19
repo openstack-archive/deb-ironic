@@ -50,13 +50,14 @@ class SSHValidateParametersTestCase(db_base.DbTestCase):
             driver='fake_ssh',
             driver_info=db_utils.get_test_ssh_info('password'))
         info = ssh._parse_driver_info(node)
-        self.assertIsNotNone(info['host'])
-        self.assertIsNotNone(info['username'])
-        self.assertIsNotNone(info['password'])
-        self.assertIsNotNone(info['port'])
-        self.assertIsNotNone(info['virt_type'])
+        self.assertEqual('1.2.3.4', info['host'])
+        self.assertEqual('admin', info['username'])
+        self.assertEqual('fake', info['password'])
+        self.assertEqual(22, info['port'])
+        self.assertEqual('virsh', info['virt_type'])
         self.assertIsNotNone(info['cmd_set'])
-        self.assertIsNotNone(info['uuid'])
+        self.assertEqual('1be26c0b-03f2-4d2e-ae87-c02d7f33c123',
+                         info['uuid'])
 
     def test__parse_driver_info_good_key(self):
         # make sure we get back the expected things
@@ -65,13 +66,14 @@ class SSHValidateParametersTestCase(db_base.DbTestCase):
             driver='fake_ssh',
             driver_info=db_utils.get_test_ssh_info('key'))
         info = ssh._parse_driver_info(node)
-        self.assertIsNotNone(info['host'])
-        self.assertIsNotNone(info['username'])
-        self.assertIsNotNone(info['key_contents'])
-        self.assertIsNotNone(info['port'])
-        self.assertIsNotNone(info['virt_type'])
+        self.assertEqual('1.2.3.4', info['host'])
+        self.assertEqual('admin', info['username'])
+        self.assertEqual('--BEGIN PRIVATE ...blah', info['key_contents'])
+        self.assertEqual(22, info['port'])
+        self.assertEqual('virsh', info['virt_type'])
         self.assertIsNotNone(info['cmd_set'])
-        self.assertIsNotNone(info['uuid'])
+        self.assertEqual('1be26c0b-03f2-4d2e-ae87-c02d7f33c123',
+                         info['uuid'])
 
     def test__parse_driver_info_good_file(self):
         # make sure we get back the expected things
@@ -85,13 +87,14 @@ class SSHValidateParametersTestCase(db_base.DbTestCase):
             driver='fake_ssh',
             driver_info=d_info)
         info = ssh._parse_driver_info(node)
-        self.assertIsNotNone(info['host'])
-        self.assertIsNotNone(info['username'])
-        self.assertIsNotNone(info['key_filename'])
-        self.assertIsNotNone(info['port'])
-        self.assertIsNotNone(info['virt_type'])
+        self.assertEqual('1.2.3.4', info['host'])
+        self.assertEqual('admin', info['username'])
+        self.assertEqual(key_path, info['key_filename'])
+        self.assertEqual(22, info['port'])
+        self.assertEqual('virsh', info['virt_type'])
         self.assertIsNotNone(info['cmd_set'])
-        self.assertIsNotNone(info['uuid'])
+        self.assertEqual('1be26c0b-03f2-4d2e-ae87-c02d7f33c123',
+                         info['uuid'])
 
     def test__parse_driver_info_bad_file(self):
         # A filename that doesn't exist errors.
@@ -206,8 +209,7 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
 
     @mock.patch.object(utils, 'ssh_connect', autospec=True)
     def test__get_connection_exception(self, ssh_connect_mock):
-        ssh_connect_mock.side_effect = iter(
-            [exception.SSHConnectFailed(host='fake')])
+        ssh_connect_mock.side_effect = exception.SSHConnectFailed(host='fake')
         self.assertRaises(exception.SSHConnectFailed,
                           ssh._get_connection,
                           self.node)
@@ -322,8 +324,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
         cmd_to_exec = "%s %s" % (info['cmd_set']['base_cmd'],
                                  info['cmd_set']['get_node_macs'])
         cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
-        exec_ssh_mock.side_effect = iter([('NodeName', ''),
-                                          ('52:54:00:cf:2d:31', '')])
+        exec_ssh_mock.side_effect = [('NodeName', ''),
+                                     ('52:54:00:cf:2d:31', '')]
         expected = [mock.call(self.sshclient, ssh_cmd),
                     mock.call(self.sshclient, cmd_to_exec)]
 
@@ -338,8 +340,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
         self.config(group='ssh', get_vm_name_retry_interval=0)
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "22:22:22:22:22:22"]
-        exec_ssh_mock.side_effect = iter([('NodeName', ''),
-                                          ('52:54:00:cf:2d:31', '')] * 2)
+        exec_ssh_mock.side_effect = ([('NodeName', ''),
+                                      ('52:54:00:cf:2d:31', '')] * 2)
 
         ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
                              info['cmd_set']['list_all'])
@@ -361,10 +363,10 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
         self.config(group='ssh', get_vm_name_retry_interval=0)
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "22:22:22:22:22:22"]
-        exec_ssh_mock.side_effect = iter([('NodeName', ''),
-                                          ('', ''),
-                                          ('NodeName', ''),
-                                          ('11:11:11:11:11:11', '')])
+        exec_ssh_mock.side_effect = [('NodeName', ''),
+                                     ('', ''),
+                                     ('NodeName', ''),
+                                     ('11:11:11:11:11:11', '')]
 
         ssh_cmd = "%s %s" % (info['cmd_set']['base_cmd'],
                              info['cmd_set']['list_all'])
@@ -392,8 +394,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
                                  info['cmd_set']['get_node_macs'])
         cmd_to_exec = cmd_to_exec.replace('{_NodeName_}', 'NodeName')
 
-        exec_ssh_mock.side_effect = iter(
-            [('NodeName', ''), processutils.ProcessExecutionError])
+        exec_ssh_mock.side_effect = [('NodeName', ''),
+                                     processutils.ProcessExecutionError]
         expected = [mock.call(self.sshclient, ssh_cmd),
                     mock.call(self.sshclient, cmd_to_exec)]
 
@@ -411,8 +413,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
 
-        get_power_status_mock.side_effect = iter([states.POWER_OFF,
-                                                  states.POWER_ON])
+        get_power_status_mock.side_effect = [states.POWER_OFF,
+                                             states.POWER_ON]
         get_hosts_name_mock.return_value = "NodeName"
         expected = [mock.call(self.sshclient, info),
                     mock.call(self.sshclient, info)]
@@ -434,8 +436,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
                             exec_ssh_mock):
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
-        get_power_status_mock.side_effect = iter([states.POWER_OFF,
-                                                 states.POWER_OFF])
+        get_power_status_mock.side_effect = ([states.POWER_OFF,
+                                              states.POWER_OFF])
         get_hosts_name_mock.return_value = "NodeName"
         expected = [mock.call(self.sshclient, info),
                     mock.call(self.sshclient, info)]
@@ -459,8 +461,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
         info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
 
         exec_ssh_mock.side_effect = processutils.ProcessExecutionError
-        get_power_status_mock.side_effect = iter([states.POWER_OFF,
-                                                  states.POWER_ON])
+        get_power_status_mock.side_effect = ([states.POWER_OFF,
+                                              states.POWER_ON])
         get_hosts_name_mock.return_value = "NodeName"
 
         cmd_to_exec = "%s %s" % (info['cmd_set']['base_cmd'],
@@ -482,8 +484,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
                              get_power_status_mock, exec_ssh_mock):
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
-        get_power_status_mock.side_effect = iter([states.POWER_ON,
-                                                  states.POWER_OFF])
+        get_power_status_mock.side_effect = [states.POWER_ON,
+                                             states.POWER_OFF]
         get_hosts_name_mock.return_value = "NodeName"
         expected = [mock.call(self.sshclient, info),
                     mock.call(self.sshclient, info)]
@@ -505,8 +507,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
                              get_power_status_mock, exec_ssh_mock):
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
-        get_power_status_mock.side_effect = iter([states.POWER_ON,
-                                                  states.POWER_ON])
+        get_power_status_mock.side_effect = [states.POWER_ON,
+                                             states.POWER_ON]
         get_hosts_name_mock.return_value = "NodeName"
         expected = [mock.call(self.sshclient, info),
                     mock.call(self.sshclient, info)]
@@ -529,8 +531,8 @@ class SSHPrivateMethodsTestCase(db_base.DbTestCase):
         info = ssh._parse_driver_info(self.node)
         info['macs'] = ["11:11:11:11:11:11", "52:54:00:cf:2d:31"]
         exec_ssh_mock.side_effect = processutils.ProcessExecutionError
-        get_power_status_mock.side_effect = iter([states.POWER_ON,
-                                                 states.POWER_OFF])
+        get_power_status_mock.side_effect = [states.POWER_ON,
+                                             states.POWER_OFF]
         get_hosts_name_mock.return_value = "NodeName"
 
         cmd_to_exec = "%s %s" % (info['cmd_set']['base_cmd'],
@@ -559,8 +561,7 @@ class SSHDriverTestCase(db_base.DbTestCase):
 
     @mock.patch.object(utils, 'ssh_connect', autospec=True)
     def test__validate_info_ssh_connect_failed(self, ssh_connect_mock):
-        ssh_connect_mock.side_effect = iter(
-            [exception.SSHConnectFailed(host='fake')])
+        ssh_connect_mock.side_effect = exception.SSHConnectFailed(host='fake')
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             self.assertRaises(exception.InvalidParameterValue,

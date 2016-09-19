@@ -28,9 +28,9 @@ import testtools
 from testtools import matchers
 
 from ironic.common import boot_devices
+from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common import image_service
-from ironic.common import keystone
 from ironic.common import states
 from ironic.common import utils as common_utils
 from ironic.conductor import task_manager
@@ -39,6 +39,7 @@ from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils as utils
 from ironic.drivers.modules import image_cache
 from ironic.drivers.modules import pxe
+from ironic.drivers import utils as driver_utils
 from ironic.tests import base as tests_base
 from ironic.tests.unit.conductor import mgr_utils
 from ironic.tests.unit.db import base as db_base
@@ -1214,13 +1215,14 @@ class OtherFunctionTestCase(db_base.DbTestCase):
 
     def test_parse_root_device_hints(self):
         self.node.properties['root_device'] = {
-            'wwn': 123456, 'model': 'foo-model', 'size': 123,
+            'wwn': '123456', 'model': 'foo-model', 'size': 123,
             'serial': 'foo-serial', 'vendor': 'foo-vendor', 'name': '/dev/sda',
-            'wwn_with_extension': 123456111, 'wwn_vendor_extension': 111,
+            'wwn_with_extension': '123456111', 'wwn_vendor_extension': '111',
+            'rotational': True,
         }
-        expected = ('model=foo-model,name=/dev/sda,serial=foo-serial,size=123,'
-                    'vendor=foo-vendor,wwn=123456,wwn_vendor_extension=111,'
-                    'wwn_with_extension=123456111')
+        expected = ('model=foo-model,name=/dev/sda,rotational=True,'
+                    'serial=foo-serial,size=123,vendor=foo-vendor,wwn=123456,'
+                    'wwn_vendor_extension=111,wwn_with_extension=123456111')
         result = utils.parse_root_device_hints(self.node)
         self.assertEqual(expected, result)
 
@@ -1242,6 +1244,11 @@ class OtherFunctionTestCase(db_base.DbTestCase):
 
     def test_parse_root_device_hints_invalid_size(self):
         self.node.properties['root_device'] = {'size': 'not-int'}
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.parse_root_device_hints, self.node)
+
+    def test_parse_root_device_hints_invalid_rotational(self):
+        self.node.properties['root_device'] = {'rotational': 'not-boolean'}
         self.assertRaises(exception.InvalidParameterValue,
                           utils.parse_root_device_hints, self.node)
 
@@ -1269,7 +1276,8 @@ class OtherFunctionTestCase(db_base.DbTestCase):
             else:
                 self.assertFalse(mock_log.called)
 
-    def test_set_failed_state(self):
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
+    def test_set_failed_state(self, mock_collect):
         exc_state = exception.InvalidState('invalid state')
         exc_param = exception.InvalidParameterValue('invalid parameter')
         mock_call = mock.call(mock.ANY)
@@ -1284,8 +1292,10 @@ class OtherFunctionTestCase(db_base.DbTestCase):
         self._test_set_failed_state(event_value=iter([exc_state] * len(calls)),
                                     power_value=iter([exc_param] * len(calls)),
                                     log_calls=calls)
+        self.assertEqual(4, mock_collect.call_count)
 
-    def test_set_failed_state_no_poweroff(self):
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
+    def test_set_failed_state_no_poweroff(self, mock_collect):
         cfg.CONF.set_override('power_off_after_deploy_failure', False,
                               'deploy')
         exc_state = exception.InvalidState('invalid state')
@@ -1302,6 +1312,21 @@ class OtherFunctionTestCase(db_base.DbTestCase):
         self._test_set_failed_state(event_value=iter([exc_state] * len(calls)),
                                     power_value=iter([exc_param] * len(calls)),
                                     log_calls=calls, poweroff=False)
+        self.assertEqual(4, mock_collect.call_count)
+
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
+    def test_set_failed_state_collect_deploy_logs(self, mock_collect):
+        for opt in ('always', 'on_failure'):
+            cfg.CONF.set_override('deploy_logs_collect', opt, 'agent')
+            self._test_set_failed_state()
+            mock_collect.assert_called_once_with(mock.ANY)
+            mock_collect.reset_mock()
+
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
+    def test_set_failed_state_collect_deploy_logs_never(self, mock_collect):
+        cfg.CONF.set_override('deploy_logs_collect', 'never', 'agent')
+        self._test_set_failed_state()
+        self.assertFalse(mock_collect.called)
 
     def test_get_boot_option(self):
         self.node.instance_info = {'capabilities': '{"boot_option": "local"}'}
@@ -1334,7 +1359,7 @@ class OtherFunctionTestCase(db_base.DbTestCase):
 
         mock_cache = mock.MagicMock(
             spec_set=['master_dir'], master_dir='master_dir')
-        mock_clean_up_caches.side_effect = iter([exc])
+        mock_clean_up_caches.side_effect = [exc]
         self.assertRaises(exception.InstanceDeployFailure,
                           utils.fetch_images,
                           None,
@@ -1374,6 +1399,42 @@ class OtherFunctionTestCase(db_base.DbTestCase):
         utils.warn_about_unsafe_shred_parameters()
         self.assertTrue(log_mock.warning.called)
 
+    @mock.patch.object(utils, '_get_ironic_session')
+    @mock.patch('ironic.common.keystone.get_service_url')
+    def test_get_ironic_api_url_from_config(self, mock_get_url, mock_ks):
+        mock_sess = mock.Mock()
+        mock_ks.return_value = mock_sess
+        fake_api_url = 'http://foo/'
+        mock_get_url.side_effect = exception.KeystoneFailure
+        self.config(api_url=fake_api_url, group='conductor')
+        url = utils.get_ironic_api_url()
+        # also checking for stripped trailing slash
+        self.assertEqual(fake_api_url[:-1], url)
+        self.assertFalse(mock_get_url.called)
+
+    @mock.patch.object(utils, '_get_ironic_session')
+    @mock.patch('ironic.common.keystone.get_service_url')
+    def test_get_ironic_api_url_from_keystone(self, mock_get_url, mock_ks):
+        mock_sess = mock.Mock()
+        mock_ks.return_value = mock_sess
+        fake_api_url = 'http://foo/'
+        mock_get_url.return_value = fake_api_url
+        self.config(api_url=None, group='conductor')
+        url = utils.get_ironic_api_url()
+        # also checking for stripped trailing slash
+        self.assertEqual(fake_api_url[:-1], url)
+        mock_get_url.assert_called_with(mock_sess)
+
+    @mock.patch.object(utils, '_get_ironic_session')
+    @mock.patch('ironic.common.keystone.get_service_url')
+    def test_get_ironic_api_url_fail(self, mock_get_url, mock_ks):
+        mock_sess = mock.Mock()
+        mock_ks.return_value = mock_sess
+        mock_get_url.side_effect = exception.KeystoneFailure()
+        self.config(api_url=None, group='conductor')
+        self.assertRaises(exception.InvalidParameterValue,
+                          utils.get_ironic_api_url)
+
 
 class VirtualMediaDeployUtilsTestCase(db_base.DbTestCase):
 
@@ -1388,7 +1449,27 @@ class VirtualMediaDeployUtilsTestCase(db_base.DbTestCase):
         obj_utils.create_test_port(
             self.context, node_id=self.node.id, address='aa:bb:cc:dd:ee:ff',
             uuid=uuidutils.generate_uuid(),
-            extra={'vif_port_id': 'test-vif-A'}, driver='iscsi_ilo')
+            extra={'vif_port_id': 'test-vif-A'})
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            address = utils.get_single_nic_with_vif_port_id(task)
+            self.assertEqual('aa:bb:cc:dd:ee:ff', address)
+
+    def test_get_single_nic_with_cleaning_vif_port_id(self):
+        obj_utils.create_test_port(
+            self.context, node_id=self.node.id, address='aa:bb:cc:dd:ee:ff',
+            uuid=uuidutils.generate_uuid(),
+            internal_info={'cleaning_vif_port_id': 'test-vif-A'})
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            address = utils.get_single_nic_with_vif_port_id(task)
+            self.assertEqual('aa:bb:cc:dd:ee:ff', address)
+
+    def test_get_single_nic_with_provisioning_vif_port_id(self):
+        obj_utils.create_test_port(
+            self.context, node_id=self.node.id, address='aa:bb:cc:dd:ee:ff',
+            uuid=uuidutils.generate_uuid(),
+            internal_info={'provisioning_vif_port_id': 'test-vif-A'})
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             address = utils.get_single_nic_with_vif_port_id(task)
@@ -1549,8 +1630,7 @@ class TrySetBootDeviceTestCase(db_base.DbTestCase):
             self, node_set_boot_device_mock, log_mock):
         self.node.properties = {'capabilities': 'boot_mode:uefi'}
         self.node.save()
-        node_set_boot_device_mock.side_effect = iter(
-            [exception.IPMIFailure(cmd='a')])
+        node_set_boot_device_mock.side_effect = exception.IPMIFailure(cmd='a')
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             utils.try_set_boot_device(task, boot_devices.DISK,
@@ -1562,8 +1642,7 @@ class TrySetBootDeviceTestCase(db_base.DbTestCase):
     @mock.patch.object(manager_utils, 'node_set_boot_device', autospec=True)
     def test_try_set_boot_device_ipmifailure_bios(
             self, node_set_boot_device_mock):
-        node_set_boot_device_mock.side_effect = iter(
-            [exception.IPMIFailure(cmd='a')])
+        node_set_boot_device_mock.side_effect = exception.IPMIFailure(cmd='a')
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             self.assertRaises(exception.IPMIFailure,
@@ -1576,7 +1655,7 @@ class TrySetBootDeviceTestCase(db_base.DbTestCase):
     def test_try_set_boot_device_some_other_exception(
             self, node_set_boot_device_mock):
         exc = exception.IloOperationError(operation="qwe", error="error")
-        node_set_boot_device_mock.side_effect = iter([exc])
+        node_set_boot_device_mock.side_effect = exc
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
             self.assertRaises(exception.IloOperationError,
@@ -1726,55 +1805,117 @@ class AgentMethodsTestCase(db_base.DbTestCase):
             self.assertEqual(True, task.node.driver_internal_info[
                 'agent_continue_if_ata_erase_failed'])
 
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports',
-                autospec=True)
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.create_cleaning_ports',
-                autospec=True)
-    def _test_prepare_inband_cleaning_ports(
-            self, create_mock, delete_mock, return_vif_port_id=True):
+    @mock.patch.object(utils.LOG, 'warning', autospec=True)
+    @mock.patch.object(dhcp_factory, 'DHCPFactory', autospec=True)
+    def _test_prepare_inband_cleaning_ports_out_of_tree(
+            self, dhcp_factory_mock, log_mock, return_vif_port_id=True):
+        self.config(group='dhcp', dhcp_provider='my_shiny_dhcp_provider')
+        dhcp_provider = dhcp_factory_mock.return_value.provider
+        create = dhcp_provider.create_cleaning_ports
+        delete = dhcp_provider.delete_cleaning_ports
         if return_vif_port_id:
-            create_mock.return_value = {self.ports[0].uuid: 'vif-port-id'}
+            create.return_value = {self.ports[0].uuid: 'vif-port-id'}
         else:
-            create_mock.return_value = {}
+            create.return_value = {}
         with task_manager.acquire(
                 self.context, self.node.uuid, shared=False) as task:
             utils.prepare_cleaning_ports(task)
-            create_mock.assert_called_once_with(mock.ANY, task)
-            delete_mock.assert_called_once_with(mock.ANY, task)
+            create.assert_called_once_with(task)
+            delete.assert_called_once_with(task)
+            self.assertTrue(log_mock.called)
 
         self.ports[0].refresh()
-        self.assertEqual('vif-port-id', self.ports[0].extra['vif_port_id'])
+        self.assertEqual('vif-port-id',
+                         self.ports[0].internal_info['cleaning_vif_port_id'])
 
-    def test_prepare_inband_cleaning_ports(self):
-        self._test_prepare_inband_cleaning_ports()
+    def test_prepare_inband_cleaning_ports_out_of_tree(self):
+        self._test_prepare_inband_cleaning_ports_out_of_tree()
 
-    def test_prepare_inband_cleaning_ports_no_vif_port_id(self):
+    def test_prepare_inband_cleaning_ports_out_of_tree_no_vif_port_id(self):
         self.assertRaises(
             exception.NodeCleaningFailure,
-            self._test_prepare_inband_cleaning_ports,
+            self._test_prepare_inband_cleaning_ports_out_of_tree,
             return_vif_port_id=False)
 
-    @mock.patch('ironic.dhcp.neutron.NeutronDHCPApi.delete_cleaning_ports',
-                autospec=True)
-    def test_tear_down_inband_cleaning_ports(self, neutron_mock):
-        extra_dict = self.ports[0].extra
-        extra_dict['vif_port_id'] = 'vif-port-id'
-        self.ports[0].extra = extra_dict
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'add_cleaning_network')
+    def test_prepare_inband_cleaning_ports_neutron(self, add_clean_net_mock):
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            utils.prepare_cleaning_ports(task)
+            add_clean_net_mock.assert_called_once_with(task)
+
+    @mock.patch('ironic.drivers.modules.network.noop.NoopNetwork.'
+                'add_cleaning_network')
+    @mock.patch.object(dhcp_factory, 'DHCPFactory', autospec=True)
+    def test_prepare_inband_cleaning_ports_provider_does_not_create(
+            self, dhcp_factory_mock, add_clean_net_mock):
+        self.config(group='dhcp', dhcp_provider='my_shiny_dhcp_provider')
+        self.node.network_interface = 'noop'
+        self.node.save()
+        dhcp_provider = dhcp_factory_mock.return_value.provider
+        del dhcp_provider.delete_cleaning_ports
+        del dhcp_provider.create_cleaning_ports
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            utils.prepare_cleaning_ports(task)
+            add_clean_net_mock.assert_called_once_with(task)
+
+    @mock.patch.object(dhcp_factory, 'DHCPFactory', autospec=True)
+    def test_tear_down_inband_cleaning_ports_out_of_tree(self,
+                                                         dhcp_factory_mock):
+        self.config(group='dhcp', dhcp_provider='my_shiny_dhcp_provider')
+        dhcp_provider = dhcp_factory_mock.return_value.provider
+        delete = dhcp_provider.delete_cleaning_ports
+        internal_info = self.ports[0].internal_info
+        internal_info['cleaning_vif_port_id'] = 'vif-port-id-1'
+        self.ports[0].internal_info = internal_info
         self.ports[0].save()
         with task_manager.acquire(
                 self.context, self.node.uuid, shared=False) as task:
             utils.tear_down_cleaning_ports(task)
-            neutron_mock.assert_called_once_with(mock.ANY, task)
+            delete.assert_called_once_with(task)
 
         self.ports[0].refresh()
+        self.assertNotIn('cleaning_vif_port_id', self.ports[0].internal_info)
         self.assertNotIn('vif_port_id', self.ports[0].extra)
+
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'remove_cleaning_network')
+    def test_tear_down_inband_cleaning_ports_neutron(self, rm_clean_net_mock):
+        extra_port = obj_utils.create_test_port(
+            self.context, node_id=self.node.id, address='10:00:00:00:00:01',
+            extra={'vif_port_id': 'vif-port'}, uuid=uuidutils.generate_uuid()
+        )
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            utils.tear_down_cleaning_ports(task)
+            rm_clean_net_mock.assert_called_once_with(task)
+        extra_port.refresh()
+        self.assertNotIn('vif_port_id', extra_port.extra)
+
+    @mock.patch('ironic.drivers.modules.network.noop.NoopNetwork.'
+                'remove_cleaning_network')
+    @mock.patch.object(dhcp_factory, 'DHCPFactory', autospec=True)
+    def test_tear_down_inband_cleaning_ports_provider_does_not_delete(
+            self, dhcp_factory_mock, rm_clean_net_mock):
+        self.config(group='dhcp', dhcp_provider='my_shiny_dhcp_provider')
+        self.node.network_interface = 'noop'
+        self.node.save()
+        dhcp_provider = dhcp_factory_mock.return_value.provider
+        del dhcp_provider.delete_cleaning_ports
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            utils.tear_down_cleaning_ports(task)
+            rm_clean_net_mock.assert_called_once_with(task)
 
     @mock.patch.object(pxe.PXEBoot, 'prepare_ramdisk', autospec=True)
     @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
     @mock.patch.object(utils, 'build_agent_options', autospec=True)
-    @mock.patch.object(utils, 'prepare_cleaning_ports', autospec=True)
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'add_cleaning_network')
     def _test_prepare_inband_cleaning(
-            self, prepare_cleaning_ports_mock,
+            self, add_cleaning_network_mock,
             build_options_mock, power_mock, prepare_ramdisk_mock,
             manage_boot=True):
         build_options_mock.return_value = {'a': 'b'}
@@ -1783,7 +1924,7 @@ class AgentMethodsTestCase(db_base.DbTestCase):
             self.assertEqual(
                 states.CLEANWAIT,
                 utils.prepare_inband_cleaning(task, manage_boot=manage_boot))
-            prepare_cleaning_ports_mock.assert_called_once_with(task)
+            add_cleaning_network_mock.assert_called_once_with(task)
             power_mock.assert_called_once_with(task, states.REBOOT)
             self.assertEqual(1, task.node.driver_internal_info[
                              'agent_erase_devices_iterations'])
@@ -1804,16 +1945,17 @@ class AgentMethodsTestCase(db_base.DbTestCase):
         self._test_prepare_inband_cleaning(manage_boot=False)
 
     @mock.patch.object(pxe.PXEBoot, 'clean_up_ramdisk', autospec=True)
-    @mock.patch.object(utils, 'tear_down_cleaning_ports', autospec=True)
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'remove_cleaning_network')
     @mock.patch('ironic.conductor.utils.node_power_action', autospec=True)
     def _test_tear_down_inband_cleaning(
-            self, power_mock, tear_down_ports_mock,
+            self, power_mock, remove_cleaning_network_mock,
             clean_up_ramdisk_mock, manage_boot=True):
         with task_manager.acquire(
                 self.context, self.node.uuid, shared=False) as task:
             utils.tear_down_inband_cleaning(task, manage_boot=manage_boot)
             power_mock.assert_called_once_with(task, states.POWER_OFF)
-            tear_down_ports_mock.assert_called_once_with(task)
+            remove_cleaning_network_mock.assert_called_once_with(task)
             if manage_boot:
                 clean_up_ramdisk_mock.assert_called_once_with(
                     task.driver.boot, task)
@@ -1833,11 +1975,12 @@ class AgentMethodsTestCase(db_base.DbTestCase):
         self.assertEqual('fake_agent', options['ipa-driver-name'])
         self.assertEqual(0, options['coreos.configdrive'])
 
-    @mock.patch.object(keystone, 'get_service_url', autospec=True)
-    def test_build_agent_options_keystone(self, get_url_mock):
-
+    @mock.patch.object(utils, '_get_ironic_session')
+    def test_build_agent_options_keystone(self, session_mock):
         self.config(api_url=None, group='conductor')
-        get_url_mock.return_value = 'api-url'
+        sess = mock.Mock()
+        sess.get_endpoint.return_value = 'api-url'
+        session_mock.return_value = sess
         options = utils.build_agent_options(self.node)
         self.assertEqual('api-url', options['ipa-api-url'])
         self.assertEqual('fake_agent', options['ipa-driver-name'])
@@ -1987,9 +2130,8 @@ class ValidateImagePropertiesTestCase(db_base.DbTestCase):
             'ramdisk': 'file://initrd',
             'root_gb': 100,
         }
-        img_service_show_mock.side_effect = iter(
-            [exception.ImageRefValidationFailed(
-                image_href='http://ubuntu', reason='HTTPError')])
+        img_service_show_mock.side_effect = exception.ImageRefValidationFailed(
+            image_href='http://ubuntu', reason='HTTPError')
         node = obj_utils.create_test_node(
             self.context, driver='fake_pxe',
             instance_info=instance_info,
@@ -2125,6 +2267,7 @@ class InstanceInfoTestCase(db_base.DbTestCase):
 
     def test_parse_instance_info_valid_ephemeral_gb(self):
         ephemeral_gb = 10
+        ephemeral_mb = 1024 * ephemeral_gb
         ephemeral_fmt = 'test-fmt'
         info = dict(INST_INFO_DICT)
         info['ephemeral_gb'] = ephemeral_gb
@@ -2134,7 +2277,7 @@ class InstanceInfoTestCase(db_base.DbTestCase):
             driver_internal_info=DRV_INTERNAL_INFO_DICT,
         )
         data = utils.parse_instance_info(node)
-        self.assertEqual(ephemeral_gb, data['ephemeral_gb'])
+        self.assertEqual(ephemeral_mb, data['ephemeral_mb'])
         self.assertEqual(ephemeral_fmt, data['ephemeral_format'])
 
     def test_parse_instance_info_unicode_swap_mb(self):
@@ -2308,9 +2451,9 @@ class InstanceInfoTestCase(db_base.DbTestCase):
         )
         instance_info = utils.parse_instance_info(node)
         self.assertIsNotNone(instance_info['image_source'])
-        self.assertIsNotNone(instance_info['root_gb'])
+        self.assertIsNotNone(instance_info['root_mb'])
         self.assertEqual(0, instance_info['swap_mb'])
-        self.assertEqual(0, instance_info['ephemeral_gb'])
+        self.assertEqual(0, instance_info['ephemeral_mb'])
         self.assertIsNone(instance_info['configdrive'])
 
     def test_parse_instance_info_whole_disk_image_missing_root(self):

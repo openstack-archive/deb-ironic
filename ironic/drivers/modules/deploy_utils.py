@@ -21,7 +21,6 @@ import time
 
 from ironic_lib import disk_utils
 from oslo_concurrency import processutils
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
@@ -40,57 +39,12 @@ from ironic.common import keystone
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import utils as manager_utils
+from ironic.conf import CONF
 from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import image_cache
 from ironic.drivers import utils as driver_utils
 from ironic import objects
 
-
-deploy_opts = [
-    cfg.StrOpt('http_url',
-               help=_("ironic-conductor node's HTTP server URL. "
-                      "Example: http://192.1.2.3:8080")),
-    cfg.StrOpt('http_root',
-               default='/httpboot',
-               help=_("ironic-conductor node's HTTP root path.")),
-    cfg.IntOpt('erase_devices_priority',
-               help=_('Priority to run in-band erase devices via the Ironic '
-                      'Python Agent ramdisk. If unset, will use the priority '
-                      'set in the ramdisk (defaults to 10 for the '
-                      'GenericHardwareManager). If set to 0, will not run '
-                      'during cleaning.')),
-    # TODO(mmitchell): Remove the deprecated name/group during Ocata cycle.
-    cfg.IntOpt('shred_random_overwrite_iterations',
-               deprecated_name='erase_devices_iterations',
-               deprecated_group='deploy',
-               default=1,
-               min=0,
-               help=_('During shred, overwrite all block devices N times with '
-                      'random data. This is only used if a device could not '
-                      'be ATA Secure Erased. Defaults to 1.')),
-    cfg.BoolOpt('shred_final_overwrite_with_zeros',
-                default=True,
-                help=_("Whether to write zeros to a node's block devices "
-                       "after writing random data. This will write zeros to "
-                       "the device even when "
-                       "deploy.shred_random_overwrite_interations is 0. This "
-                       "option is only used if a device could not be ATA "
-                       "Secure Erased. Defaults to True.")),
-    cfg.BoolOpt('continue_if_disk_secure_erase_fails',
-                default=False,
-                help=_('Defines what to do if an ATA secure erase operation '
-                       'fails during cleaning in the Ironic Python Agent. '
-                       'If False, the cleaning operation will fail and the '
-                       'node will be put in ``clean failed`` state. '
-                       'If True, shred will be invoked and cleaning will '
-                       'continue.')),
-    cfg.BoolOpt('power_off_after_deploy_failure',
-                default=True,
-                help=_('Whether to power off a node after deploy failure. '
-                       'Defaults to True.')),
-]
-CONF = cfg.CONF
-CONF.register_opts(deploy_opts, group='deploy')
 
 # TODO(Faizan): Move this logic to common/utils.py and deprecate
 # rootwrap_config.
@@ -104,7 +58,7 @@ LOG = logging.getLogger(__name__)
 
 VALID_ROOT_DEVICE_HINTS = set(('size', 'model', 'wwn', 'serial', 'vendor',
                                'wwn_with_extension', 'wwn_vendor_extension',
-                               'name'))
+                               'name', 'rotational'))
 
 SUPPORTED_CAPABILITIES = {
     'boot_option': ('local', 'netboot'),
@@ -131,6 +85,38 @@ warn_about_unsafe_shred_parameters()
 
 # All functions are called from deploy() directly or indirectly.
 # They are split for stub-out.
+
+_IRONIC_SESSION = None
+
+
+def _get_ironic_session():
+    global _IRONIC_SESSION
+    if not _IRONIC_SESSION:
+        _IRONIC_SESSION = keystone.get_session('service_catalog')
+    return _IRONIC_SESSION
+
+
+def get_ironic_api_url():
+    """Resolve Ironic API endpoint
+
+    either from config of from Keystone catalog.
+    """
+    ironic_api = CONF.conductor.api_url
+    if not ironic_api:
+        try:
+            ironic_session = _get_ironic_session()
+            ironic_api = keystone.get_service_url(ironic_session)
+        except (exception.KeystoneFailure,
+                exception.CatalogNotFound,
+                exception.KeystoneUnauthorized) as e:
+            raise exception.InvalidParameterValue(_(
+                "Couldn't get the URL of the Ironic API service from the "
+                "configuration file or keystone catalog. Keystone error: "
+                "%s") % six.text_type(e))
+    # NOTE: we should strip '/' from the end because it might be used in
+    # hardcoded ramdisk script
+    ironic_api = ironic_api.rstrip('/')
+    return ironic_api
 
 
 def discovery(portal_address, portal_port):
@@ -488,6 +474,10 @@ def set_failed_state(task, msg):
     :param msg: the message to set in last_error of the node.
     """
     node = task.node
+
+    if CONF.agent.deploy_logs_collect in ('on_failure', 'always'):
+        driver_utils.collect_ramdisk_logs(node)
+
     try:
         task.process_event('fail')
     except exception.InvalidState:
@@ -518,8 +508,13 @@ def get_single_nic_with_vif_port_id(task):
     :returns: MAC address of the port connected to deployment network.
               None if it cannot find any port with vif id.
     """
+    # NOTE(vdrok): We are booting the node only in one network at a time,
+    # and presence of cleaning_vif_port_id means we're doing cleaning, of
+    # provisioning_vif_port_id - provisioning. Otherwise it's a tenant network
     for port in task.ports:
-        if port.extra.get('vif_port_id'):
+        if (port.internal_info.get('cleaning_vif_port_id') or
+                port.internal_info.get('provisioning_vif_port_id') or
+                port.extra.get('vif_port_id')):
             return port.address
 
 
@@ -708,6 +703,13 @@ def parse_root_device_hints(node):
         except ValueError:
             raise exception.InvalidParameterValue(
                 _('Root device hint "size" is not an integer value.'))
+
+    if 'rotational' in root_device:
+        try:
+            strutils.bool_from_string(root_device['rotational'], strict=True)
+        except ValueError:
+            raise exception.InvalidParameterValue(
+                _('Root device hint "rotational" is not a boolean value.'))
 
     hints = []
     for key, value in sorted(root_device.items()):
@@ -909,35 +911,59 @@ def get_boot_option(node):
     return capabilities.get('boot_option', 'netboot').lower()
 
 
+# TODO(vdrok): This method is left here for backwards compatibility with out of
+# tree DHCP providers implementing cleaning methods. Remove it in Ocata
 def prepare_cleaning_ports(task):
     """Prepare the Ironic ports of the node for cleaning.
 
     This method deletes the cleaning ports currently existing
     for all the ports of the node and then creates a new one
-    for each one of them.  It also adds 'vif_port_id' to port.extra
+    for each one of them. It also adds 'cleaning_vif_port_id' to internal_info
     of each Ironic port, after creating the cleaning ports.
 
     :param task: a TaskManager object containing the node
-    :raises NodeCleaningFailure: if the previous cleaning ports cannot
-        be removed or if new cleaning ports cannot be created
+    :raises: NodeCleaningFailure, NetworkError if the previous cleaning ports
+        cannot be removed or if new cleaning ports cannot be created.
+    :raises: InvalidParameterValue if cleaning network UUID config option has
+        an invalid value.
     """
     provider = dhcp_factory.DHCPFactory()
+    provider_manages_delete_cleaning = hasattr(provider.provider,
+                                               'delete_cleaning_ports')
+    provider_manages_create_cleaning = hasattr(provider.provider,
+                                               'create_cleaning_ports')
+    # NOTE(vdrok): The neutron DHCP provider was changed to call network
+    # interface's add_cleaning_network anyway, so call it directly to avoid
+    # duplication of some actions
+    if (CONF.dhcp.dhcp_provider == 'neutron' or
+            (not provider_manages_delete_cleaning and
+             not provider_manages_create_cleaning)):
+        task.driver.network.add_cleaning_network(task)
+        return
+
+    LOG.warning(_LW("delete_cleaning_ports and create_cleaning_ports "
+                    "functions in DHCP providers are deprecated, please move "
+                    "this logic to the network interface's "
+                    "remove_cleaning_network or add_cleaning_network methods "
+                    "respectively and remove the old DHCP provider methods. "
+                    "Possibility to do the cleaning via DHCP providers will "
+                    "be removed in Ocata release."))
     # If we have left over ports from a previous cleaning, remove them
-    if getattr(provider.provider, 'delete_cleaning_ports', None):
+    if provider_manages_delete_cleaning:
         # Allow to raise if it fails, is caught and handled in conductor
         provider.provider.delete_cleaning_ports(task)
 
     # Create cleaning ports if necessary
-    if getattr(provider.provider, 'create_cleaning_ports', None):
+    if provider_manages_create_cleaning:
         # Allow to raise if it fails, is caught and handled in conductor
         ports = provider.provider.create_cleaning_ports(task)
 
-        # Add vif_port_id for each of the ports because some boot
+        # Add cleaning_vif_port_id for each of the ports because some boot
         # interfaces expects these to prepare for booting ramdisk.
         for port in task.ports:
-            extra_dict = port.extra
+            internal_info = port.internal_info
             try:
-                extra_dict['vif_port_id'] = ports[port.uuid]
+                internal_info['cleaning_vif_port_id'] = ports[port.uuid]
             except KeyError:
                 # This is an internal error in Ironic.  All DHCP providers
                 # implementing create_cleaning_ports are supposed to
@@ -948,10 +974,12 @@ def prepare_cleaning_ports(task):
                 raise exception.NodeCleaningFailure(
                     node=task.node.uuid, reason=error)
             else:
-                port.extra = extra_dict
+                port.internal_info = internal_info
                 port.save()
 
 
+# TODO(vdrok): This method is left here for backwards compatibility with out of
+# tree DHCP providers implementing cleaning methods. Remove it in Ocata
 def tear_down_cleaning_ports(task):
     """Deletes the cleaning ports created for each of the Ironic ports.
 
@@ -959,19 +987,42 @@ def tear_down_cleaning_ports(task):
     was started.
 
     :param task: a TaskManager object containing the node
-    :raises NodeCleaningFailure: if the cleaning ports cannot be
+    :raises: NodeCleaningFailure, NetworkError if the cleaning ports cannot be
         removed.
     """
     # If we created cleaning ports, delete them
     provider = dhcp_factory.DHCPFactory()
-    if getattr(provider.provider, 'delete_cleaning_ports', None):
+    provider_manages_delete_cleaning = hasattr(provider.provider,
+                                               'delete_cleaning_ports')
+    try:
+        # NOTE(vdrok): The neutron DHCP provider was changed to call network
+        # interface's remove_cleaning_network anyway, so call it directly to
+        # avoid duplication of some actions
+        if (CONF.dhcp.dhcp_provider == 'neutron' or
+                not provider_manages_delete_cleaning):
+            task.driver.network.remove_cleaning_network(task)
+            return
+
+        # NOTE(vdrok): No need for another deprecation warning here, if
+        # delete_cleaning_ports is in the DHCP provider the warning was
+        # printed in prepare_cleaning_ports
         # Allow to raise if it fails, is caught and handled in conductor
         provider.provider.delete_cleaning_ports(task)
-
+        for port in task.ports:
+            if 'cleaning_vif_port_id' in port.internal_info:
+                internal_info = port.internal_info
+                del internal_info['cleaning_vif_port_id']
+                port.internal_info = internal_info
+                port.save()
+    finally:
         for port in task.ports:
             if 'vif_port_id' in port.extra:
+                # TODO(vdrok): This piece is left for backwards compatibility,
+                # if ironic was upgraded during cleaning, vif_port_id
+                # containing cleaning neutron port UUID should be cleared,
+                # remove in Ocata
                 extra_dict = port.extra
-                extra_dict.pop('vif_port_id', None)
+                del extra_dict['vif_port_id']
                 port.extra = extra_dict
                 port.save()
 
@@ -983,10 +1034,8 @@ def build_agent_options(node):
     :returns: a dictionary containing the parameters to be passed to
         agent ramdisk.
     """
-    ironic_api = (CONF.conductor.api_url or
-                  keystone.get_service_url()).rstrip('/')
     agent_config_opts = {
-        'ipa-api-url': ironic_api,
+        'ipa-api-url': get_ironic_api_url(),
         'ipa-driver-name': node.driver,
         # NOTE: The below entry is a temporary workaround for bug/1433812
         'coreos.configdrive': 0,
@@ -1018,8 +1067,10 @@ def prepare_inband_cleaning(task, manage_boot=True):
         automatically boot agent ramdisk every time bare metal node is
         rebooted.
     :returns: states.CLEANWAIT to signify an asynchronous prepare.
-    :raises NodeCleaningFailure: if the previous cleaning ports cannot
-        be removed or if new cleaning ports cannot be created
+    :raises: NetworkError, NodeCleaningFailure if the previous cleaning ports
+        cannot be removed or if new cleaning ports cannot be created.
+    :raises: InvalidParameterValue if cleaning network UUID config option has
+        an invalid value.
     """
     prepare_cleaning_ports(task)
 
@@ -1052,7 +1103,7 @@ def tear_down_inband_cleaning(task, manage_boot=True):
     :param manage_boot: If this is set to True, this method calls the
         'clean_up_ramdisk' method of boot interface to boot the agent
         ramdisk. If False, it skips this step.
-    :raises NodeCleaningFailure: if the cleaning ports cannot be
+    :raises: NetworkError, NodeCleaningFailure if the cleaning ports cannot be
         removed.
     """
     manager_utils.node_power_action(task, states.POWER_OFF)
@@ -1123,7 +1174,9 @@ def parse_instance_info(node):
                   " in node's instance_info")
     check_for_missing_params(i_info, error_msg)
 
-    i_info['swap_mb'] = int(info.get('swap_mb', 0))
+    # NOTE(vdrok): We're casting disk layout parameters to int only after
+    # ensuring that it is possible
+    i_info['swap_mb'] = info.get('swap_mb', 0)
     i_info['ephemeral_gb'] = info.get('ephemeral_gb', 0)
     err_msg_invalid = _("Cannot validate parameter for driver deploy. "
                         "Invalid parameter %(param)s. Reason: %(reason)s")
@@ -1136,10 +1189,12 @@ def parse_instance_info(node):
                                                   {'param': param,
                                                    'reason': reason})
 
-    i_info['root_mb'] = 1024 * int(info.get('root_gb'))
+    i_info['root_mb'] = 1024 * int(i_info['root_gb'])
+    i_info['swap_mb'] = int(i_info['swap_mb'])
+    i_info['ephemeral_mb'] = 1024 * int(i_info['ephemeral_gb'])
 
     if iwdi:
-        if int(i_info['swap_mb']) > 0 or int(i_info['ephemeral_gb']) > 0:
+        if i_info['swap_mb'] > 0 or i_info['ephemeral_mb'] > 0:
             err_msg_invalid = _("Cannot deploy whole disk image with "
                                 "swap or ephemeral size set")
             raise exception.InvalidParameterValue(err_msg_invalid)

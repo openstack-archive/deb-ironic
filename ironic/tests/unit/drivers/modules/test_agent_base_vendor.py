@@ -20,6 +20,7 @@ import time
 import types
 
 import mock
+from oslo_config import cfg
 
 from ironic.common import boot_devices
 from ironic.common import exception
@@ -31,11 +32,14 @@ from ironic.drivers.modules import agent_client
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import fake
 from ironic.drivers.modules import pxe
+from ironic.drivers import utils as driver_utils
 from ironic import objects
 from ironic.tests.unit.conductor import mgr_utils
 from ironic.tests.unit.db import base as db_base
 from ironic.tests.unit.db import utils as db_utils
 from ironic.tests.unit.objects import utils as object_utils
+
+CONF = cfg.CONF
 
 INSTANCE_INFO = db_utils.get_test_agent_instance_info()
 DRIVER_INFO = db_utils.get_test_agent_driver_info()
@@ -114,10 +118,29 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         expected = copy.deepcopy(self.node.as_dict())
         if not show_password:
             expected['driver_info']['ipmi_password'] = '******'
+
+        self.config(agent_backend='statsd', group='metrics')
+        expected_metrics = {
+            'metrics': {
+                'backend': 'statsd',
+                'prepend_host': CONF.metrics.agent_prepend_host,
+                'prepend_uuid': CONF.metrics.agent_prepend_uuid,
+                'prepend_host_reverse':
+                    CONF.metrics.agent_prepend_host_reverse,
+                'global_prefix': CONF.metrics.agent_global_prefix
+            },
+            'metrics_statsd': {
+                'statsd_host': CONF.metrics_statsd.agent_statsd_host,
+                'statsd_port': CONF.metrics_statsd.agent_statsd_port
+            },
+            'heartbeat_timeout': CONF.api.ramdisk_heartbeat_timeout
+        }
+
         find_mock.return_value = self.node
         with task_manager.acquire(self.context, self.node.uuid) as task:
             node = self.passthru.lookup(task.context, **kwargs)
         self.assertEqual(expected, node['node'])
+        self.assertEqual(expected_metrics, node['config'])
 
     def test_lookup_v2_show_password(self):
         self._test_lookup_v2(show_password=True)
@@ -312,243 +335,6 @@ class TestBaseAgentVendor(db_base.DbTestCase):
             self.assertRaises(exception.MissingParameterValue,
                               self.passthru.heartbeat, task, **kwargs)
 
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'deploy_has_started',
-                       autospec=True)
-    @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'deploy_is_done',
-                       autospec=True)
-    @mock.patch.object(agent_base_vendor.LOG, 'exception', autospec=True)
-    def test_heartbeat_deploy_done_fails(self, log_mock, done_mock,
-                                         failed_mock, deploy_started_mock):
-        deploy_started_mock.return_value = True
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        done_mock.side_effect = iter([Exception('LlamaException')])
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=False) as task:
-            task.node.provision_state = states.DEPLOYWAIT
-            task.node.target_provision_state = states.ACTIVE
-            self.passthru.heartbeat(task, **kwargs)
-            failed_mock.assert_called_once_with(task, mock.ANY)
-        log_mock.assert_called_once_with(
-            'Asynchronous exception for node '
-            '1be26c0b-03f2-4d2e-ae87-c02d7f33c123: Failed checking if deploy '
-            'is done. Exception: LlamaException')
-
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'deploy_has_started',
-                       autospec=True)
-    @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'deploy_is_done',
-                       autospec=True)
-    @mock.patch.object(agent_base_vendor.LOG, 'exception', autospec=True)
-    def test_heartbeat_deploy_done_raises_with_event(self, log_mock, done_mock,
-                                                     failed_mock,
-                                                     deploy_started_mock):
-        deploy_started_mock.return_value = True
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        with task_manager.acquire(
-                self.context, self.node['uuid'], shared=False) as task:
-
-            def driver_failure(*args, **kwargs):
-                # simulate driver failure that both advances the FSM
-                # and raises an exception
-                task.node.provision_state = states.DEPLOYFAIL
-                raise Exception('LlamaException')
-
-            task.node.provision_state = states.DEPLOYWAIT
-            task.node.target_provision_state = states.ACTIVE
-            done_mock.side_effect = driver_failure
-            self.passthru.heartbeat(task, **kwargs)
-            # task.node.provision_state being set to DEPLOYFAIL
-            # within the driver_failue, hearbeat should not call
-            # deploy_utils.set_failed_state anymore
-            self.assertFalse(failed_mock.called)
-        log_mock.assert_called_once_with(
-            'Asynchronous exception for node '
-            '1be26c0b-03f2-4d2e-ae87-c02d7f33c123: Failed checking if deploy '
-            'is done. Exception: LlamaException')
-
-    @mock.patch.object(objects.node.Node, 'touch_provisioning', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       '_refresh_clean_steps', autospec=True)
-    @mock.patch.object(manager_utils, 'set_node_cleaning_steps', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
-    def test_heartbeat_resume_clean(self, mock_notify, mock_set_steps,
-                                    mock_refresh, mock_touch):
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        self.node.clean_step = {}
-        self.node.provision_state = states.CLEANWAIT
-        self.node.save()
-        with task_manager.acquire(
-                self.context, self.node.uuid, shared=False) as task:
-            self.passthru.heartbeat(task, **kwargs)
-
-        mock_touch.assert_called_once_with(mock.ANY)
-        mock_refresh.assert_called_once_with(mock.ANY, task)
-        mock_notify.assert_called_once_with(mock.ANY, task)
-        mock_set_steps.assert_called_once_with(task)
-
-    @mock.patch.object(manager_utils, 'cleaning_error_handler')
-    @mock.patch.object(objects.node.Node, 'touch_provisioning', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       '_refresh_clean_steps', autospec=True)
-    @mock.patch.object(manager_utils, 'set_node_cleaning_steps', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
-    def test_heartbeat_resume_clean_fails(self, mock_notify, mock_set_steps,
-                                          mock_refresh, mock_touch,
-                                          mock_handler):
-        mocks = [mock_refresh, mock_set_steps, mock_notify]
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        self.node.clean_step = {}
-        self.node.provision_state = states.CLEANWAIT
-        self.node.save()
-        for i in range(len(mocks)):
-            before_failed_mocks = mocks[:i]
-            failed_mock = mocks[i]
-            after_failed_mocks = mocks[i + 1:]
-            failed_mock.side_effect = Exception()
-            with task_manager.acquire(
-                    self.context, self.node.uuid, shared=False) as task:
-                self.passthru.heartbeat(task, **kwargs)
-
-            mock_touch.assert_called_once_with(mock.ANY)
-            mock_handler.assert_called_once_with(task, mock.ANY)
-            for called in before_failed_mocks + [failed_mock]:
-                self.assertTrue(called.called)
-            for not_called in after_failed_mocks:
-                self.assertFalse(not_called.called)
-
-            # Reset mocks for the next interaction
-            for m in mocks + [mock_touch, mock_handler]:
-                m.reset_mock()
-            failed_mock.side_effect = None
-
-    @mock.patch.object(objects.node.Node, 'touch_provisioning', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'continue_cleaning', autospec=True)
-    def test_heartbeat_continue_cleaning(self, mock_continue, mock_touch):
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        self.node.clean_step = {
-            'priority': 10,
-            'interface': 'deploy',
-            'step': 'foo',
-            'reboot_requested': False
-        }
-        self.node.provision_state = states.CLEANWAIT
-        self.node.save()
-        with task_manager.acquire(
-                self.context, self.node.uuid, shared=False) as task:
-            self.passthru.heartbeat(task, **kwargs)
-
-        mock_touch.assert_called_once_with(mock.ANY)
-        mock_continue.assert_called_once_with(mock.ANY, task, **kwargs)
-
-    @mock.patch.object(manager_utils, 'cleaning_error_handler')
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'continue_cleaning', autospec=True)
-    def test_heartbeat_continue_cleaning_fails(self, mock_continue,
-                                               mock_handler):
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        self.node.clean_step = {
-            'priority': 10,
-            'interface': 'deploy',
-            'step': 'foo',
-            'reboot_requested': False
-        }
-
-        mock_continue.side_effect = Exception()
-
-        self.node.provision_state = states.CLEANWAIT
-        self.node.save()
-        with task_manager.acquire(
-                self.context, self.node.uuid, shared=False) as task:
-            self.passthru.heartbeat(task, **kwargs)
-
-        mock_continue.assert_called_once_with(mock.ANY, task, **kwargs)
-        mock_handler.assert_called_once_with(task, mock.ANY)
-
-    @mock.patch.object(manager_utils, 'cleaning_error_handler')
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'continue_cleaning', autospec=True)
-    def test_heartbeat_continue_cleaning_no_worker(self, mock_continue,
-                                                   mock_handler):
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        self.node.clean_step = {
-            'priority': 10,
-            'interface': 'deploy',
-            'step': 'foo',
-            'reboot_requested': False
-        }
-
-        mock_continue.side_effect = exception.NoFreeConductorWorker()
-
-        self.node.provision_state = states.CLEANWAIT
-        self.node.save()
-        with task_manager.acquire(
-                self.context, self.node.uuid, shared=False) as task:
-            self.passthru.heartbeat(task, **kwargs)
-
-        mock_continue.assert_called_once_with(mock.ANY, task, **kwargs)
-        self.assertFalse(mock_handler.called)
-
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'continue_deploy',
-                       autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'reboot_to_instance',
-                       autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
-    def test_heartbeat_noops_maintenance_mode(self, ncrc_mock, rti_mock,
-                                              cd_mock):
-        """Ensures that heartbeat() no-ops for a maintenance node."""
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-        self.node.maintenance = True
-        for state in (states.AVAILABLE, states.DEPLOYWAIT, states.DEPLOYING,
-                      states.CLEANING):
-            self.node.provision_state = state
-            self.node.save()
-            with task_manager.acquire(
-                    self.context, self.node['uuid'], shared=False) as task:
-                self.passthru.heartbeat(task, **kwargs)
-
-        self.assertEqual(0, ncrc_mock.call_count)
-        self.assertEqual(0, rti_mock.call_count)
-        self.assertEqual(0, cd_mock.call_count)
-
-    @mock.patch.object(objects.node.Node, 'touch_provisioning', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor, 'deploy_has_started',
-                       autospec=True)
-    def test_heartbeat_touch_provisioning(self, mock_deploy_started,
-                                          mock_touch):
-        mock_deploy_started.return_value = True
-        kwargs = {
-            'agent_url': 'http://127.0.0.1:9999/bar'
-        }
-
-        self.node.provision_state = states.DEPLOYWAIT
-        self.node.save()
-        with task_manager.acquire(
-                self.context, self.node.uuid, shared=False) as task:
-            self.passthru.heartbeat(task, **kwargs)
-
-        mock_touch.assert_called_once_with(mock.ANY)
-
     def test_vendor_passthru_vendor_routes(self):
         expected = ['heartbeat']
         with task_manager.acquire(self.context, self.node.uuid,
@@ -565,15 +351,249 @@ class TestBaseAgentVendor(db_base.DbTestCase):
             self.assertIsInstance(driver_routes, dict)
             self.assertEqual(expected, list(driver_routes))
 
+    def test_get_properties(self):
+        expected = agent_base_vendor.VENDOR_PROPERTIES
+        self.assertEqual(expected, self.passthru.get_properties())
+
+
+class AgentDeployMixinBaseTest(db_base.DbTestCase):
+
+    def setUp(self):
+        super(AgentDeployMixinBaseTest, self).setUp()
+        mgr_utils.mock_the_extension_manager(driver="fake_agent")
+        self.deploy = agent_base_vendor.AgentDeployMixin()
+        n = {
+            'driver': 'fake_agent',
+            'instance_info': INSTANCE_INFO,
+            'driver_info': DRIVER_INFO,
+            'driver_internal_info': DRIVER_INTERNAL_INFO,
+        }
+        self.node = object_utils.create_test_node(self.context, **n)
+
+
+class TestHeartbeat(AgentDeployMixinBaseTest):
+
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       'deploy_has_started', autospec=True)
+    @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin, 'deploy_is_done',
+                       autospec=True)
+    @mock.patch.object(agent_base_vendor.LOG, 'exception', autospec=True)
+    def test_heartbeat_deploy_done_fails(self, log_mock, done_mock,
+                                         failed_mock, deploy_started_mock):
+        deploy_started_mock.return_value = True
+        done_mock.side_effect = Exception('LlamaException')
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+            task.node.provision_state = states.DEPLOYWAIT
+            task.node.target_provision_state = states.ACTIVE
+            self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+            failed_mock.assert_called_once_with(task, mock.ANY)
+        log_mock.assert_called_once_with(
+            'Asynchronous exception for node '
+            '1be26c0b-03f2-4d2e-ae87-c02d7f33c123: Failed checking if deploy '
+            'is done. Exception: LlamaException')
+
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       'deploy_has_started', autospec=True)
+    @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin, 'deploy_is_done',
+                       autospec=True)
+    @mock.patch.object(agent_base_vendor.LOG, 'exception', autospec=True)
+    def test_heartbeat_deploy_done_raises_with_event(self, log_mock, done_mock,
+                                                     failed_mock,
+                                                     deploy_started_mock):
+        deploy_started_mock.return_value = True
+        with task_manager.acquire(
+                self.context, self.node['uuid'], shared=False) as task:
+
+            def driver_failure(*args, **kwargs):
+                # simulate driver failure that both advances the FSM
+                # and raises an exception
+                task.node.provision_state = states.DEPLOYFAIL
+                raise Exception('LlamaException')
+
+            task.node.provision_state = states.DEPLOYWAIT
+            task.node.target_provision_state = states.ACTIVE
+            done_mock.side_effect = driver_failure
+            self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+            # task.node.provision_state being set to DEPLOYFAIL
+            # within the driver_failue, hearbeat should not call
+            # deploy_utils.set_failed_state anymore
+            self.assertFalse(failed_mock.called)
+        log_mock.assert_called_once_with(
+            'Asynchronous exception for node '
+            '1be26c0b-03f2-4d2e-ae87-c02d7f33c123: Failed checking if deploy '
+            'is done. Exception: LlamaException')
+
+    @mock.patch.object(objects.node.Node, 'touch_provisioning', autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       '_refresh_clean_steps', autospec=True)
+    @mock.patch.object(manager_utils, 'set_node_cleaning_steps', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
+    def test_heartbeat_resume_clean(self, mock_notify, mock_set_steps,
+                                    mock_refresh, mock_touch):
+        self.node.clean_step = {}
+        self.node.provision_state = states.CLEANWAIT
+        self.node.save()
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+
+        mock_touch.assert_called_once_with(mock.ANY)
+        mock_refresh.assert_called_once_with(mock.ANY, task)
+        mock_notify.assert_called_once_with(task)
+        mock_set_steps.assert_called_once_with(task)
+
+    @mock.patch.object(manager_utils, 'cleaning_error_handler')
+    @mock.patch.object(objects.node.Node, 'touch_provisioning', autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       '_refresh_clean_steps', autospec=True)
+    @mock.patch.object(manager_utils, 'set_node_cleaning_steps', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
+    def test_heartbeat_resume_clean_fails(self, mock_notify, mock_set_steps,
+                                          mock_refresh, mock_touch,
+                                          mock_handler):
+        mocks = [mock_refresh, mock_set_steps, mock_notify]
+        self.node.clean_step = {}
+        self.node.provision_state = states.CLEANWAIT
+        self.node.save()
+        for i in range(len(mocks)):
+            before_failed_mocks = mocks[:i]
+            failed_mock = mocks[i]
+            after_failed_mocks = mocks[i + 1:]
+            failed_mock.side_effect = Exception()
+            with task_manager.acquire(
+                    self.context, self.node.uuid, shared=False) as task:
+                self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+
+            mock_touch.assert_called_once_with(mock.ANY)
+            mock_handler.assert_called_once_with(task, mock.ANY)
+            for called in before_failed_mocks + [failed_mock]:
+                self.assertTrue(called.called)
+            for not_called in after_failed_mocks:
+                self.assertFalse(not_called.called)
+
+            # Reset mocks for the next interaction
+            for m in mocks + [mock_touch, mock_handler]:
+                m.reset_mock()
+            failed_mock.side_effect = None
+
+    @mock.patch.object(objects.node.Node, 'touch_provisioning', autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       'continue_cleaning', autospec=True)
+    def test_heartbeat_continue_cleaning(self, mock_continue, mock_touch):
+        self.node.clean_step = {
+            'priority': 10,
+            'interface': 'deploy',
+            'step': 'foo',
+            'reboot_requested': False
+        }
+        self.node.provision_state = states.CLEANWAIT
+        self.node.save()
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+
+        mock_touch.assert_called_once_with(mock.ANY)
+        mock_continue.assert_called_once_with(mock.ANY, task)
+
+    @mock.patch.object(manager_utils, 'cleaning_error_handler')
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       'continue_cleaning', autospec=True)
+    def test_heartbeat_continue_cleaning_fails(self, mock_continue,
+                                               mock_handler):
+        self.node.clean_step = {
+            'priority': 10,
+            'interface': 'deploy',
+            'step': 'foo',
+            'reboot_requested': False
+        }
+
+        mock_continue.side_effect = Exception()
+
+        self.node.provision_state = states.CLEANWAIT
+        self.node.save()
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+
+        mock_continue.assert_called_once_with(mock.ANY, task)
+        mock_handler.assert_called_once_with(task, mock.ANY)
+
+    @mock.patch.object(manager_utils, 'cleaning_error_handler')
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       'continue_cleaning', autospec=True)
+    def test_heartbeat_continue_cleaning_no_worker(self, mock_continue,
+                                                   mock_handler):
+        self.node.clean_step = {
+            'priority': 10,
+            'interface': 'deploy',
+            'step': 'foo',
+            'reboot_requested': False
+        }
+
+        mock_continue.side_effect = exception.NoFreeConductorWorker()
+
+        self.node.provision_state = states.CLEANWAIT
+        self.node.save()
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+
+        mock_continue.assert_called_once_with(mock.ANY, task)
+        self.assertFalse(mock_handler.called)
+
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin, 'continue_deploy',
+                       autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       'reboot_to_instance', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
+    def test_heartbeat_noops_maintenance_mode(self, ncrc_mock, rti_mock,
+                                              cd_mock):
+        """Ensures that heartbeat() no-ops for a maintenance node."""
+        self.node.maintenance = True
+        for state in (states.AVAILABLE, states.DEPLOYWAIT, states.DEPLOYING,
+                      states.CLEANING):
+            self.node.provision_state = state
+            self.node.save()
+            with task_manager.acquire(
+                    self.context, self.node['uuid'], shared=False) as task:
+                self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+
+        self.assertEqual(0, ncrc_mock.call_count)
+        self.assertEqual(0, rti_mock.call_count)
+        self.assertEqual(0, cd_mock.call_count)
+
+    @mock.patch.object(objects.node.Node, 'touch_provisioning', autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
+                       'deploy_has_started', autospec=True)
+    def test_heartbeat_touch_provisioning(self, mock_deploy_started,
+                                          mock_touch):
+        mock_deploy_started.return_value = True
+
+        self.node.provision_state = states.DEPLOYWAIT
+        self.node.save()
+        with task_manager.acquire(
+                self.context, self.node.uuid, shared=False) as task:
+            self.deploy.heartbeat(task, 'http://127.0.0.1:8080')
+
+        mock_touch.assert_called_once_with(mock.ANY)
+
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(time, 'sleep', lambda seconds: None)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(fake.FakePower, 'get_power_state',
                        spec=types.FunctionType)
     @mock.patch.object(agent_client.AgentClient, 'power_off',
                        spec=types.FunctionType)
-    def test_reboot_and_finish_deploy(self, power_off_mock,
-                                      get_power_state_mock,
-                                      node_power_action_mock):
+    def test_reboot_and_finish_deploy(
+            self, power_off_mock, get_power_state_mock,
+            node_power_action_mock, mock_collect):
+        cfg.CONF.set_override('deploy_logs_collect', 'always', 'agent')
         self.node.provision_state = states.DEPLOYING
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
@@ -581,78 +601,113 @@ class TestBaseAgentVendor(db_base.DbTestCase):
                                   shared=True) as task:
             get_power_state_mock.side_effect = [states.POWER_ON,
                                                 states.POWER_OFF]
-            self.passthru.reboot_and_finish_deploy(task)
+            self.deploy.reboot_and_finish_deploy(task)
             power_off_mock.assert_called_once_with(task.node)
             self.assertEqual(2, get_power_state_mock.call_count)
             node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+                task, states.POWER_ON)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
+            mock_collect.assert_called_once_with(task.node)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(time, 'sleep', lambda seconds: None)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(fake.FakePower, 'get_power_state',
                        spec=types.FunctionType)
     @mock.patch.object(agent_client.AgentClient, 'power_off',
                        spec=types.FunctionType)
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'remove_provisioning_network', spec_set=True, autospec=True)
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'configure_tenant_networks', spec_set=True, autospec=True)
     def test_reboot_and_finish_deploy_soft_poweroff_doesnt_complete(
-            self, power_off_mock, get_power_state_mock,
-            node_power_action_mock):
+            self, configure_tenant_net_mock, remove_provisioning_net_mock,
+            power_off_mock, get_power_state_mock,
+            node_power_action_mock, mock_collect):
         self.node.provision_state = states.DEPLOYING
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             get_power_state_mock.return_value = states.POWER_ON
-            self.passthru.reboot_and_finish_deploy(task)
+            self.deploy.reboot_and_finish_deploy(task)
             power_off_mock.assert_called_once_with(task.node)
             self.assertEqual(7, get_power_state_mock.call_count)
-            node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+            node_power_action_mock.assert_has_calls([
+                mock.call(task, states.POWER_OFF),
+                mock.call(task, states.POWER_ON)])
+            remove_provisioning_net_mock.assert_called_once_with(mock.ANY,
+                                                                 task)
+            configure_tenant_net_mock.assert_called_once_with(mock.ANY, task)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
+            self.assertFalse(mock_collect.called)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'power_off',
                        spec=types.FunctionType)
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'remove_provisioning_network', spec_set=True, autospec=True)
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'configure_tenant_networks', spec_set=True, autospec=True)
     def test_reboot_and_finish_deploy_soft_poweroff_fails(
-            self, power_off_mock, node_power_action_mock):
-        power_off_mock.side_effect = iter([RuntimeError("boom")])
+            self, configure_tenant_net_mock, remove_provisioning_net_mock,
+            power_off_mock, node_power_action_mock, mock_collect):
+        power_off_mock.side_effect = RuntimeError("boom")
         self.node.provision_state = states.DEPLOYING
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
-            self.passthru.reboot_and_finish_deploy(task)
+            self.deploy.reboot_and_finish_deploy(task)
             power_off_mock.assert_called_once_with(task.node)
-            node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+            node_power_action_mock.assert_has_calls([
+                mock.call(task, states.POWER_OFF),
+                mock.call(task, states.POWER_ON)])
+            remove_provisioning_net_mock.assert_called_once_with(mock.ANY,
+                                                                 task)
+            configure_tenant_net_mock.assert_called_once_with(mock.ANY, task)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
+            self.assertFalse(mock_collect.called)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(time, 'sleep', lambda seconds: None)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(fake.FakePower, 'get_power_state',
                        spec=types.FunctionType)
     @mock.patch.object(agent_client.AgentClient, 'power_off',
                        spec=types.FunctionType)
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'remove_provisioning_network', spec_set=True, autospec=True)
+    @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.'
+                'configure_tenant_networks', spec_set=True, autospec=True)
     def test_reboot_and_finish_deploy_get_power_state_fails(
-            self, power_off_mock, get_power_state_mock,
-            node_power_action_mock):
+            self, configure_tenant_net_mock, remove_provisioning_net_mock,
+            power_off_mock, get_power_state_mock, node_power_action_mock,
+            mock_collect):
         self.node.provision_state = states.DEPLOYING
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
-            get_power_state_mock.side_effect = iter([RuntimeError("boom")])
-            self.passthru.reboot_and_finish_deploy(task)
+            get_power_state_mock.side_effect = RuntimeError("boom")
+            self.deploy.reboot_and_finish_deploy(task)
             power_off_mock.assert_called_once_with(task.node)
             self.assertEqual(7, get_power_state_mock.call_count)
-            node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+            node_power_action_mock.assert_has_calls([
+                mock.call(task, states.POWER_OFF),
+                mock.call(task, states.POWER_ON)])
+            remove_provisioning_net_mock.assert_called_once_with(mock.ANY,
+                                                                 task)
+            configure_tenant_net_mock.assert_called_once_with(mock.ANY, task)
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
+            self.assertFalse(mock_collect.called)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(time, 'sleep', lambda seconds: None)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(fake.FakePower, 'get_power_state',
@@ -661,30 +716,31 @@ class TestBaseAgentVendor(db_base.DbTestCase):
                        spec=types.FunctionType)
     def test_reboot_and_finish_deploy_power_action_fails(
             self, power_off_mock, get_power_state_mock,
-            node_power_action_mock):
+            node_power_action_mock, mock_collect):
         self.node.provision_state = states.DEPLOYING
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             get_power_state_mock.return_value = states.POWER_ON
-            node_power_action_mock.side_effect = iter([RuntimeError("boom")])
+            node_power_action_mock.side_effect = RuntimeError("boom")
             self.assertRaises(exception.InstanceDeployFailure,
-                              self.passthru.reboot_and_finish_deploy,
+                              self.deploy.reboot_and_finish_deploy,
                               task)
             power_off_mock.assert_called_once_with(task.node)
             self.assertEqual(7, get_power_state_mock.call_count)
             node_power_action_mock.assert_has_calls([
-                mock.call(task, states.REBOOT),
                 mock.call(task, states.POWER_OFF)])
             self.assertEqual(states.DEPLOYFAIL, task.node.provision_state)
             self.assertEqual(states.ACTIVE, task.node.target_provision_state)
+            mock_collect.assert_called_once_with(task.node)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'sync',
                        spec=types.FunctionType)
     def test_reboot_and_finish_deploy_power_action_oob_power_off(
-            self, sync_mock, node_power_action_mock):
+            self, sync_mock, node_power_action_mock, mock_collect):
         # Enable force power off
         driver_info = self.node.driver_info
         driver_info['deploy_forces_oob_reboot'] = True
@@ -695,20 +751,24 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
-            self.passthru.reboot_and_finish_deploy(task)
+            self.deploy.reboot_and_finish_deploy(task)
 
             sync_mock.assert_called_once_with(task.node)
-            node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+            node_power_action_mock.assert_has_calls([
+                mock.call(task, states.POWER_OFF),
+                mock.call(task, states.POWER_ON),
+            ])
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
+            self.assertFalse(mock_collect.called)
 
+    @mock.patch.object(driver_utils, 'collect_ramdisk_logs', autospec=True)
     @mock.patch.object(agent_base_vendor.LOG, 'warning', autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'sync',
                        spec=types.FunctionType)
     def test_reboot_and_finish_deploy_power_action_oob_power_off_failed(
-            self, sync_mock, node_power_action_mock, log_mock):
+            self, sync_mock, node_power_action_mock, log_mock, mock_collect):
         # Enable force power off
         driver_info = self.node.driver_info
         driver_info['deploy_forces_oob_reboot'] = True
@@ -720,11 +780,13 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:
             sync_mock.return_value = {'faultstring': 'Unknown command: blah'}
-            self.passthru.reboot_and_finish_deploy(task)
+            self.deploy.reboot_and_finish_deploy(task)
 
             sync_mock.assert_called_once_with(task.node)
-            node_power_action_mock.assert_called_once_with(
-                task, states.REBOOT)
+            node_power_action_mock.assert_has_calls([
+                mock.call(task, states.POWER_OFF),
+                mock.call(task, states.POWER_ON),
+            ])
             self.assertEqual(states.ACTIVE, task.node.provision_state)
             self.assertEqual(states.NOSTATE, task.node.target_provision_state)
             log_error = ('The version of the IPA ramdisk used in the '
@@ -733,6 +795,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
                 'Failed to flush the file system prior to hard rebooting the '
                 'node %(node)s. Error: %(error)s',
                 {'node': task.node.uuid, 'error': log_error})
+            self.assertFalse(mock_collect.called)
 
     @mock.patch.object(agent_client.AgentClient, 'install_bootloader',
                        autospec=True)
@@ -744,8 +807,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
             task.node.driver_internal_info['is_whole_disk_image'] = False
-            self.passthru.configure_local_boot(task,
-                                               root_uuid='some-root-uuid')
+            self.deploy.configure_local_boot(task, root_uuid='some-root-uuid')
             try_set_boot_device_mock.assert_called_once_with(
                 task, boot_devices.DISK)
             install_bootloader_mock.assert_called_once_with(
@@ -762,7 +824,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
             task.node.driver_internal_info['is_whole_disk_image'] = False
-            self.passthru.configure_local_boot(
+            self.deploy.configure_local_boot(
                 task, root_uuid='some-root-uuid',
                 efi_system_part_uuid='efi-system-part-uuid')
             try_set_boot_device_mock.assert_called_once_with(
@@ -778,7 +840,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
             self, install_bootloader_mock, try_set_boot_device_mock):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.configure_local_boot(task)
+            self.deploy.configure_local_boot(task)
             self.assertFalse(install_bootloader_mock.called)
             try_set_boot_device_mock.assert_called_once_with(
                 task, boot_devices.DISK)
@@ -791,15 +853,17 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
             task.node.driver_internal_info['is_whole_disk_image'] = False
-            self.passthru.configure_local_boot(task)
+            self.deploy.configure_local_boot(task)
             self.assertFalse(install_bootloader_mock.called)
             try_set_boot_device_mock.assert_called_once_with(
                 task, boot_devices.DISK)
 
+    @mock.patch.object(agent_client.AgentClient, 'collect_system_logs',
+                       autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'install_bootloader',
                        autospec=True)
     def test_configure_local_boot_boot_loader_install_fail(
-            self, install_bootloader_mock):
+            self, install_bootloader_mock, collect_logs_mock):
         install_bootloader_mock.return_value = {
             'command_status': 'FAILED', 'command_error': 'boom'}
         self.node.provision_state = states.DEPLOYING
@@ -809,22 +873,26 @@ class TestBaseAgentVendor(db_base.DbTestCase):
                                   shared=False) as task:
             task.node.driver_internal_info['is_whole_disk_image'] = False
             self.assertRaises(exception.InstanceDeployFailure,
-                              self.passthru.configure_local_boot,
+                              self.deploy.configure_local_boot,
                               task, root_uuid='some-root-uuid')
             install_bootloader_mock.assert_called_once_with(
                 mock.ANY, task.node, root_uuid='some-root-uuid',
                 efi_system_part_uuid=None)
+            collect_logs_mock.assert_called_once_with(mock.ANY, task.node)
             self.assertEqual(states.DEPLOYFAIL, task.node.provision_state)
             self.assertEqual(states.ACTIVE, task.node.target_provision_state)
 
+    @mock.patch.object(agent_client.AgentClient, 'collect_system_logs',
+                       autospec=True)
     @mock.patch.object(deploy_utils, 'try_set_boot_device', autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'install_bootloader',
                        autospec=True)
     def test_configure_local_boot_set_boot_device_fail(
-            self, install_bootloader_mock, try_set_boot_device_mock):
+            self, install_bootloader_mock, try_set_boot_device_mock,
+            collect_logs_mock):
         install_bootloader_mock.return_value = {
             'command_status': 'SUCCESS', 'command_error': None}
-        try_set_boot_device_mock.side_effect = iter([RuntimeError('error')])
+        try_set_boot_device_mock.side_effect = RuntimeError('error')
         self.node.provision_state = states.DEPLOYING
         self.node.target_provision_state = states.ACTIVE
         self.node.save()
@@ -832,20 +900,21 @@ class TestBaseAgentVendor(db_base.DbTestCase):
                                   shared=False) as task:
             task.node.driver_internal_info['is_whole_disk_image'] = False
             self.assertRaises(exception.InstanceDeployFailure,
-                              self.passthru.configure_local_boot,
+                              self.deploy.configure_local_boot,
                               task, root_uuid='some-root-uuid')
             install_bootloader_mock.assert_called_once_with(
                 mock.ANY, task.node, root_uuid='some-root-uuid',
                 efi_system_part_uuid=None)
             try_set_boot_device_mock.assert_called_once_with(
                 task, boot_devices.DISK)
+            collect_logs_mock.assert_called_once_with(mock.ANY, task.node)
             self.assertEqual(states.DEPLOYFAIL, task.node.provision_state)
             self.assertEqual(states.ACTIVE, task.node.target_provision_state)
 
     @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'prepare_instance', autospec=True)
     @mock.patch.object(deploy_utils, 'get_boot_option', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
                        'configure_local_boot', autospec=True)
     def test_prepare_instance_to_boot_netboot(self, configure_mock,
                                               boot_option_mock,
@@ -860,8 +929,8 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         efi_system_part_uuid = 'efi_sys_uuid'
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.prepare_instance_to_boot(task, root_uuid,
-                                                   efi_system_part_uuid)
+            self.deploy.prepare_instance_to_boot(task, root_uuid,
+                                                 efi_system_part_uuid)
             self.assertFalse(configure_mock.called)
             boot_option_mock.assert_called_once_with(task.node)
             prepare_instance_mock.assert_called_once_with(task.driver.boot,
@@ -871,7 +940,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
     @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'prepare_instance', autospec=True)
     @mock.patch.object(deploy_utils, 'get_boot_option', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
                        'configure_local_boot', autospec=True)
     def test_prepare_instance_to_boot_localboot(self, configure_mock,
                                                 boot_option_mock,
@@ -886,11 +955,12 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         efi_system_part_uuid = 'efi_sys_uuid'
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.prepare_instance_to_boot(task, root_uuid,
-                                                   efi_system_part_uuid)
-            configure_mock.assert_called_once_with(self.passthru, task,
-                                                   root_uuid,
-                                                   efi_system_part_uuid)
+            self.deploy.prepare_instance_to_boot(task, root_uuid,
+                                                 efi_system_part_uuid)
+            configure_mock.assert_called_once_with(
+                self.deploy, task,
+                root_uuid=root_uuid,
+                efi_system_part_uuid=efi_system_part_uuid)
             boot_option_mock.assert_called_once_with(task.node)
             prepare_instance_mock.assert_called_once_with(task.driver.boot,
                                                           task)
@@ -899,7 +969,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
     @mock.patch.object(deploy_utils, 'set_failed_state', autospec=True)
     @mock.patch.object(pxe.PXEBoot, 'prepare_instance', autospec=True)
     @mock.patch.object(deploy_utils, 'get_boot_option', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
                        'configure_local_boot', autospec=True)
     def test_prepare_instance_to_boot_configure_fails(self, configure_mock,
                                                       boot_option_mock,
@@ -920,17 +990,18 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
             self.assertRaises(exception.InstanceDeployFailure,
-                              self.passthru.prepare_instance_to_boot, task,
+                              self.deploy.prepare_instance_to_boot, task,
                               root_uuid, efi_system_part_uuid)
-            configure_mock.assert_called_once_with(self.passthru, task,
-                                                   root_uuid,
-                                                   efi_system_part_uuid)
+            configure_mock.assert_called_once_with(
+                self.deploy, task,
+                root_uuid=root_uuid,
+                efi_system_part_uuid=efi_system_part_uuid)
             boot_option_mock.assert_called_once_with(task.node)
             self.assertFalse(prepare_mock.called)
             self.assertFalse(failed_state_mock.called)
 
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
                        autospec=True)
     def test_continue_cleaning(self, status_mock, notify_mock):
@@ -951,25 +1022,25 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
-            notify_mock.assert_called_once_with(mock.ANY, task)
+            self.deploy.continue_cleaning(task)
+            notify_mock.assert_called_once_with(task)
 
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     def test__cleaning_reboot(self, mock_reboot):
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru._cleaning_reboot(task)
+            agent_base_vendor._cleaning_reboot(task)
             mock_reboot.assert_called_once_with(task, states.REBOOT)
             self.assertTrue(task.node.driver_internal_info['cleaning_reboot'])
 
     @mock.patch.object(manager_utils, 'cleaning_error_handler', autospec=True)
     @mock.patch.object(manager_utils, 'node_power_action', autospec=True)
     def test__cleaning_reboot_fail(self, mock_reboot, mock_handler):
-        mock_reboot.side_effect = iter([RuntimeError("broken")])
+        mock_reboot.side_effect = RuntimeError("broken")
 
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru._cleaning_reboot(task)
+            agent_base_vendor._cleaning_reboot(task)
             mock_reboot.assert_called_once_with(task, states.REBOOT)
             mock_handler.assert_called_once_with(task, mock.ANY)
             self.assertNotIn('cleaning_reboot',
@@ -996,11 +1067,11 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
+            self.deploy.continue_cleaning(task)
             reboot_mock.assert_called_once_with(task, states.REBOOT)
 
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
                        autospec=True)
     def test_continue_cleaning_after_reboot(self, status_mock, notify_mock):
@@ -1019,15 +1090,15 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         status_mock.return_value = []
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
-            notify_mock.assert_called_once_with(mock.ANY, task)
+            self.deploy.continue_cleaning(task)
+            notify_mock.assert_called_once_with(task)
             self.assertNotIn('cleaning_reboot',
                              task.node.driver_internal_info)
 
     @mock.patch.object(agent_base_vendor,
                        '_get_post_clean_step_hook', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
                        autospec=True)
     def test_continue_cleaning_with_hook(
@@ -1047,14 +1118,14 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         get_hook_mock.return_value = hook_mock
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
+            self.deploy.continue_cleaning(task)
 
             get_hook_mock.assert_called_once_with(task.node)
             hook_mock.assert_called_once_with(task, command_status)
-            notify_mock.assert_called_once_with(mock.ANY, task)
+            notify_mock.assert_called_once_with(task)
 
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
     @mock.patch.object(agent_base_vendor,
                        '_get_post_clean_step_hook', autospec=True)
     @mock.patch.object(manager_utils, 'cleaning_error_handler', autospec=True)
@@ -1079,15 +1150,15 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         get_hook_mock.return_value = hook_mock
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
+            self.deploy.continue_cleaning(task)
 
             get_hook_mock.assert_called_once_with(task.node)
             hook_mock.assert_called_once_with(task, command_status)
             error_handler_mock.assert_called_once_with(task, mock.ANY)
             self.assertFalse(notify_mock.called)
 
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
                        autospec=True)
     def test_continue_cleaning_old_command(self, status_mock, notify_mock):
@@ -1112,11 +1183,11 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
+            self.deploy.continue_cleaning(task)
             self.assertFalse(notify_mock.called)
 
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
                        autospec=True)
     def test_continue_cleaning_running(self, status_mock, notify_mock):
@@ -1128,7 +1199,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
+            self.deploy.continue_cleaning(task)
             self.assertFalse(notify_mock.called)
 
     @mock.patch.object(manager_utils, 'cleaning_error_handler', autospec=True)
@@ -1143,13 +1214,13 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
+            self.deploy.continue_cleaning(task)
             error_mock.assert_called_once_with(task, mock.ANY)
 
     @mock.patch.object(manager_utils, 'set_node_cleaning_steps', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
                        '_refresh_clean_steps', autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
                        autospec=True)
@@ -1166,8 +1237,8 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
-            notify_mock.assert_called_once_with(mock.ANY, task)
+            self.deploy.continue_cleaning(task)
+            notify_mock.assert_called_once_with(task)
             refresh_steps_mock.assert_called_once_with(mock.ANY, task)
             if manual:
                 self.assertFalse(
@@ -1186,9 +1257,9 @@ class TestBaseAgentVendor(db_base.DbTestCase):
 
     @mock.patch.object(manager_utils, 'cleaning_error_handler', autospec=True)
     @mock.patch.object(manager_utils, 'set_node_cleaning_steps', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
-                       'notify_conductor_resume_clean', autospec=True)
-    @mock.patch.object(agent_base_vendor.BaseAgentVendor,
+    @mock.patch.object(agent_base_vendor, '_notify_conductor_resume_clean',
+                       autospec=True)
+    @mock.patch.object(agent_base_vendor.AgentDeployMixin,
                        '_refresh_clean_steps', autospec=True)
     @mock.patch.object(agent_client.AgentClient, 'get_commands_status',
                        autospec=True)
@@ -1207,7 +1278,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         self.node.save()
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
+            self.deploy.continue_cleaning(task)
 
             status_mock.assert_called_once_with(mock.ANY, task.node)
             refresh_steps_mock.assert_called_once_with(mock.ANY, task)
@@ -1227,7 +1298,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         }]
         with task_manager.acquire(self.context, self.node['uuid'],
                                   shared=False) as task:
-            self.passthru.continue_cleaning(task)
+            self.deploy.continue_cleaning(task)
             error_mock.assert_called_once_with(task, mock.ANY)
 
     def _test_clean_step_hook(self, hook_dict_mock):
@@ -1310,7 +1381,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         self.assertIsNone(hook_returned)
 
 
-class TestRefreshCleanSteps(TestBaseAgentVendor):
+class TestRefreshCleanSteps(AgentDeployMixinBaseTest):
 
     def setUp(self):
         super(TestRefreshCleanSteps, self).setUp()
@@ -1345,7 +1416,7 @@ class TestRefreshCleanSteps(TestBaseAgentVendor):
 
         with task_manager.acquire(
                 self.context, self.node.uuid, shared=False) as task:
-            self.passthru._refresh_clean_steps(task)
+            self.deploy._refresh_clean_steps(task)
 
             client_mock.assert_called_once_with(mock.ANY, task.node,
                                                 task.ports)
@@ -1375,7 +1446,7 @@ class TestRefreshCleanSteps(TestBaseAgentVendor):
                 self.context, self.node.uuid, shared=False) as task:
             self.assertRaisesRegex(exception.NodeCleaningFailure,
                                    'invalid result',
-                                   self.passthru._refresh_clean_steps,
+                                   self.deploy._refresh_clean_steps,
                                    task)
             client_mock.assert_called_once_with(mock.ANY, task.node,
                                                 task.ports)
@@ -1392,11 +1463,7 @@ class TestRefreshCleanSteps(TestBaseAgentVendor):
                 self.context, self.node.uuid, shared=False) as task:
             self.assertRaisesRegex(exception.NodeCleaningFailure,
                                    'invalid clean step',
-                                   self.passthru._refresh_clean_steps,
+                                   self.deploy._refresh_clean_steps,
                                    task)
             client_mock.assert_called_once_with(mock.ANY, task.node,
                                                 task.ports)
-
-    def test_get_properties(self):
-        expected = agent_base_vendor.VENDOR_PROPERTIES
-        self.assertEqual(expected, self.passthru.get_properties())

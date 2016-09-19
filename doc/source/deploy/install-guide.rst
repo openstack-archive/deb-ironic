@@ -110,10 +110,20 @@ Configure the Identity service for the Bare Metal service
    and replace IRONIC_NODE with your Bare Metal service's API node::
 
     openstack endpoint create --region RegionOne \
+    baremetal admin http://IRONIC_NODE:6385
+    openstack endpoint create --region RegionOne \
+    baremetal public http://IRONIC_NODE:6385
+    openstack endpoint create --region RegionOne \
+    baremetal internal http://IRONIC_NODE:6385
+
+   If only keystone v2 API is available, use this command instead::
+
+    openstack endpoint create --region RegionOne \
     --publicurl http://IRONIC_NODE:6385 \
     --internalurl http://IRONIC_NODE:6385 \
     --adminurl http://IRONIC_NODE:6385 \
     baremetal
+
 
 Set up the database for Bare Metal
 ----------------------------------
@@ -424,6 +434,9 @@ Bare Metal service comes with an example file for configuring the
 
   - Modify the ``Directory`` directive to set the path to the Ironic API code.
 
+  - Modify the ``ErrorLog`` and ``CustomLog`` to redirect the logs
+    to the right directory (on Red Hat systems this is usually under
+    /var/log/httpd).
 
 4. Enable the apache ``ironic`` in site and reload::
 
@@ -466,8 +479,8 @@ Compute service's controller nodes and compute nodes.*
     firewall_driver=nova.virt.firewall.NoopFirewallDriver
 
     # The scheduler host manager class to use (string value)
-    #scheduler_host_manager=nova.scheduler.host_manager.HostManager
-    scheduler_host_manager=nova.scheduler.ironic_host_manager.IronicHostManager
+    #scheduler_host_manager=host_manager
+    scheduler_host_manager=ironic_host_manager
 
     # Virtual ram to physical ram allocation ratio which affects
     # all ram filters. This configuration specifies a global ratio
@@ -823,10 +836,10 @@ node(s) where ``ironic-conductor`` is running.
         sudo apt-get install xinetd tftpd-hpa syslinux-common pxelinux
 
     Fedora 21/RHEL7/CentOS7:
-        sudo yum install tftp-server syslinux-tftpboot
+        sudo yum install tftp-server syslinux-tftpboot xinetd
 
     Fedora 22 or higher:
-         sudo dnf install tftp-server syslinux-tftpboot
+         sudo dnf install tftp-server syslinux-tftpboot xinetd
 
 #. Using xinetd to provide a tftp server setup to serve ``/tftpboot``.
    Create or edit ``/etc/xinetd.d/tftp`` as below::
@@ -1443,7 +1456,7 @@ reboots won't happen via PXE or Virtual Media. Instead, it will boot from a
 local boot loader installed on the disk.
 
 It's important to note that in order for this to work the image being
-deployed with Bare Metal serivce **must** contain ``grub2`` installed within it.
+deployed with Bare Metal service **must** contain ``grub2`` installed within it.
 
 Enabling the local boot is different when Bare Metal service is used with
 Compute service and without it.
@@ -1905,6 +1918,9 @@ deployment. The list of support hints is:
 * wwn (STRING): unique storage identifier
 * wwn_with_extension (STRING): unique storage identifier with the vendor extension appended
 * wwn_vendor_extension (STRING): unique vendor storage identifier
+* rotational (BOOLEAN): whether it's a rotational device or not. This
+  hint makes it easier to distinguish HDDs (rotational) and SSDs (not
+  rotational) when choosing which disk Ironic should deploy the image onto.
 * name (STRING): the device name, e.g /dev/md0
 
 
@@ -2191,10 +2207,11 @@ Enabling the configuration drive (configdrive)
 Starting with the Kilo release, the Bare Metal service supports exposing
 a configuration drive image to the instances.
 
-Configuration drive can store metadata and attaches to the instance when it
-boots. One use case for using the configuration drive is to expose a
-networking configuration when you do not use DHCP to assign IP addresses to
-instances.
+The configuration drive is used to store instance-specific metadata and is present to
+the instance as a disk partition labeled ``config-2``. The configuration drive has
+a maximum size of 64MB. One use case for using the configuration drive is to
+expose a networking configuration when you do not use DHCP to assign IP
+addresses to instances.
 
 The configuration drive is usually used in conjunction with the Compute
 service, but the Bare Metal service also offers a standalone way of using it.
@@ -2204,14 +2221,10 @@ The following sections will describe both methods.
 When used with Compute service
 ------------------------------
 
-To enable the configuration drive and passes user customized script when deploying an
-instance, pass ``--config-drive true`` parameter and ``--user-data`` to the
-``nova boot`` command, for example::
+To enable the configuration drive for a specific request, pass
+``--config-drive true`` parameter to the ``nova boot`` command, for example::
 
-    nova boot --config-drive true --flavor baremetal --image test-image --user-data ./my-script instance-1
-
-Then ``my-script`` is accessible from the configuration drive and could be
-performed automatically by cloud-init if it is integrated with the instance image.
+    nova boot --config-drive true --flavor baremetal --image test-image instance-1
 
 It's also possible to enable the configuration drive automatically on
 all instances by configuring the ``OpenStack Compute service`` to always
@@ -2222,6 +2235,10 @@ create a configuration drive by setting the following option in the
     ...
 
     force_config_drive=True
+
+In some cases, you may wish to pass a user customized script when deploying an instance.
+To do this, pass ``--user-data /path/to/file`` to the ``nova boot`` command.
+More information can be found at `Provide user data to instances <http://docs.openstack.org/user-guide/cli_provide_user_data_to_instances.html>`_
 
 
 When used standalone
@@ -2297,6 +2314,72 @@ but in order to use it we should follow some rules:
   <http://docs.openstack.org/developer/diskimage-builder/elements/cloud-init-datasources/README.html>`_.
 
 .. _`expected format`: http://docs.openstack.org/user-guide/cli_config_drive.html#openstack-metadata-format
+
+
+Appending kernel parameters to boot instances
+=============================================
+
+The Bare Metal service supports passing custom kernel parameters to boot instances to fit
+users' requirements. The way to append the kernel parameters is depending on how to boot instances.
+
+Network boot
+------------
+Currently, the Bare Metal service supports assigning unified kernel parameters to PXE
+booted instances by:
+
+* Modifying the ``[pxe]/pxe_append_params`` configuration option, for example::
+
+    [pxe]
+
+    pxe_append_params = quiet splash
+
+* Copying a template from shipped templates to another place, for example::
+
+    https://git.openstack.org/cgit/openstack/ironic/tree/ironic/drivers/modules/pxe_config.template
+
+  Making the modifications and pointing to the custom template via the configuration
+  options: ``[pxe]/pxe_config_template`` and ``[pxe]/uefi_pxe_config_template``.
+
+Local boot
+----------
+For local boot instances, users can make use of configuration drive
+(see `Enabling the configuration drive (configdrive)`_) to pass a custom
+script to append kernel parameters when creating an instance. This is more
+flexible and can vary per instance.
+Here is an example for grub2 with ubuntu, users can customize it
+to fit their use case:
+
+    .. code:: python
+
+     #!/usr/bin/env python
+     import os
+
+     # Default grub2 config file in Ubuntu
+     grub_file = '/etc/default/grub'
+     # Add parameters here to pass to instance.
+     kernel_parameters = ['quiet', 'splash']
+     grub_cmd = 'GRUB_CMDLINE_LINUX'
+     old_grub_file = grub_file+'~'
+     os.rename(grub_file, old_grub_file)
+     cmdline_existed = False
+     with open(grub_file, 'w') as writer, \
+            open(old_grub_file, 'r') as reader:
+            for line in reader:
+                key = line.split('=')[0]
+                if key == grub_cmd:
+                    #If there is already some value:
+                    if line.strip()[-1] == '"':
+                        line = line.strip()[:-1] + ' ' + ' '.join(kernel_parameters) + '"'
+                    cmdline_existed = True
+                writer.write(line)
+            if not cmdline_existed:
+                line = grub_cmd + '=' + '"' + ' '.join(kernel_parameters) + '"'
+                writer.write(line)
+
+     os.remove(old_grub_file)
+     os.system('update-grub')
+     os.system('reboot')
+
 
 .. _BuildingDeployRamdisk:
 

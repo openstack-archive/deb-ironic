@@ -271,8 +271,7 @@ class UpdateNodeTestCase(mgr_utils.ServiceSetUpMixin,
         node = obj_utils.create_test_node(self.context,
                                           driver=existing_driver,
                                           extra={'test': 'one'},
-                                          instance_uuid=None,
-                                          task_state=states.POWER_ON)
+                                          instance_uuid=None)
         # check that it fails because driver not found
         node.driver = wrong_driver
         node.driver_info = {}
@@ -284,6 +283,51 @@ class UpdateNodeTestCase(mgr_utils.ServiceSetUpMixin,
         # verify change did not happen
         node.refresh()
         self.assertEqual(existing_driver, node.driver)
+
+    def test_update_network_node_deleting_state(self):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          provision_state=states.DELETING,
+                                          network_interface='flat')
+        old_iface = node.network_interface
+        node.network_interface = 'noop'
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.update_node,
+                                self.context, node)
+        self.assertEqual(exception.InvalidState, exc.exc_info[0])
+        node.refresh()
+        self.assertEqual(old_iface, node.network_interface)
+
+    def test_update_network_node_manageable_state(self):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          provision_state=states.MANAGEABLE,
+                                          network_interface='flat')
+        node.network_interface = 'noop'
+        self.service.update_node(self.context, node)
+        node.refresh()
+        self.assertEqual('noop', node.network_interface)
+
+    def test_update_network_node_active_state_and_maintenance(self):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          provision_state=states.ACTIVE,
+                                          network_interface='flat',
+                                          maintenance=True)
+        node.network_interface = 'noop'
+        self.service.update_node(self.context, node)
+        node.refresh()
+        self.assertEqual('noop', node.network_interface)
+
+    def test_update_node_invalid_network_interface(self):
+        node = obj_utils.create_test_node(self.context, driver='fake',
+                                          provision_state=states.MANAGEABLE,
+                                          network_interface='flat')
+        old_iface = node.network_interface
+        node.network_interface = 'cosci'
+        exc = self.assertRaises(messaging.rpc.ExpectedException,
+                                self.service.update_node,
+                                self.context, node)
+        self.assertEqual(exception.InvalidParameterValue, exc.exc_info[0])
+        node.refresh()
+        self.assertEqual(old_iface, node.network_interface)
 
 
 @mgr_utils.mock_record_keepalive
@@ -1491,7 +1535,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         # Node will be moved to CLEANING
         self.assertEqual(states.CLEANING, node.provision_state)
         self.assertEqual(states.MANAGEABLE, node.target_provision_state)
-        self.assertIsNone(node.driver_internal_info.get('clean_steps'))
+        self.assertNotIn('clean_steps', node.driver_internal_info)
         self.assertIsNone(node.last_error)
 
     @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
@@ -1719,8 +1763,8 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual(states.AVAILABLE, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
         self.assertEqual({}, node.clean_step)
-        self.assertIsNone(node.driver_internal_info.get('clean_steps'))
-        self.assertIsNone(node.driver_internal_info.get('clean_step_index'))
+        self.assertNotIn('clean_steps', node.driver_internal_info)
+        self.assertNotIn('clean_step_index', node.driver_internal_info)
 
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.prepare_cleaning')
     def __do_node_clean_prepare_clean_fail(self, mock_prep, clean_steps=None):
@@ -2270,7 +2314,7 @@ class DoNodeVerifyTestCase(mgr_utils.ServiceSetUpMixin,
             last_error=None,
             power_state=states.NOSTATE)
 
-        mock_validate.side_effect = iter([RuntimeError("boom")])
+        mock_validate.side_effect = RuntimeError("boom")
 
         self._start_service()
         with task_manager.acquire(
@@ -2298,7 +2342,7 @@ class DoNodeVerifyTestCase(mgr_utils.ServiceSetUpMixin,
             last_error=None,
             power_state=states.NOSTATE)
 
-        mock_get_power_state.side_effect = iter([RuntimeError("boom")])
+        mock_get_power_state.side_effect = RuntimeError("boom")
 
         self._start_service()
         with task_manager.acquire(
@@ -2341,7 +2385,8 @@ class MiscTestCase(mgr_utils.ServiceSetUpMixin, mgr_utils.CommonMixIn,
                     'management': {'result': True},
                     'boot': {'result': True},
                     'raid': {'result': True},
-                    'deploy': {'result': True}}
+                    'deploy': {'result': True},
+                    'network': {'result': True}}
         self.assertEqual(expected, ret)
         mock_iwdi.assert_called_once_with(self.context, node.instance_info)
 
@@ -3976,21 +4021,22 @@ class ManagerTestProperties(tests_db_base.DbTestCase):
 
     def test_driver_properties_fake_ilo(self):
         expected = ['ilo_address', 'ilo_username', 'ilo_password',
-                    'client_port', 'client_timeout', 'ilo_change_password']
+                    'client_port', 'client_timeout', 'ilo_change_password',
+                    'ca_file']
         self._check_driver_properties("fake_ilo", expected)
 
     def test_driver_properties_ilo_iscsi(self):
         expected = ['ilo_address', 'ilo_username', 'ilo_password',
                     'client_port', 'client_timeout', 'ilo_deploy_iso',
                     'console_port', 'ilo_change_password',
-                    'deploy_forces_oob_reboot']
+                    'deploy_forces_oob_reboot', 'ca_file']
         self._check_driver_properties("iscsi_ilo", expected)
 
     def test_driver_properties_agent_ilo(self):
         expected = ['ilo_address', 'ilo_username', 'ilo_password',
                     'client_port', 'client_timeout', 'ilo_deploy_iso',
                     'console_port', 'ilo_change_password',
-                    'deploy_forces_oob_reboot']
+                    'deploy_forces_oob_reboot', 'ca_file']
         self._check_driver_properties("agent_ilo", expected)
 
     def test_driver_properties_fail(self):
@@ -4630,10 +4676,6 @@ class ManagerCheckDeployingStatusTestCase(mgr_utils.ServiceSetUpMixin,
             driver='fake', provision_state=states.AVAILABLE,
             target_provision_state=states.NOSTATE)
 
-        self.expected_filter = {
-            'provision_state': 'deploying', 'reserved': False,
-            'maintenance': False}
-
     def test__check_deploying_status(self, mock_off_cond, mock_mapped,
                                      mock_fail_if):
         mock_off_cond.return_value = ['fake-conductor']
@@ -4676,8 +4718,8 @@ class ManagerCheckDeployingStatusTestCase(mgr_utils.ServiceSetUpMixin,
             reservation='fake-conductor')
 
         mock_mapped.return_value = True
-        mock_release.side_effect = iter([exception.NodeNotFound('not found'),
-                                         exception.NodeLocked('locked')])
+        mock_release.side_effect = [exception.NodeNotFound('not found'),
+                                    exception.NodeLocked('locked')]
         self.service._check_deploying_status(self.context)
 
         self.node.refresh()
@@ -4693,8 +4735,7 @@ class ManagerCheckDeployingStatusTestCase(mgr_utils.ServiceSetUpMixin,
             self, mock_release, mock_off_cond, mock_mapped, mock_fail_if):
         mock_off_cond.return_value = ['fake-conductor']
         mock_mapped.return_value = True
-        mock_release.side_effect = iter([
-            exception.NodeNotLocked('not locked')])
+        mock_release.side_effect = exception.NodeNotLocked('not locked')
         self.service._check_deploying_status(self.context)
 
         self.node.refresh()
@@ -5016,3 +5057,16 @@ class DoNodeAdoptionTestCase(
         self.assertEqual(states.MANAGEABLE, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
         self.assertIsNone(node.last_error)
+
+    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    def test_heartbeat(self, mock_spawn):
+        """Test heartbeating."""
+        node = obj_utils.create_test_node(
+            self.context, driver='fake',
+            provision_state=states.DEPLOYING,
+            target_provision_state=states.ACTIVE)
+
+        self._start_service()
+        self.service.heartbeat(self.context, node.uuid, 'http://callback')
+        mock_spawn.assert_called_with(self.driver.deploy.heartbeat,
+                                      mock.ANY, 'http://callback')
