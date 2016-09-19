@@ -15,38 +15,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import keystonemiddleware.audit as audit_middleware
+from keystonemiddleware.audit import PycadfAuditApiConfigError
 from oslo_config import cfg
 import oslo_middleware.cors as cors_middleware
 import pecan
 
-from ironic.api import acl
 from ironic.api import config
 from ironic.api.controllers.base import Version
 from ironic.api import hooks
 from ironic.api import middleware
-from ironic.common.i18n import _
-
-api_opts = [
-    cfg.StrOpt(
-        'auth_strategy',
-        default='keystone',
-        choices=['noauth', 'keystone'],
-        help=_('Authentication strategy used by ironic-api. "noauth" should '
-               'not be used in a production environment because all '
-               'authentication will be disabled.')),
-    cfg.BoolOpt('debug_tracebacks_in_api',
-                default=False,
-                help=_('Return server tracebacks in the API response for any '
-                       'error responses. WARNING: this is insecure '
-                       'and should not be used in a production environment.')),
-    cfg.BoolOpt('pecan_debug',
-                default=False,
-                help=_('Enable pecan debug mode. WARNING: this is insecure '
-                       'and should not be used in a production environment.')),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(api_opts)
+from ironic.api.middleware import auth_token
+from ironic.common import exception
+from ironic.conf import CONF
 
 
 def get_pecan_config():
@@ -68,9 +49,6 @@ def setup_app(pecan_config=None, extra_hooks=None):
     if not pecan_config:
         pecan_config = get_pecan_config()
 
-    if pecan_config.app.enable_acl:
-        app_hooks.append(hooks.TrustedCallHook())
-
     pecan.configuration.set_config(dict(pecan_config), overwrite=True)
 
     app = pecan.make_app(
@@ -82,8 +60,23 @@ def setup_app(pecan_config=None, extra_hooks=None):
         wrap_app=middleware.ParsableErrorMiddleware,
     )
 
-    if pecan_config.app.enable_acl:
-        app = acl.install(app, cfg.CONF, pecan_config.app.acl_public_routes)
+    if CONF.audit.enabled:
+        try:
+            app = audit_middleware.AuditMiddleware(
+                app,
+                audit_map_file=CONF.audit.audit_map_file,
+                ignore_req_list=CONF.audit.ignore_req_list
+            )
+        except (EnvironmentError, OSError, PycadfAuditApiConfigError) as e:
+            raise exception.InputFileError(
+                file_name=CONF.audit.audit_map_file,
+                reason=e
+            )
+
+    if CONF.auth_strategy == "keystone":
+        app = auth_token.AuthTokenMiddleware(
+            app, dict(cfg.CONF),
+            public_api_routes=pecan_config.app.acl_public_routes)
 
     # Create a CORS wrapper, and attach ironic-specific defaults that must be
     # included in all CORS responses.
@@ -100,7 +93,6 @@ def setup_app(pecan_config=None, extra_hooks=None):
 class VersionSelectorApplication(object):
     def __init__(self):
         pc = get_pecan_config()
-        pc.app.enable_acl = (CONF.auth_strategy == 'keystone')
         self.v1 = setup_app(pecan_config=pc)
 
     def __call__(self, environ, start_response):

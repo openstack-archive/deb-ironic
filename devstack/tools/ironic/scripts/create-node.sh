@@ -9,18 +9,24 @@ set -ex
 # Keep track of the DevStack directory
 TOP_DIR=$(cd $(dirname "$0")/.. && pwd)
 
-NAME=$1
-CPU=$2
-MEM=$(( 1024 * $3 ))
-# Extra G to allow fuzz for partition table : flavor size and registered size
-# need to be different to actual size.
-DISK=$(( $4 + 1))
-ARCH=$5
-BRIDGE=$6
-EMULATOR=$7
-VBMC_PORT=$8
-LOGDIR=$9
-DISK_FORMAT=${10}
+while getopts "n:c:m:d:a:b:e:p:f:l:" arg; do
+    case $arg in
+        n) NAME=$OPTARG;;
+        c) CPU=$OPTARG;;
+        m) MEM=$(( 1024 * OPTARG ));;
+        # Extra G to allow fuzz for partition table : flavor size and registered
+        # size need to be different to actual size.
+        d) DISK=$(( OPTARG + 1 ));;
+        a) ARCH=$OPTARG;;
+        b) BRIDGE=$OPTARG;;
+        e) EMULATOR=$OPTARG;;
+        p) VBMC_PORT=$OPTARG;;
+        f) DISK_FORMAT=$OPTARG;;
+        l) LOGDIR=$OPTARG;;
+    esac
+done
+
+shift $(( $OPTIND - 1 ))
 
 LIBVIRT_NIC_DRIVER=${LIBVIRT_NIC_DRIVER:-"virtio"}
 LIBVIRT_STORAGE_POOL=${LIBVIRT_STORAGE_POOL:-"default"}
@@ -56,6 +62,18 @@ else
 fi
 VOL_NAME="${NAME}.${DISK_FORMAT}"
 
+# Create bridge and add VM interface to it.
+# Additional interface will be added to this bridge and
+# it will be plugged to OVS.
+# This is needed in order to have interface in OVS even
+# when VM is in shutdown state
+
+sudo brctl addbr br-$NAME
+sudo ip link set br-$NAME up
+sudo ovs-vsctl add-port $BRIDGE ovs-$NAME -- set Interface ovs-$NAME type=internal
+sudo ip link set ovs-$NAME up
+sudo brctl addif br-$NAME ovs-$NAME
+
 if ! virsh list --all | grep -q $NAME; then
     virsh vol-list --pool $LIBVIRT_STORAGE_POOL | grep -q $VOL_NAME &&
         virsh vol-delete $VOL_NAME --pool $LIBVIRT_STORAGE_POOL >&2
@@ -67,7 +85,7 @@ if ! virsh list --all | grep -q $NAME; then
     $TOP_DIR/scripts/configure-vm.py \
         --bootdev network --name $NAME --image "$volume_path" \
         --arch $ARCH --cpus $CPU --memory $MEM --libvirt-nic-driver $LIBVIRT_NIC_DRIVER \
-        --emulator $EMULATOR --network $BRIDGE --disk-format $DISK_FORMAT $VM_LOGGING >&2
+        --emulator $EMULATOR --bridge br-$NAME --disk-format $DISK_FORMAT $VM_LOGGING >&2
 
     # Createa Virtual BMC for the node if IPMI is used
     if [[ $(type -P vbmc) != "" ]]; then
@@ -78,4 +96,5 @@ fi
 
 # echo mac
 VM_MAC=$(virsh dumpxml $NAME | grep "mac address" | head -1 | cut -d\' -f2)
-echo $VM_MAC $VBMC_PORT
+switch_id=$(ip link show dev $BRIDGE | egrep -o "ether [A-Za-z0-9:]+"|sed "s/ether\ //")
+echo $VM_MAC $VBMC_PORT $BRIDGE $switch_id ovs-$NAME

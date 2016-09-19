@@ -48,11 +48,11 @@ class IBootPrivateMethodTestCase(db_base.DbTestCase):
             driver='fake_iboot',
             driver_info=INFO_DICT)
         info = iboot._parse_driver_info(node)
-        self.assertIsNotNone(info['address'])
-        self.assertIsNotNone(info['username'])
-        self.assertIsNotNone(info['password'])
-        self.assertIsNotNone(info['port'])
-        self.assertIsNotNone(info['relay_id'])
+        self.assertEqual(INFO_DICT['iboot_address'], info['address'])
+        self.assertEqual(INFO_DICT['iboot_username'], info['username'])
+        self.assertEqual(INFO_DICT['iboot_password'], info['password'])
+        self.assertEqual(9100, info['port'])
+        self.assertEqual(1, info['relay_id'])
 
     def test__parse_driver_info_good_with_explicit_port(self):
         info = dict(INFO_DICT)
@@ -402,7 +402,7 @@ class IBootDriverTestCase(db_base.DbTestCase):
 
     @mock.patch.object(iboot, '_parse_driver_info', autospec=True)
     def test_validate_fails(self, parse_drv_info_mock):
-        side_effect = iter([exception.InvalidParameterValue("Bad input")])
+        side_effect = exception.InvalidParameterValue("Bad input")
         parse_drv_info_mock.side_effect = side_effect
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=True) as task:

@@ -30,6 +30,27 @@
 # developer documentation online. (list value)
 #enabled_drivers = pxe_ipmitool
 
+# Specify the list of network interfaces to load during
+# service initialization. Missing network interfaces, or
+# network interfaces which fail to initialize, will prevent
+# the conductor service from starting. The option default is a
+# recommended set of production-oriented network interfaces. A
+# complete list of network interfaces present on your system
+# may be found by enumerating the
+# "ironic.hardware.interfaces.network" entrypoint. This value
+# must be the same on all ironic-conductor and ironic-api
+# services, because it is used by ironic-api service to
+# validate a new or updated node's network_interface value.
+# (list value)
+#enabled_network_interfaces = flat,noop
+
+# Default network interface to be used for nodes that do not
+# have network_interface field set. A complete list of network
+# interfaces present on your system may be found by
+# enumerating the "ironic.hardware.interfaces.network"
+# entrypoint. (string value)
+#default_network_interface = <None>
+
 # Used if there is a formatting error when generating an
 # exception message (a programming error). If True, raise an
 # exception; if False, use the unformatted message. (boolean
@@ -75,6 +96,15 @@
 # Template file for grub configuration file. (string value)
 #grub_config_template = $pybasedir/common/grub_conf.template
 
+# Run image downloads and raw format conversions in parallel.
+# (boolean value)
+#parallel_image_downloads = false
+
+# IP address of this host. If unset, will determine the IP
+# programmatically. If unable to do so, will use "127.0.0.1".
+# (string value)
+#my_ip = 127.0.0.1
+
 # Directory where the ironic python module is installed.
 # (string value)
 #pybasedir = /usr/lib/python/site-packages/ironic/ironic
@@ -102,15 +132,6 @@
 # (string value)
 #tempdir = /tmp
 
-# Run image downloads and raw format conversions in parallel.
-# (boolean value)
-#parallel_image_downloads = false
-
-# IP address of this host. If unset, will determine the IP
-# programmatically. If unable to do so, will use "127.0.0.1".
-# (string value)
-#my_ip = 127.0.0.1
-
 #
 # From oslo.log
 #
@@ -135,6 +156,7 @@
 # is set in the configuration file and other logging
 # configuration options are ignored (for example,
 # logging_context_format_string). (string value)
+# Note: This option can be changed without restarting.
 # Deprecated group/name - [DEFAULT]/log_config
 #log_config_append = <None>
 
@@ -234,11 +256,6 @@
 # Allowed values: redis, dummy
 #rpc_zmq_matchmaker = redis
 
-# Type of concurrency used. Either "native" or "eventlet"
-# (string value)
-# Allowed values: eventlet, native
-#rpc_zmq_concurrency = eventlet
-
 # Number of ZeroMQ contexts, defaults to 1. (integer value)
 #rpc_zmq_contexts = 1
 
@@ -268,13 +285,17 @@
 
 # Expiration timeout in seconds of a name service record about
 # existing target ( < 0 means no timeout). (integer value)
-#zmq_target_expire = 120
+#zmq_target_expire = 300
+
+# Update period in seconds of a name service record about
+# existing target. (integer value)
+#zmq_target_update = 180
 
 # Use PUB/SUB pattern for fanout methods. PUB/SUB always uses
 # proxy. (boolean value)
 #use_pub_sub = true
 
-# Use ROUTER remote proxy for direct methods. (boolean value)
+# Use ROUTER remote proxy. (boolean value)
 #use_router_proxy = true
 
 # Minimal port number for random ports range. (port value)
@@ -299,12 +320,14 @@
 #rpc_response_timeout = 60
 
 # A URL representing the messaging driver to use and its full
-# configuration. If not set, we fall back to the rpc_backend
-# option and driver specific configuration. (string value)
+# configuration. (string value)
 #transport_url = <None>
 
-# The messaging driver to use, defaults to rabbit. Other
-# drivers include amqp and zmq. (string value)
+# DEPRECATED: The messaging driver to use, defaults to rabbit.
+# Other drivers include amqp and zmq. (string value)
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #rpc_backend = rabbit
 
 # The default exchange under which topics are scoped. May be
@@ -377,10 +400,6 @@
 # be set to True. Defaults to True. (boolean value)
 #stream_raw_images = true
 
-# Maximum interval (in seconds) for agent heartbeats. (integer
-# value)
-#heartbeat_timeout = 300
-
 # Number of times to retry getting power state to check if
 # bare metal node has been powered off after a soft power off.
 # (integer value)
@@ -393,6 +412,33 @@
 # API version to use for communicating with the ramdisk agent.
 # (string value)
 #agent_api_version = v1
+
+# Whether Ironic should collect the deployment logs on
+# deployment failure (on_failure), always or never. (string
+# value)
+# Allowed values: always, on_failure, never
+#deploy_logs_collect = on_failure
+
+# The name of the storage backend where the logs will be
+# stored. (string value)
+# Allowed values: local, swift
+#deploy_logs_storage_backend = local
+
+# The path to the directory where the logs should be stored,
+# used when the deploy_logs_storage_backend is configured to
+# "local". (string value)
+#deploy_logs_local_path = /var/log/ironic/deploy
+
+# The name of the Swift container to store the logs, used when
+# the deploy_logs_storage_backend is configured to "swift".
+# (string value)
+#deploy_logs_swift_container = ironic_deploy_logs_container
+
+# Number of days before a log object is marked as expired in
+# Swift. If None, the logs will be kept forever or until
+# manually deleted. Used when the deploy_logs_storage_backend
+# is configured to "swift". (integer value)
+#deploy_logs_swift_days_to_expire = 30
 
 
 [amt]
@@ -462,6 +508,36 @@
 # endpoint to represent SSL termination URL with
 # 'public_endpoint' option. (boolean value)
 #enable_ssl_api = false
+
+# Whether to restrict the lookup API to only nodes in certain
+# states. (boolean value)
+#restrict_lookup = true
+
+# Maximum interval (in seconds) for agent heartbeats. (integer
+# value)
+# Deprecated group/name - [agent]/heartbeat_timeout
+#ramdisk_heartbeat_timeout = 300
+
+
+[audit]
+
+#
+# From ironic
+#
+
+# Enable auditing of API requests (for ironic-api service).
+# (boolean value)
+#enabled = false
+
+# Path to audit map file for ironic-api service. Used only
+# when API audit is enabled. (string value)
+#audit_map_file = /etc/ironic/ironic_api_audit_map.conf
+
+# Comma separated list of Ironic REST API HTTP methods to be
+# ignored during audit. For example: auditing will not be done
+# on any GET or POST requests if this is set to "GET,POST". It
+# is used only when API audit is enabled. (string value)
+#ignore_req_list = <None>
 
 
 [cimc]
@@ -613,11 +689,13 @@
 # From ironic
 #
 
-# Path to serial console terminal program (string value)
+# Path to serial console terminal program. Used only by Shell
+# In A Box console. (string value)
 #terminal = shellinaboxd
 
-# Directory containing the terminal SSL cert(PEM) for serial
-# console access (string value)
+# Directory containing the terminal SSL cert (PEM) for serial
+# console access. Used only by Shell In A Box console. (string
+# value)
 #terminal_cert_dir = <None>
 
 # Directory for holding terminal pid files. If not specified,
@@ -712,8 +790,12 @@
 # From oslo.db
 #
 
-# The file name to use with SQLite. (string value)
+# DEPRECATED: The file name to use with SQLite. (string value)
 # Deprecated group/name - [DEFAULT]/sqlite_db
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Should use config option connection or
+# slave_connection to connect the database.
 #sqlite_db = oslo.sqlite
 
 # If True, SQLite uses synchronous mode. (boolean value)
@@ -901,17 +983,18 @@
 
 # Size of EFI system partition in MiB when configuring UEFI
 # systems for local boot. (integer value)
-# Deprecated group/name - [deploy]/efi_system_partition_size
 #efi_system_partition_size = 200
+
+# Size of BIOS Boot partition in MiB when configuring GPT
+# partitioned systems for local boot in BIOS. (integer value)
+#bios_boot_partition_size = 1
 
 # Block size to use when writing to the nodes disk. (string
 # value)
-# Deprecated group/name - [deploy]/dd_block_size
 #dd_block_size = 1M
 
 # Maximum attempts to verify an iSCSI connection is active,
 # sleeping 1 second between attempts. (integer value)
-# Deprecated group/name - [deploy]/iscsi_verify_attempts
 #iscsi_verify_attempts = 3
 
 
@@ -926,9 +1009,141 @@
 # value)
 #allowed_direct_url_schemes =
 
-# The secret token given to Swift to allow temporary URL
-# downloads. Required for temporary URLs. (string value)
-#swift_temp_url_key = <None>
+# Authentication URL (string value)
+#auth_url = <None>
+
+# Authentication strategy to use when connecting to glance.
+# (string value)
+# Allowed values: keystone, noauth
+#auth_strategy = keystone
+
+# Authentication type to load (string value)
+# Deprecated group/name - [glance]/auth_plugin
+#auth_type = <None>
+
+# PEM encoded Certificate Authority to use when verifying
+# HTTPs connections. (string value)
+#cafile = <None>
+
+# PEM encoded client certificate cert file (string value)
+#certfile = <None>
+
+# Optional domain ID to use with v3 and v2 parameters. It will
+# be used for both the user and project domain in v3 and
+# ignored in v2 authentication. (string value)
+#default_domain_id = <None>
+
+# Optional domain name to use with v3 API and v2 parameters.
+# It will be used for both the user and project domain in v3
+# and ignored in v2 authentication. (string value)
+#default_domain_name = <None>
+
+# Domain ID to scope to (string value)
+#domain_id = <None>
+
+# Domain name to scope to (string value)
+#domain_name = <None>
+
+# Allow to perform insecure SSL (https) requests to glance.
+# (boolean value)
+#glance_api_insecure = false
+
+# A list of the glance api servers available to ironic. Prefix
+# with https:// for SSL-based glance API servers. Format is
+# [hostname|IP]:port. (list value)
+#glance_api_servers = <None>
+
+# Optional path to a CA certificate bundle to be used to
+# validate the SSL certificate served by glance. It is used
+# when glance_api_insecure is set to False. (string value)
+#glance_cafile = <None>
+
+# Default glance hostname or IP address. (string value)
+#glance_host = $my_ip
+
+# Number of retries when downloading an image from glance.
+# (integer value)
+#glance_num_retries = 0
+
+# Default glance port. (port value)
+# Minimum value: 0
+# Maximum value: 65535
+#glance_port = 9292
+
+# Default protocol to use when connecting to glance. Set to
+# https for SSL. (string value)
+# Allowed values: http, https
+#glance_protocol = http
+
+# Verify HTTPS connections. (boolean value)
+#insecure = false
+
+# PEM encoded client certificate key file (string value)
+#keyfile = <None>
+
+# User's password (string value)
+#password = <None>
+
+# Domain ID containing project (string value)
+#project_domain_id = <None>
+
+# Domain name containing project (string value)
+#project_domain_name = <None>
+
+# Project ID to scope to (string value)
+# Deprecated group/name - [glance]/tenant-id
+#project_id = <None>
+
+# Project name to scope to (string value)
+# Deprecated group/name - [glance]/tenant-name
+#project_name = <None>
+
+# The account that Glance uses to communicate with Swift. The
+# format is "AUTH_uuid". "uuid" is the UUID for the account
+# configured in the glance-api.conf. Required for temporary
+# URLs when Glance backend is Swift. For example:
+# "AUTH_a422b2-91f3-2f46-74b7-d7c9e8958f5d30". Swift temporary
+# URL format:
+# "endpoint_url/api_version/[account/]container/object_id"
+# (string value)
+#swift_account = <None>
+
+# The Swift API version to create a temporary URL for.
+# Defaults to "v1". Swift temporary URL format:
+# "endpoint_url/api_version/[account/]container/object_id"
+# (string value)
+#swift_api_version = v1
+
+# The Swift container Glance is configured to store its images
+# in. Defaults to "glance", which is the default in glance-
+# api.conf. Swift temporary URL format:
+# "endpoint_url/api_version/[account/]container/object_id"
+# (string value)
+#swift_container = glance
+
+# The "endpoint" (scheme, hostname, optional port) for the
+# Swift URL of the form
+# "endpoint_url/api_version/[account/]container/object_id". Do
+# not include trailing "/". For example, use
+# "https://swift.example.com". If using RADOS Gateway,
+# endpoint may also contain /swift path; if it does not, it
+# will be appended. Required for temporary URLs. (string
+# value)
+#swift_endpoint_url = <None>
+
+# This should match a config by the same name in the Glance
+# configuration file. When set to 0, a single-tenant store
+# will only use one container to store all images. When set to
+# an integer value between 1 and 32, a single-tenant store
+# will use multiple containers to store images, and this value
+# will determine how many containers are created. (integer
+# value)
+#swift_store_multiple_containers_seed = 0
+
+# Whether to cache generated Swift temporary URLs. Setting it
+# to true is only useful when an image caching proxy is used.
+# Defaults to False. (boolean value)
+#swift_temp_url_cache_enabled = false
 
 # The length of time in seconds that the temporary URL will be
 # valid for. Defaults to 20 minutes. If some deploys get a 401
@@ -937,11 +1152,6 @@
 # than or equal to the value for
 # swift_temp_url_expected_download_start_delay (integer value)
 #swift_temp_url_duration = 1200
-
-# Whether to cache generated Swift temporary URLs. Setting it
-# to true is only useful when an image caching proxy is used.
-# Defaults to False. (boolean value)
-#swift_temp_url_cache_enabled = false
 
 # This is the delay (in seconds) from the time of the deploy
 # request (when the Swift temporary URL is generated) to when
@@ -956,47 +1166,9 @@
 # Minimum value: 0
 #swift_temp_url_expected_download_start_delay = 0
 
-# The "endpoint" (scheme, hostname, optional port) for the
-# Swift URL of the form
-# "endpoint_url/api_version/[account/]container/object_id". Do
-# not include trailing "/". For example, use
-# "https://swift.example.com". If using RADOS Gateway,
-# endpoint may also contain /swift path; if it does not, it
-# will be appended. Required for temporary URLs. (string
-# value)
-#swift_endpoint_url = <None>
-
-# The Swift API version to create a temporary URL for.
-# Defaults to "v1". Swift temporary URL format:
-# "endpoint_url/api_version/[account/]container/object_id"
-# (string value)
-#swift_api_version = v1
-
-# The account that Glance uses to communicate with Swift. The
-# format is "AUTH_uuid". "uuid" is the UUID for the account
-# configured in the glance-api.conf. Required for temporary
-# URLs when Glance backend is Swift. For example:
-# "AUTH_a422b2-91f3-2f46-74b7-d7c9e8958f5d30". Swift temporary
-# URL format:
-# "endpoint_url/api_version/[account/]container/object_id"
-# (string value)
-#swift_account = <None>
-
-# The Swift container Glance is configured to store its images
-# in. Defaults to "glance", which is the default in glance-
-# api.conf. Swift temporary URL format:
-# "endpoint_url/api_version/[account/]container/object_id"
-# (string value)
-#swift_container = glance
-
-# This should match a config by the same name in the Glance
-# configuration file. When set to 0, a single-tenant store
-# will only use one container to store all images. When set to
-# an integer value between 1 and 32, a single-tenant store
-# will use multiple containers to store images, and this value
-# will determine how many containers are created. (integer
-# value)
-#swift_store_multiple_containers_seed = 0
+# The secret token given to Swift to allow temporary URL
+# downloads. Required for temporary URLs. (string value)
+#swift_temp_url_key = <None>
 
 # Type of endpoint to use for temporary URLs. If the Glance
 # backend is Swift, use "swift"; if it is CEPH with RADOS
@@ -1004,41 +1176,30 @@
 # Allowed values: swift, radosgw
 #temp_url_endpoint_type = swift
 
-# Default glance hostname or IP address. (string value)
-#glance_host = $my_ip
+# Tenant ID (string value)
+#tenant_id = <None>
 
-# Default glance port. (port value)
-# Minimum value: 0
-# Maximum value: 65535
-#glance_port = 9292
+# Tenant Name (string value)
+#tenant_name = <None>
 
-# Default protocol to use when connecting to glance. Set to
-# https for SSL. (string value)
-# Allowed values: http, https
-#glance_protocol = http
+# Timeout value for http requests (integer value)
+#timeout = <None>
 
-# A list of the glance api servers available to ironic. Prefix
-# with https:// for SSL-based glance API servers. Format is
-# [hostname|IP]:port. (list value)
-#glance_api_servers = <None>
+# Trust ID (string value)
+#trust_id = <None>
 
-# Allow to perform insecure SSL (https) requests to glance.
-# (boolean value)
-#glance_api_insecure = false
+# User's domain id (string value)
+#user_domain_id = <None>
 
-# Number of retries when downloading an image from glance.
-# (integer value)
-#glance_num_retries = 0
+# User's domain name (string value)
+#user_domain_name = <None>
 
-# Authentication strategy to use when connecting to glance.
-# (string value)
-# Allowed values: keystone, noauth
-#auth_strategy = keystone
+# User id (string value)
+#user_id = <None>
 
-# Optional path to a CA certificate bundle to be used to
-# validate the SSL certificate served by glance. It is used
-# when glance_api_insecure is set to False. (string value)
-#glance_cafile = <None>
+# Username (string value)
+# Deprecated group/name - [glance]/user-name
+#username = <None>
 
 
 [iboot]
@@ -1089,9 +1250,13 @@
 # (boolean value)
 #use_web_server_for_images = false
 
-# Priority for erase devices clean step. If unset, it defaults
-# to 10. If set to 0, the step will be disabled and will not
-# run during cleaning. (integer value)
+# DEPRECATED: Priority for erase devices clean step. If unset,
+# it defaults to 10. If set to 0, the step will be disabled
+# and will not run during cleaning. (integer value)
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: This configuration option is duplicated by [deploy]
+# erase_devices_priority, please use that instead.
 #clean_priority_erase_devices = <None>
 
 # Priority for reset_ilo clean step. (integer value)
@@ -1124,6 +1289,9 @@
 # operations (integer value)
 #power_wait = 2
 
+# CA certificate file to validate iLO. (string value)
+#ca_file = <None>
+
 
 [inspector]
 
@@ -1131,9 +1299,62 @@
 # From ironic
 #
 
+# Authentication URL (string value)
+#auth_url = <None>
+
+# Authentication type to load (string value)
+# Deprecated group/name - [inspector]/auth_plugin
+#auth_type = <None>
+
+# PEM encoded Certificate Authority to use when verifying
+# HTTPs connections. (string value)
+#cafile = <None>
+
+# PEM encoded client certificate cert file (string value)
+#certfile = <None>
+
+# Optional domain ID to use with v3 and v2 parameters. It will
+# be used for both the user and project domain in v3 and
+# ignored in v2 authentication. (string value)
+#default_domain_id = <None>
+
+# Optional domain name to use with v3 API and v2 parameters.
+# It will be used for both the user and project domain in v3
+# and ignored in v2 authentication. (string value)
+#default_domain_name = <None>
+
+# Domain ID to scope to (string value)
+#domain_id = <None>
+
+# Domain name to scope to (string value)
+#domain_name = <None>
+
 # whether to enable inspection using ironic-inspector (boolean
 # value)
 #enabled = false
+
+# Verify HTTPS connections. (boolean value)
+#insecure = false
+
+# PEM encoded client certificate key file (string value)
+#keyfile = <None>
+
+# User's password (string value)
+#password = <None>
+
+# Domain ID containing project (string value)
+#project_domain_id = <None>
+
+# Domain name containing project (string value)
+#project_domain_name = <None>
+
+# Project ID to scope to (string value)
+# Deprecated group/name - [inspector]/tenant-id
+#project_id = <None>
+
+# Project name to scope to (string value)
+# Deprecated group/name - [inspector]/tenant-name
+#project_name = <None>
 
 # ironic-inspector HTTP endpoint. If this is not set, the
 # ironic-inspector client default (http://127.0.0.1:5050) will
@@ -1143,6 +1364,31 @@
 # period (in seconds) to check status of nodes on inspection
 # (integer value)
 #status_check_period = 60
+
+# Tenant ID (string value)
+#tenant_id = <None>
+
+# Tenant Name (string value)
+#tenant_name = <None>
+
+# Timeout value for http requests (integer value)
+#timeout = <None>
+
+# Trust ID (string value)
+#trust_id = <None>
+
+# User's domain id (string value)
+#user_domain_id = <None>
+
+# User's domain name (string value)
+#user_domain_name = <None>
+
+# User id (string value)
+#user_id = <None>
+
+# Username (string value)
+# Deprecated group/name - [inspector]/user-name
+#username = <None>
 
 
 [ipmi]
@@ -1270,7 +1516,16 @@
 # From keystonemiddleware.auth_token
 #
 
-# Complete public Identity API endpoint. (string value)
+# Complete "public" Identity API endpoint. This endpoint
+# should not be an "admin" endpoint, as it should be
+# accessible by all end users. Unauthenticated clients are
+# redirected to this endpoint to authenticate. Although this
+# endpoint should  ideally be unversioned, client support in
+# the wild varies.  If you're using a versioned v2 endpoint
+# here, then this  should *not* be the same endpoint the
+# service user utilizes  for validating tokens, because normal
+# end users may not be  able to reach that endpoint. (string
+# value)
 #auth_uri = <None>
 
 # API version of the admin Identity API endpoint. (string
@@ -1319,7 +1574,7 @@
 # Optionally specify a list of memcached server(s) to use for
 # caching. If left undefined, tokens will instead be cached
 # in-process. (list value)
-# Deprecated group/name - [DEFAULT]/memcache_servers
+# Deprecated group/name - [keystone_authtoken]/memcache_servers
 #memcached_servers = <None>
 
 # In order to prevent excessive effort spent validating
@@ -1409,12 +1664,12 @@
 # (list value)
 #hash_algorithms = md5
 
-# Authentication type to load (unknown value)
-# Deprecated group/name - [DEFAULT]/auth_plugin
+# Authentication type to load (string value)
+# Deprecated group/name - [keystone_authtoken]/auth_plugin
 #auth_type = <None>
 
 # Config Section from which to load plugin specific options
-# (unknown value)
+# (string value)
 #auth_section = <None>
 
 
@@ -1424,19 +1679,34 @@
 # From oslo.messaging
 #
 
-# Host to locate redis. (string value)
+# DEPRECATED: Host to locate redis. (string value)
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #host = 127.0.0.1
 
-# Use this port to connect to redis host. (port value)
+# DEPRECATED: Use this port to connect to redis host. (port
+# value)
 # Minimum value: 0
 # Maximum value: 65535
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #port = 6379
 
-# Password for Redis server (optional). (string value)
+# DEPRECATED: Password for Redis server (optional). (string
+# value)
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #password =
 
-# List of Redis Sentinel hosts (fault tolerance mode) e.g.
-# [host:port, host1:port ... ] (list value)
+# DEPRECATED: List of Redis Sentinel hosts (fault tolerance
+# mode) e.g.                [host:port, host1:port ... ] (list
+# value)
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #sentinel_hosts =
 
 # Redis replica set name. (string value)
@@ -1454,38 +1724,215 @@
 #socket_timeout = 10000
 
 
+[metrics]
+
+#
+# From ironic
+#
+
+# Backend for the agent ramdisk to use for metrics. Default
+# possible backends are "noop" and "statsd". (string value)
+#agent_backend = noop
+
+# Prepend the hostname to all metric names sent by the agent
+# ramdisk. The format of metric names is
+# [global_prefix.][uuid.][host_name.]prefix.metric_name.
+# (boolean value)
+#agent_prepend_host = false
+
+# Prepend the node's Ironic uuid to all metric names sent by
+# the agent ramdisk. The format of metric names is
+# [global_prefix.][uuid.][host_name.]prefix.metric_name.
+# (boolean value)
+#agent_prepend_uuid = false
+
+# Split the prepended host value by "." and reverse it for
+# metrics sent by the agent ramdisk (to better match the
+# reverse hierarchical form of domain names). (boolean value)
+#agent_prepend_host_reverse = true
+
+# Prefix all metric names sent by the agent ramdisk with this
+# value. The format of metric names is
+# [global_prefix.][uuid.][host_name.]prefix.metric_name.
+# (string value)
+#agent_global_prefix = <None>
+
+#
+# From ironic_lib.metrics
+#
+
+# Backend to use for the metrics system. (string value)
+# Allowed values: noop, statsd
+#backend = noop
+
+# Prepend the hostname to all metric names. The format of
+# metric names is
+# [global_prefix.][host_name.]prefix.metric_name. (boolean
+# value)
+#prepend_host = false
+
+# Split the prepended host value by "." and reverse it (to
+# better match the reverse hierarchical form of domain names).
+# (boolean value)
+#prepend_host_reverse = true
+
+# Prefix all metric names with this value. By default, there
+# is no global prefix. The format of metric names is
+# [global_prefix.][host_name.]prefix.metric_name. (string
+# value)
+#global_prefix = <None>
+
+
+[metrics_statsd]
+
+#
+# From ironic
+#
+
+# Host for the agent ramdisk to use with the statsd backend.
+# This must be accessible from networks the agent is booted
+# on. (string value)
+#agent_statsd_host = localhost
+
+# Port for the agent ramdisk to use with the statsd backend.
+# (port value)
+# Minimum value: 0
+# Maximum value: 65535
+#agent_statsd_port = 8125
+
+#
+# From ironic_lib.metrics_statsd
+#
+
+# Host for use with the statsd backend. (string value)
+#statsd_host = localhost
+
+# Port to use with the statsd backend. (port value)
+# Minimum value: 0
+# Maximum value: 65535
+#statsd_port = 8125
+
+
 [neutron]
 
 #
 # From ironic
 #
 
-# URL for connecting to neutron. (string value)
-#url = http://$my_ip:9696
+# Authentication URL (string value)
+#auth_url = <None>
 
-# Timeout value for connecting to neutron in seconds. (integer
-# value)
-#url_timeout = 30
+# Authentication strategy to use when connecting to neutron.
+# Running neutron in noauth mode (related to but not affected
+# by this setting) is insecure and should only be used for
+# testing. (string value)
+# Allowed values: keystone, noauth
+#auth_strategy = keystone
+
+# Authentication type to load (string value)
+# Deprecated group/name - [neutron]/auth_plugin
+#auth_type = <None>
+
+# PEM encoded Certificate Authority to use when verifying
+# HTTPs connections. (string value)
+#cafile = <None>
+
+# PEM encoded client certificate cert file (string value)
+#certfile = <None>
+
+# Neutron network UUID for the ramdisk to be booted into for
+# cleaning nodes. Required for "neutron" network interface. It
+# is also required if cleaning nodes when using "flat" network
+# interface or "neutron" DHCP provider. (string value)
+#cleaning_network_uuid = <None>
+
+# Optional domain ID to use with v3 and v2 parameters. It will
+# be used for both the user and project domain in v3 and
+# ignored in v2 authentication. (string value)
+#default_domain_id = <None>
+
+# Optional domain name to use with v3 API and v2 parameters.
+# It will be used for both the user and project domain in v3
+# and ignored in v2 authentication. (string value)
+#default_domain_name = <None>
+
+# Domain ID to scope to (string value)
+#domain_id = <None>
+
+# Domain name to scope to (string value)
+#domain_name = <None>
+
+# Verify HTTPS connections. (boolean value)
+#insecure = false
+
+# PEM encoded client certificate key file (string value)
+#keyfile = <None>
+
+# User's password (string value)
+#password = <None>
 
 # Delay value to wait for Neutron agents to setup sufficient
 # DHCP configuration for port. (integer value)
 # Minimum value: 0
 #port_setup_delay = 0
 
+# Domain ID containing project (string value)
+#project_domain_id = <None>
+
+# Domain name containing project (string value)
+#project_domain_name = <None>
+
+# Project ID to scope to (string value)
+# Deprecated group/name - [neutron]/tenant-id
+#project_id = <None>
+
+# Project name to scope to (string value)
+# Deprecated group/name - [neutron]/tenant-name
+#project_name = <None>
+
+# Neutron network UUID for the ramdisk to be booted into for
+# provisioning nodes. Required for "neutron" network
+# interface. (string value)
+#provisioning_network_uuid = <None>
+
 # Client retries in the case of a failed request. (integer
 # value)
 #retries = 3
 
-# Default authentication strategy to use when connecting to
-# neutron. Running neutron in noauth mode (related to but not
-# affected by this setting) is insecure and should only be
-# used for testing. (string value)
-# Allowed values: keystone, noauth
-#auth_strategy = keystone
+# Tenant ID (string value)
+#tenant_id = <None>
 
-# UUID of the network to create Neutron ports on, when booting
-# to a ramdisk for cleaning using Neutron DHCP. (string value)
-#cleaning_network_uuid = <None>
+# Tenant Name (string value)
+#tenant_name = <None>
+
+# Timeout value for http requests (integer value)
+#timeout = <None>
+
+# Trust ID (string value)
+#trust_id = <None>
+
+# URL for connecting to neutron. Default value translates to
+# 'http://$my_ip:9696' when auth_strategy is 'noauth', and to
+# discovery from Keystone catalog when auth_strategy is
+# 'keystone'. (string value)
+#url = <None>
+
+# Timeout value for connecting to neutron in seconds. (integer
+# value)
+#url_timeout = 30
+
+# User's domain id (string value)
+#user_domain_id = <None>
+
+# User's domain name (string value)
+#user_domain_name = <None>
+
+# User id (string value)
+#user_id = <None>
+
+# Username (string value)
+# Deprecated group/name - [neutron]/user-name
+#username = <None>
 
 
 [oneview]
@@ -1494,25 +1941,36 @@
 # From ironic
 #
 
-# URL where OneView is available (string value)
+# URL where OneView is available. (string value)
 #manager_url = <None>
 
-# OneView username to be used (string value)
+# OneView username to be used. (string value)
 #username = <None>
 
-# OneView password to be used (string value)
+# OneView password to be used. (string value)
 #password = <None>
 
-# Option to allow insecure connection with OneView (boolean
+# Option to allow insecure connection with OneView. (boolean
 # value)
 #allow_insecure_connections = false
 
-# Path to CA certificate (string value)
+# Path to CA certificate. (string value)
 #tls_cacert_file = <None>
 
-# Max connection retries to check changes on OneView (integer
+# Max connection retries to check changes on OneView. (integer
 # value)
 #max_polling_attempts = 12
+
+# Whether to enable the periodic tasks for OneView driver be
+# aware when OneView hardware resources are taken and released
+# by Ironic or OneView users and proactively manage nodes in
+# clean fail state according to Dynamic Allocation model of
+# hardware resources allocation in OneView. (boolean value)
+#enable_periodic_tasks = true
+
+# Period (in seconds) for periodic tasks to be executed when
+# enable_periodic_tasks=True. (integer value)
+#periodic_check_interval = 300
 
 
 [oslo_concurrency]
@@ -1687,7 +2145,7 @@
 # How long to wait a missing client beforce abandoning to send
 # it its replies. This value should not be longer than
 # rpc_response_timeout. (integer value)
-# Deprecated group/name - [DEFAULT]/kombu_reconnect_timeout
+# Deprecated group/name - [oslo_messaging_rabbit]/kombu_reconnect_timeout
 #kombu_missing_consumer_retry_timeout = 60
 
 # Determines how the next RabbitMQ node is chosen in case the
@@ -1697,40 +2155,59 @@
 # Allowed values: round-robin, shuffle
 #kombu_failover_strategy = round-robin
 
-# The RabbitMQ broker address where a single node is used.
-# (string value)
+# DEPRECATED: The RabbitMQ broker address where a single node
+# is used. (string value)
 # Deprecated group/name - [DEFAULT]/rabbit_host
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #rabbit_host = localhost
 
-# The RabbitMQ broker port where a single node is used. (port
-# value)
+# DEPRECATED: The RabbitMQ broker port where a single node is
+# used. (port value)
 # Minimum value: 0
 # Maximum value: 65535
 # Deprecated group/name - [DEFAULT]/rabbit_port
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #rabbit_port = 5672
 
-# RabbitMQ HA cluster host:port pairs. (list value)
+# DEPRECATED: RabbitMQ HA cluster host:port pairs. (list
+# value)
 # Deprecated group/name - [DEFAULT]/rabbit_hosts
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #rabbit_hosts = $rabbit_host:$rabbit_port
 
 # Connect over SSL for RabbitMQ. (boolean value)
 # Deprecated group/name - [DEFAULT]/rabbit_use_ssl
 #rabbit_use_ssl = false
 
-# The RabbitMQ userid. (string value)
+# DEPRECATED: The RabbitMQ userid. (string value)
 # Deprecated group/name - [DEFAULT]/rabbit_userid
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #rabbit_userid = guest
 
-# The RabbitMQ password. (string value)
+# DEPRECATED: The RabbitMQ password. (string value)
 # Deprecated group/name - [DEFAULT]/rabbit_password
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #rabbit_password = guest
 
 # The RabbitMQ login method. (string value)
 # Deprecated group/name - [DEFAULT]/rabbit_login_method
 #rabbit_login_method = AMQPLAIN
 
-# The RabbitMQ virtual host. (string value)
+# DEPRECATED: The RabbitMQ virtual host. (string value)
 # Deprecated group/name - [DEFAULT]/rabbit_virtual_host
+# This option is deprecated for removal.
+# Its value may be silently ignored in the future.
+# Reason: Replaced by [DEFAULT]/transport_url
 #rabbit_virtual_host = /
 
 # How frequently to retry connecting with RabbitMQ. (integer
@@ -1815,6 +2292,10 @@
 # error (floating point value)
 #host_connection_reconnect_delay = 0.25
 
+# Connection factory implementation (string value)
+# Allowed values: new, single, read_write
+#connection_factory = single
+
 # Maximum number of connections to keep queued. (integer
 # value)
 #pool_max_size = 30
@@ -1840,7 +2321,7 @@
 # Persist notification messages. (boolean value)
 #notification_persistence = false
 
-# Exchange name for for sending notifications (string value)
+# Exchange name for sending notifications (string value)
 #default_notification_exchange = ${control_exchange}_notification
 
 # Max number of not acknowledged message which RabbitMQ can
@@ -2012,6 +2493,91 @@
 #action_timeout = 10
 
 
+[service_catalog]
+
+#
+# From ironic
+#
+
+# Authentication URL (string value)
+#auth_url = <None>
+
+# Authentication type to load (string value)
+# Deprecated group/name - [service_catalog]/auth_plugin
+#auth_type = <None>
+
+# PEM encoded Certificate Authority to use when verifying
+# HTTPs connections. (string value)
+#cafile = <None>
+
+# PEM encoded client certificate cert file (string value)
+#certfile = <None>
+
+# Optional domain ID to use with v3 and v2 parameters. It will
+# be used for both the user and project domain in v3 and
+# ignored in v2 authentication. (string value)
+#default_domain_id = <None>
+
+# Optional domain name to use with v3 API and v2 parameters.
+# It will be used for both the user and project domain in v3
+# and ignored in v2 authentication. (string value)
+#default_domain_name = <None>
+
+# Domain ID to scope to (string value)
+#domain_id = <None>
+
+# Domain name to scope to (string value)
+#domain_name = <None>
+
+# Verify HTTPS connections. (boolean value)
+#insecure = false
+
+# PEM encoded client certificate key file (string value)
+#keyfile = <None>
+
+# User's password (string value)
+#password = <None>
+
+# Domain ID containing project (string value)
+#project_domain_id = <None>
+
+# Domain name containing project (string value)
+#project_domain_name = <None>
+
+# Project ID to scope to (string value)
+# Deprecated group/name - [service_catalog]/tenant-id
+#project_id = <None>
+
+# Project name to scope to (string value)
+# Deprecated group/name - [service_catalog]/tenant-name
+#project_name = <None>
+
+# Tenant ID (string value)
+#tenant_id = <None>
+
+# Tenant Name (string value)
+#tenant_name = <None>
+
+# Timeout value for http requests (integer value)
+#timeout = <None>
+
+# Trust ID (string value)
+#trust_id = <None>
+
+# User's domain id (string value)
+#user_domain_id = <None>
+
+# User's domain name (string value)
+#user_domain_name = <None>
+
+# User id (string value)
+#user_id = <None>
+
+# Username (string value)
+# Deprecated group/name - [service_catalog]/user-name
+#username = <None>
+
+
 [snmp]
 
 #
@@ -2084,9 +2650,87 @@
 # From ironic
 #
 
+# Authentication URL (string value)
+#auth_url = <None>
+
+# Authentication type to load (string value)
+# Deprecated group/name - [swift]/auth_plugin
+#auth_type = <None>
+
+# PEM encoded Certificate Authority to use when verifying
+# HTTPs connections. (string value)
+#cafile = <None>
+
+# PEM encoded client certificate cert file (string value)
+#certfile = <None>
+
+# Optional domain ID to use with v3 and v2 parameters. It will
+# be used for both the user and project domain in v3 and
+# ignored in v2 authentication. (string value)
+#default_domain_id = <None>
+
+# Optional domain name to use with v3 API and v2 parameters.
+# It will be used for both the user and project domain in v3
+# and ignored in v2 authentication. (string value)
+#default_domain_name = <None>
+
+# Domain ID to scope to (string value)
+#domain_id = <None>
+
+# Domain name to scope to (string value)
+#domain_name = <None>
+
+# Verify HTTPS connections. (boolean value)
+#insecure = false
+
+# PEM encoded client certificate key file (string value)
+#keyfile = <None>
+
+# User's password (string value)
+#password = <None>
+
+# Domain ID containing project (string value)
+#project_domain_id = <None>
+
+# Domain name containing project (string value)
+#project_domain_name = <None>
+
+# Project ID to scope to (string value)
+# Deprecated group/name - [swift]/tenant-id
+#project_id = <None>
+
+# Project name to scope to (string value)
+# Deprecated group/name - [swift]/tenant-name
+#project_name = <None>
+
 # Maximum number of times to retry a Swift request, before
 # failing. (integer value)
 #swift_max_retries = 2
+
+# Tenant ID (string value)
+#tenant_id = <None>
+
+# Tenant Name (string value)
+#tenant_name = <None>
+
+# Timeout value for http requests (integer value)
+#timeout = <None>
+
+# Trust ID (string value)
+#trust_id = <None>
+
+# User's domain id (string value)
+#user_domain_id = <None>
+
+# User's domain name (string value)
+#user_domain_name = <None>
+
+# User id (string value)
+#user_id = <None>
+
+# Username (string value)
+# Deprecated group/name - [swift]/user-name
+#username = <None>
 
 
 [virtualbox]

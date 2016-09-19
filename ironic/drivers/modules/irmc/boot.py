@@ -21,7 +21,6 @@ import shutil
 import tempfile
 
 from ironic_lib import utils as ironic_utils
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import importutils
 
@@ -34,6 +33,7 @@ from ironic.common.i18n import _LI
 from ironic.common import images
 from ironic.common import states
 from ironic.conductor import utils as manager_utils
+from ironic.conf import CONF
 from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules.irmc import common as irmc_common
@@ -41,38 +41,11 @@ from ironic.drivers.modules.irmc import common as irmc_common
 
 scci = importutils.try_import('scciclient.irmc.scci')
 
-CONF = cfg.CONF
-
 try:
     if CONF.debug:
         scci.DEBUG = True
 except Exception:
     pass
-
-opts = [
-    cfg.StrOpt('remote_image_share_root',
-               default='/remote_image_share_root',
-               help=_('Ironic conductor node\'s "NFS" or "CIFS" root path')),
-    cfg.StrOpt('remote_image_server',
-               help=_('IP of remote image server')),
-    cfg.StrOpt('remote_image_share_type',
-               default='CIFS',
-               choices=['CIFS', 'NFS'],
-               ignore_case=True,
-               help=_('Share type of virtual media')),
-    cfg.StrOpt('remote_image_share_name',
-               default='share',
-               help=_('share name of remote_image_server')),
-    cfg.StrOpt('remote_image_user_name',
-               help=_('User name of remote_image_server')),
-    cfg.StrOpt('remote_image_user_password', secret=True,
-               help=_('Password of remote_image_user_name')),
-    cfg.StrOpt('remote_image_user_domain',
-               default='',
-               help=_('Domain name of remote_image_user_name')),
-]
-
-CONF.register_opts(opts, group='irmc')
 
 LOG = logging.getLogger(__name__)
 
@@ -604,10 +577,11 @@ class IRMCVirtualMediaBoot(base.BootInterface):
         """
 
         # NOTE(TheJulia): If this method is being called by something
-        # aside from a deployment, such as conductor takeover, we should
-        # treat this as a no-op and move on otherwise we would modify
+        # aside from deployment and clean, such as conductor takeover, we
+        # should treat this as a no-op and move on otherwise we would modify
         # the state of the node due to virtual media operations.
-        if task.node.provision_state != states.DEPLOYING:
+        if (task.node.provision_state != states.DEPLOYING and
+                task.node.provision_state != states.CLEANING):
             return
 
         deploy_nic_mac = deploy_utils.get_single_nic_with_vif_port_id(task)

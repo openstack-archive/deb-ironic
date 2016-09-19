@@ -50,7 +50,7 @@ class OneViewPower(base.PowerInterface):
         :param task: a task from TaskManager.
         :raises: MissingParameterValue if a required parameter is missing.
         :raises: InvalidParameterValue if parameters set are inconsistent with
-        resources in OneView
+                 resources in OneView
         """
         common.verify_node_info(task.node)
 
@@ -65,12 +65,12 @@ class OneViewPower(base.PowerInterface):
         :param task: a TaskManager instance.
         :param node: The Node.
         :returns: one of :mod:`ironic.common.states` POWER_OFF,
-            POWER_ON or ERROR.
+                  POWER_ON or ERROR.
         :raises: OneViewError if fails to retrieve power state of OneView
-        resource
+                 resource
         """
-
         oneview_info = common.get_oneview_info(task.node)
+
         oneview_client = common.get_oneview_client()
         try:
             power_state = oneview_client.get_node_power_state(oneview_info)
@@ -90,13 +90,13 @@ class OneViewPower(base.PowerInterface):
         :param task: a TaskManager instance.
         :param node: The Node.
         :param power_state: The desired power state POWER_ON, POWER_OFF or
-            REBOOT from :mod:`ironic.common.states`.
+                            REBOOT from :mod:`ironic.common.states`.
         :raises: InvalidParameterValue if an invalid power state was specified.
         :raises: PowerStateFailure if the power couldn't be set to power_state.
         :raises: OneViewError if OneView fails setting the power state.
         """
-
         oneview_info = common.get_oneview_info(task.node)
+
         oneview_client = common.get_oneview_client()
 
         LOG.debug('Setting power state of node %(node_uuid)s to '
@@ -127,7 +127,7 @@ class OneViewPower(base.PowerInterface):
         :param task: a TaskManager instance.
         :param node: The Node.
         :raises: PowerStateFailure if the final state of the node is not
-            POWER_ON.
+                 POWER_ON.
         """
 
         self.set_power_state(task, states.REBOOT)

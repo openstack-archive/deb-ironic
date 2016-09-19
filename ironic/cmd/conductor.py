@@ -25,9 +25,36 @@ from oslo_config import cfg
 from oslo_log import log
 from oslo_service import service
 
+from ironic.common.i18n import _LW
 from ironic.common import service as ironic_service
+from ironic.conf import auth
 
 CONF = cfg.CONF
+
+LOG = log.getLogger(__name__)
+
+SECTIONS_WITH_AUTH = (
+    'service_catalog', 'neutron', 'glance', 'swift', 'inspector')
+
+
+# TODO(pas-ha) remove this check after deprecation period
+def _check_auth_options(conf):
+    missing = []
+    for section in SECTIONS_WITH_AUTH:
+        if not auth.load_auth(conf, section):
+            missing.append('[%s]' % section)
+    if missing:
+        link = "http://docs.openstack.org/releasenotes/ironic/newton.html"
+        LOG.warning(_LW("Failed to load authentification credentials from "
+                        "%(missing)s config sections. "
+                        "The corresponding service users' credentials "
+                        "will be loaded from [%(old)s] config section, "
+                        "which is deprecated for this purpose. "
+                        "Please update the config file. "
+                        "For more info see %(link)s."),
+                    dict(missing=", ".join(missing),
+                         old=auth.LEGACY_SECTION,
+                         link=link))
 
 
 def main():
@@ -38,9 +65,7 @@ def main():
                                     'ironic.conductor.manager',
                                     'ConductorManager')
 
-    LOG = log.getLogger(__name__)
-    LOG.debug("Configuration:")
-    CONF.log_opt_values(LOG, log.DEBUG)
+    _check_auth_options(CONF)
 
     launcher = service.launch(CONF, mgr)
     launcher.wait()

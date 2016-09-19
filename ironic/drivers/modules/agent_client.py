@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from oslo_config import cfg
+from ironic_lib import metrics_utils
 from oslo_log import log
 from oslo_serialization import jsonutils
 import requests
@@ -21,24 +21,18 @@ from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.common.i18n import _LE
 from ironic.common.i18n import _LW
-
-agent_opts = [
-    cfg.StrOpt('agent_api_version',
-               default='v1',
-               help=_('API version to use for communicating with the ramdisk '
-                      'agent.'))
-]
-
-CONF = cfg.CONF
-CONF.register_opts(agent_opts, group='agent')
+from ironic.conf import CONF
 
 LOG = log.getLogger(__name__)
+
+METRICS = metrics_utils.get_metrics_logger(__name__)
 
 DEFAULT_IPA_PORTAL_PORT = 3260
 
 
 class AgentClient(object):
     """Client for interacting with nodes via a REST API."""
+    @METRICS.timer('AgentClient.__init__')
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({'Content-Type': 'application/json'})
@@ -59,6 +53,7 @@ class AgentClient(object):
             'params': params,
         })
 
+    @METRICS.timer('AgentClient._command')
     def _command(self, node, method, params, wait=False):
         url = self._get_command_url(node)
         body = self._get_command_body(method, params)
@@ -99,6 +94,7 @@ class AgentClient(object):
                    'code': response.status_code})
         return result
 
+    @METRICS.timer('AgentClient.get_commands_status')
     def get_commands_status(self, node):
         url = self._get_command_url(node)
         LOG.debug('Fetching status of agent commands for node %s', node.uuid)
@@ -113,6 +109,7 @@ class AgentClient(object):
                   {'node': node.uuid, 'status': status})
         return result
 
+    @METRICS.timer('AgentClient.prepare_image')
     def prepare_image(self, node, image_info, wait=False):
         """Call the `prepare_image` method on the node."""
         LOG.debug('Preparing image %(image)s on node %(node)s.',
@@ -130,6 +127,7 @@ class AgentClient(object):
                              params=params,
                              wait=wait)
 
+    @METRICS.timer('AgentClient.start_iscsi_target')
     def start_iscsi_target(self, node, iqn,
                            portal_port=DEFAULT_IPA_PORTAL_PORT,
                            wipe_disk_metadata=False):
@@ -139,8 +137,8 @@ class AgentClient(object):
         :param iqn: iSCSI target IQN
         :param portal_port: iSCSI portal port
         :param wipe_disk_metadata: True if the agent should wipe first the
-        disk magic strings like the partition table, RAID or filesystem
-        signature.
+                                   disk magic strings like the partition
+                                   table, RAID or filesystem signature.
         """
         params = {'iqn': iqn}
         # This is to workaround passing default values to an old ramdisk
@@ -196,6 +194,7 @@ class AgentClient(object):
             # required, break from the loop returning the result
             return result
 
+    @METRICS.timer('AgentClient.install_bootloader')
     def install_bootloader(self, node, root_uuid, efi_system_part_uuid=None):
         """Install a boot loader on the image."""
         params = {'root_uuid': root_uuid,
@@ -205,6 +204,7 @@ class AgentClient(object):
                              params=params,
                              wait=True)
 
+    @METRICS.timer('AgentClient.get_clean_steps')
     def get_clean_steps(self, node, ports):
         params = {
             'node': node.as_dict(),
@@ -215,6 +215,7 @@ class AgentClient(object):
                              params=params,
                              wait=True)
 
+    @METRICS.timer('AgentClient.execute_clean_step')
     def execute_clean_step(self, step, node, ports):
         params = {
             'step': step,
@@ -227,15 +228,25 @@ class AgentClient(object):
                              method='clean.execute_clean_step',
                              params=params)
 
+    @METRICS.timer('AgentClient.power_off')
     def power_off(self, node):
         """Soft powers off the bare metal node by shutting down ramdisk OS."""
         return self._command(node=node,
                              method='standby.power_off',
                              params={})
 
+    @METRICS.timer('AgentClient.sync')
     def sync(self, node):
         """Flush file system buffers forcing changed blocks to disk."""
         return self._command(node=node,
                              method='standby.sync',
+                             params={},
+                             wait=True)
+
+    @METRICS.timer('AgentClient.collect_system_logs')
+    def collect_system_logs(self, node):
+        """Collect and package diagnostic and support data from the ramdisk."""
+        return self._command(node=node,
+                             method='log.collect_system_logs',
                              params={},
                              wait=True)

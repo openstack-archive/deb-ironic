@@ -176,6 +176,26 @@ class ListType(wtypes.UserType):
         return ListType.validate(value)
 
 
+class ListOfMacAddressesType(ListType):
+    """List of MAC addresses."""
+
+    @staticmethod
+    def validate(value):
+        """Validate and convert the input to a ListOfMacAddressesType.
+
+        :param value: A comma separated string of MAC addresses.
+        :returns: A list of unique MACs, whose order is not guaranteed.
+        """
+        items = ListType.validate(value)
+        return [MacAddressType.validate(item) for item in items]
+
+    @staticmethod
+    def frombasetype(value):
+        if value is None:
+            return None
+        return ListOfMacAddressesType.validate(value)
+
+
 macaddress = MacAddressType()
 uuid_or_name = UuidOrNameType()
 name = NameType()
@@ -184,6 +204,7 @@ boolean = BooleanType()
 listtype = ListType()
 # Can't call it 'json' because that's the name of the stdlib module
 jsontype = JsonType()
+list_of_macaddress = ListOfMacAddressesType()
 
 
 class JsonPatchType(wtypes.Base):
@@ -255,3 +276,76 @@ class JsonPatchType(wtypes.Base):
         if patch.value is not wsme.Unset:
             ret['value'] = patch.value
         return ret
+
+
+class LocalLinkConnectionType(wtypes.UserType):
+    """A type describing local link connection."""
+
+    basetype = wtypes.DictType
+    name = 'locallinkconnection'
+
+    mandatory_fields = {'switch_id',
+                        'port_id'}
+    valid_fields = mandatory_fields.union({'switch_info'})
+
+    @staticmethod
+    def validate(value):
+        """Validate and convert the input to a LocalLinkConnectionType.
+
+        :param value: A dictionary of values to validate, switch_id is a MAC
+            address or an OpenFlow based datapath_id, switch_info is an
+            optional field.
+
+        For example::
+
+         {
+            'switch_id': mac_or_datapath_id(),
+            'port_id': 'Ethernet3/1',
+            'switch_info': 'switch1'
+         }
+
+        :returns: A dictionary.
+        :raises: Invalid if some of the keys in the dictionary being validated
+            are unknown, invalid, or some required ones are missing.
+        """
+        wtypes.DictType(wtypes.text, wtypes.text).validate(value)
+
+        keys = set(value)
+
+        # This is to workaround an issue when an API object is initialized from
+        # RPC object, in which dictionary fields that are set to None become
+        # empty dictionaries
+        if not keys:
+            return value
+
+        invalid = keys - LocalLinkConnectionType.valid_fields
+        if invalid:
+            raise exception.Invalid(_('%s are invalid keys') % (invalid))
+
+        # Check all mandatory fields are present
+        missing = LocalLinkConnectionType.mandatory_fields - keys
+        if missing:
+            msg = _('Missing mandatory keys: %s') % missing
+            raise exception.Invalid(msg)
+
+        # Check switch_id is either a valid mac address or
+        # OpenFlow datapath_id and normalize it.
+        try:
+            value['switch_id'] = utils.validate_and_normalize_mac(
+                value['switch_id'])
+        except exception.InvalidMAC:
+            try:
+                value['switch_id'] = utils.validate_and_normalize_datapath_id(
+                    value['switch_id'])
+            except exception.InvalidDatapathID:
+                raise exception.InvalidSwitchID(switch_id=value['switch_id'])
+
+        return value
+
+    @staticmethod
+    def frombasetype(value):
+        if value is None:
+            return None
+        return LocalLinkConnectionType.validate(value)
+
+locallinkconnectiontype = LocalLinkConnectionType()

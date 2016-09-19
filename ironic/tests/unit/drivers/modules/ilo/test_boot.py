@@ -100,9 +100,8 @@ class IloBootPrivateMethodsTestCase(db_base.DbTestCase):
     @mock.patch.object(image_service.HttpImageService, 'validate_href',
                        spec_set=True, autospec=True)
     def test__get_boot_iso_unsupported_url(self, validate_href_mock):
-        validate_href_mock.side_effect = iter(
-            [exception.ImageRefValidationFailed(
-                image_href='file://img.qcow2', reason='fail')])
+        validate_href_mock.side_effect = exception.ImageRefValidationFailed(
+            image_href='file://img.qcow2', reason='fail')
         url = 'file://img.qcow2'
         i_info = self.node.instance_info
         i_info['ilo_boot_iso'] = url
@@ -502,8 +501,8 @@ class IloVirtualMediaBootTestCase(db_base.DbTestCase):
 
     @mock.patch.object(service_utils, 'is_glance_image', spec_set=True,
                        autospec=True)
-    def test_prepare_ramdisk_not_deploying(self, mock_is_image):
-        """Ensure ramdisk build operations are blocked when not deploying"""
+    def test_prepare_ramdisk_not_deploying_not_cleaning(self, mock_is_image):
+        """Ensure deploy ops are blocked when not deploying and not cleaning"""
 
         for state in states.STABLE_STATES:
             mock_is_image.reset_mock()
@@ -526,6 +525,25 @@ class IloVirtualMediaBootTestCase(db_base.DbTestCase):
 
     def test_prepare_ramdisk_not_a_glance_image(self):
         self.node.provision_state = states.DEPLOYING
+        self.node.save()
+        self._test_prepare_ramdisk(
+            ilo_boot_iso='http://mybootiso',
+            image_source='http://myimage')
+        self.node.refresh()
+        self.assertEqual('http://mybootiso',
+                         self.node.instance_info['ilo_boot_iso'])
+
+    def test_prepare_ramdisk_glance_image_cleaning(self):
+        self.node.provision_state = states.CLEANING
+        self.node.save()
+        self._test_prepare_ramdisk(
+            ilo_boot_iso='swift:abcdef',
+            image_source='6b2f0c0c-79e8-4db6-842e-43c9764204af')
+        self.node.refresh()
+        self.assertNotIn('ilo_boot_iso', self.node.instance_info)
+
+    def test_prepare_ramdisk_not_a_glance_image_cleaning(self):
+        self.node.provision_state = states.CLEANING
         self.node.save()
         self._test_prepare_ramdisk(
             ilo_boot_iso='http://mybootiso',

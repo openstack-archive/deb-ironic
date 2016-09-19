@@ -156,8 +156,7 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     @mock.patch.object(console_utils, '_get_console_pid', autospec=True)
     def test__stop_console_nopid(self, mock_pid, mock_kill, mock_unlink):
         pid_file = console_utils._get_console_pid_file(self.info['uuid'])
-        mock_pid.side_effect = iter(
-            [exception.NoConsolePid(pid_path="/tmp/blah")])
+        mock_pid.side_effect = exception.NoConsolePid(pid_path="/tmp/blah")
 
         self.assertRaises(exception.NoConsolePid,
                           console_utils._stop_console,
@@ -291,7 +290,7 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
                                              mock_pid,
                                              mock_popen):
         # no existing PID file before starting
-        mock_stop.side_effect = iter([exception.NoConsolePid('/tmp/blah')])
+        mock_stop.side_effect = exception.NoConsolePid('/tmp/blah')
         mock_popen.return_value.poll.return_value = 0
         mock_pid.return_value = 12345
         mock_pid_exists.return_value = True
@@ -381,8 +380,7 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
     def test_start_shellinabox_console_fail_nopiddir(self, mock_stop,
                                                      mock_dir_exists,
                                                      mock_popen):
-        mock_dir_exists.side_effect = iter(
-            [exception.ConsoleError(message='fail')])
+        mock_dir_exists.side_effect = exception.ConsoleError(message='fail')
         mock_popen.return_value.poll.return_value = 0
 
         self.assertRaises(exception.ConsoleError,
@@ -404,8 +402,134 @@ class ConsoleUtilsTestCase(db_base.DbTestCase):
 
     @mock.patch.object(console_utils, '_stop_console', autospec=True)
     def test_stop_shellinabox_console_fail_nopid(self, mock_stop):
-        mock_stop.side_effect = iter([exception.NoConsolePid('/tmp/blah')])
+        mock_stop.side_effect = exception.NoConsolePid('/tmp/blah')
 
         console_utils.stop_shellinabox_console(self.info['uuid'])
 
         mock_stop.assert_called_once_with(self.info['uuid'])
+
+    def test_get_socat_console_url_tcp(self):
+        self.config(my_ip="10.0.0.1")
+        url = console_utils.get_socat_console_url(self.info['port'])
+        self.assertEqual("tcp://10.0.0.1:%s" % self.info['port'], url)
+
+    def test_get_socat_console_url_tcp6(self):
+        self.config(my_ip='::1')
+        url = console_utils.get_socat_console_url(self.info['port'])
+        self.assertEqual("tcp://[::1]:%s" % self.info['port'], url)
+
+    @mock.patch.object(os.path, 'exists', autospec=True)
+    @mock.patch.object(subprocess, 'Popen', autospec=True)
+    @mock.patch.object(psutil, 'pid_exists', autospec=True)
+    @mock.patch.object(console_utils, '_get_console_pid', autospec=True)
+    @mock.patch.object(console_utils, '_ensure_console_pid_dir_exists',
+                       autospec=True)
+    @mock.patch.object(console_utils, '_stop_console', autospec=True)
+    def test_start_socat_console(self, mock_stop,
+                                 mock_dir_exists,
+                                 mock_get_pid,
+                                 mock_pid_exists,
+                                 mock_popen,
+                                 mock_path_exists):
+        mock_popen.return_value.pid = 23456
+        mock_popen.return_value.poll.return_value = None
+        mock_popen.return_value.communicate.return_value = (None, None)
+
+        mock_get_pid.return_value = 23456
+        mock_path_exists.return_value = True
+
+        console_utils.start_socat_console(self.info['uuid'],
+                                          self.info['port'],
+                                          'ls&')
+
+        mock_stop.assert_called_once_with(self.info['uuid'])
+        mock_dir_exists.assert_called_once_with()
+        mock_get_pid.assert_called_with(self.info['uuid'])
+        mock_path_exists.assert_called_with(mock.ANY)
+        mock_popen.assert_called_once_with(mock.ANY, stderr=subprocess.PIPE)
+
+    @mock.patch.object(os.path, 'exists', autospec=True)
+    @mock.patch.object(subprocess, 'Popen', autospec=True)
+    @mock.patch.object(psutil, 'pid_exists', autospec=True)
+    @mock.patch.object(console_utils, '_get_console_pid', autospec=True)
+    @mock.patch.object(console_utils, '_ensure_console_pid_dir_exists',
+                       autospec=True)
+    @mock.patch.object(console_utils, '_stop_console', autospec=True)
+    def test_start_socat_console_nopid(self, mock_stop,
+                                       mock_dir_exists,
+                                       mock_get_pid,
+                                       mock_pid_exists,
+                                       mock_popen,
+                                       mock_path_exists):
+        # no existing PID file before starting
+        mock_stop.side_effect = exception.NoConsolePid('/tmp/blah')
+        mock_popen.return_value.pid = 23456
+        mock_popen.return_value.poll.return_value = None
+        mock_popen.return_value.communicate.return_value = (None, None)
+
+        mock_get_pid.return_value = 23456
+        mock_path_exists.return_value = True
+
+        console_utils.start_socat_console(self.info['uuid'],
+                                          self.info['port'],
+                                          'ls&')
+
+        mock_stop.assert_called_once_with(self.info['uuid'])
+        mock_dir_exists.assert_called_once_with()
+        mock_get_pid.assert_called_with(self.info['uuid'])
+        mock_path_exists.assert_called_with(mock.ANY)
+        mock_popen.assert_called_once_with(mock.ANY, stderr=subprocess.PIPE)
+
+    @mock.patch.object(subprocess, 'Popen', autospec=True)
+    @mock.patch.object(console_utils, '_ensure_console_pid_dir_exists',
+                       autospec=True)
+    @mock.patch.object(console_utils, '_stop_console', autospec=True)
+    def test_start_socat_console_fail(self, mock_stop, mock_dir_exists,
+                                      mock_popen):
+        mock_popen.side_effect = OSError()
+        mock_popen.return_value.pid = 23456
+        mock_popen.return_value.poll.return_value = 1
+        mock_popen.return_value.communicate.return_value = (None, 'error')
+
+        self.assertRaises(exception.ConsoleSubprocessFailed,
+                          console_utils.start_socat_console,
+                          self.info['uuid'],
+                          self.info['port'],
+                          'ls&')
+
+        mock_stop.assert_called_once_with(self.info['uuid'])
+        mock_dir_exists.assert_called_once_with()
+        mock_popen.assert_called_once_with(mock.ANY, stderr=subprocess.PIPE)
+
+    @mock.patch.object(subprocess, 'Popen', autospec=True)
+    @mock.patch.object(console_utils, '_ensure_console_pid_dir_exists',
+                       autospec=True)
+    @mock.patch.object(console_utils, '_stop_console', autospec=True)
+    def test_start_socat_console_fail_nopiddir(self, mock_stop,
+                                               mock_dir_exists,
+                                               mock_popen):
+        mock_dir_exists.side_effect = exception.ConsoleError(message='fail')
+
+        self.assertRaises(exception.ConsoleError,
+                          console_utils.start_socat_console,
+                          self.info['uuid'],
+                          self.info['port'],
+                          'ls&')
+
+        mock_stop.assert_called_once_with(self.info['uuid'])
+        mock_dir_exists.assert_called_once_with()
+        mock_popen.assert_not_called()
+
+    @mock.patch.object(console_utils, '_stop_console', autospec=True)
+    def test_stop_socat_console(self, mock_stop):
+        console_utils.stop_socat_console(self.info['uuid'])
+        mock_stop.assert_called_once_with(self.info['uuid'])
+
+    @mock.patch.object(console_utils.LOG, 'warning', autospec=True)
+    @mock.patch.object(console_utils, '_stop_console', autospec=True)
+    def test_stop_socat_console_fail_nopid(self, mock_stop, mock_log_warning):
+        mock_stop.side_effect = exception.NoConsolePid('/tmp/blah')
+        console_utils.stop_socat_console(self.info['uuid'])
+        mock_stop.assert_called_once_with(self.info['uuid'])
+        # LOG.warning() is called when _stop_console() raises NoConsolePid
+        self.assertTrue(mock_log_warning.called)

@@ -94,6 +94,15 @@ def node_post_data(**kw):
     node.pop('conductor_affinity')
     node.pop('chassis_id')
     node.pop('tags')
+
+    # NOTE(jroll): pop out fields that were introduced in later API versions,
+    # unless explicitly requested. Otherwise, these will cause tests using
+    # older API versions to fail.
+    if 'network_interface' not in kw:
+        node.pop('network_interface')
+    if 'resource_class' not in kw:
+        node.pop('resource_class')
+
     internal = node_controller.NodePatchType.internal_attrs()
     return remove_internal(node, internal)
 
@@ -102,9 +111,6 @@ def port_post_data(**kw):
     port = utils.get_test_port(**kw)
     # node_id is not part of the API object
     port.pop('node_id')
-    # TODO(vsaienko): remove when API part is added
-    port.pop('local_link_connection')
-    port.pop('pxe_enabled')
     # portgroup_id is not part of the API object
     port.pop('portgroup_id')
     internal = port_controller.PortPatchType.internal_attrs()

@@ -245,7 +245,8 @@ Features
   image provisioning is done using iSCSI over data network, so this driver has
   the benefit of security enhancement with the same performance. It segregates
   management info from data channel.
-* Support for out-of-band cleaning operations.
+* Supports both out-of-band and in-band cleaning operations. For more details,
+  see :ref:`InbandvsOutOfBandCleaning`.
 * Remote Console
 * HW Sensors
 * Works well for machines with resource constraints (lesser amount of memory).
@@ -288,12 +289,21 @@ Nodes configured for iLO driver should have the ``driver`` property set to
 - ``ilo_username``: Username for the iLO with administrator privileges.
 - ``ilo_password``: Password for the above iLO user.
 - ``ilo_deploy_iso``: The glance UUID of the deploy ramdisk ISO image.
+- ``ca_file``: (optional) CA certificate file to validate iLO.
 - ``client_port``: (optional) Port to be used for iLO operations if you are
   using a custom port on the iLO.  Default port used is 443.
 - ``client_timeout``: (optional) Timeout for iLO operations. Default timeout
   is 60 seconds.
 - ``console_port``: (optional) Node's UDP port for console access. Any unused
   port on the ironic conductor node may be used.
+
+.. note::
+   To update SSL certificates into iLO, you can refer to `HPE Integrated
+   Lights-Out Security Technology Brief <http://h20564.www2.hpe.com/hpsc/doc/public/display?docId=c04530504>`_.
+   You can use iLO hostname or IP address as a 'Common Name (CN)' while
+   generating Certificate Signing Request (CSR). Use the same value as
+   `ilo_address` while enrolling node to Bare Metal service to avoid SSL
+   certificate validation errors related to hostname mismatch.
 
 For example, you could run a similar command like below to enroll the ProLiant
 node::
@@ -425,12 +435,21 @@ Nodes configured for iLO driver should have the ``driver`` property set to
 - ``ilo_username``: Username for the iLO with administrator privileges.
 - ``ilo_password``: Password for the above iLO user.
 - ``ilo_deploy_iso``: The glance UUID of the deploy ramdisk ISO image.
+- ``ca_file``: (optional) CA certificate file to validate iLO.
 - ``client_port``: (optional) Port to be used for iLO operations if you are
   using a custom port on the iLO.  Default port used is 443.
 - ``client_timeout``: (optional) Timeout for iLO operations. Default timeout
   is 60 seconds.
 - ``console_port``: (optional) Node's UDP port for console access. Any unused
   port on the ironic conductor node may be used.
+
+.. note::
+   To update SSL certificates into iLO, you can refer to `HPE Integrated
+   Lights-Out Security Technology Brief <http://h20564.www2.hpe.com/hpsc/doc/public/display?docId=c04530504>`_.
+   You can use iLO hostname or IP address as a 'Common Name (CN)' while
+   generating Certificate Signing Request (CSR). Use the same value as
+   `ilo_address` while enrolling node to Bare Metal service to avoid SSL
+   certificate validation errors related to hostname mismatch.
 
 For example, you could run a similar command like below to enroll the ProLiant
 node::
@@ -503,7 +522,8 @@ Features
 * Automatic detection of current boot mode.
 * Automatic setting of the required boot mode, if UEFI boot mode is requested
   by the nova flavor's extra spec.
-* Support for out-of-band cleaning operations.
+* Supports both out-of-band and in-band cleaning operations. For more details,
+  see :ref:`InbandvsOutOfBandCleaning`.
 * Support for out-of-band hardware inspection.
 * Supports UEFI Boot mode
 * Supports UEFI Secure Boot
@@ -543,12 +563,21 @@ Nodes configured for iLO driver should have the ``driver`` property set to
 - ``ilo_password``: Password for the above iLO user.
 - ``deploy_kernel``: The glance UUID of the deployment kernel.
 - ``deploy_ramdisk``: The glance UUID of the deployment ramdisk.
+- ``ca_file``: (optional) CA certificate file to validate iLO.
 - ``client_port``: (optional) Port to be used for iLO operations if you are
   using a custom port on the iLO. Default port used is 443.
 - ``client_timeout``: (optional) Timeout for iLO operations. Default timeout
   is 60 seconds.
 - ``console_port``: (optional) Node's UDP port for console access. Any unused
   port on the ironic conductor node may be used.
+
+.. note::
+   To update SSL certificates into iLO, you can refer to `HPE Integrated
+   Lights-Out Security Technology Brief <http://h20564.www2.hpe.com/hpsc/doc/public/display?docId=c04530504>`_.
+   You can use iLO hostname or IP address as a 'Common Name (CN)' while
+   generating Certificate Signing Request (CSR). Use the same value as
+   `ilo_address` while enrolling node to Bare Metal service to avoid SSL
+   certificate validation errors related to hostname mismatch.
 
 For example, you could run a similar command like below to enroll the ProLiant
 node::
@@ -775,7 +804,6 @@ Supported **Automated** Cleaning Operations
   - clean_priority_reset_secure_boot_keys_to_default=20
   - clean_priority_clear_secure_boot_keys=0
   - clean_priority_reset_ilo_credential=30
-  - clean_priority_erase_devices=10
 
 For more information on node automated cleaning, see :ref:`automated_cleaning`
 
