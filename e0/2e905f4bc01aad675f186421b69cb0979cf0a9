@@ -1,0 +1,9 @@
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 22 Sep 2016 16:34:08 +0000
+Reviewed-on: https://review.openstack.org/334774
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/mitaka
