@@ -83,8 +83,8 @@ Build-Depends-Indep: alembic (>= 0.8.4),
                      testrepository,
                      websockify (>= 0.8.0),
 Standards-Version: 3.9.8
-Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-ironic
-Vcs-Git: https://git.openstack.org/openstack/deb-ironic
+Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-ironic?h=debian%2Fnewton
+Vcs-Git: https://git.openstack.org/openstack/deb-ironic -b debian/newton
 Homepage: https://github.com/openstack/ironic
 
 Package: python-ironic
