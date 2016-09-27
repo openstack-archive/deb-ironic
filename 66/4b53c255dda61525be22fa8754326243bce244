@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: ShangXiao <shangxiaobj@inspur.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 27 Sep 2016 16:08:38 +0000
+Reviewed-on: https://review.openstack.org/377235
+Project: openstack/deb-ironic
+Branch: refs/heads/master
