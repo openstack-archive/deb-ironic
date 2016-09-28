@@ -154,9 +154,10 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
     @mock.patch.object(ilo_client, 'IloClient', spec_set=True,
                        autospec=True)
     def _test_get_ilo_object(self, ilo_client_mock, isFile_mock, ca_file=None):
-        self.info['client_timeout'] = 60
-        self.info['client_port'] = 443
+        self.info['client_timeout'] = 600
+        self.info['client_port'] = 4433
         self.info['ca_file'] = ca_file
+        self.node.driver_info = self.info
         ilo_client_mock.return_value = 'ilo_object'
         returned_ilo_object = ilo_common.get_ilo_object(self.node)
         ilo_client_mock.assert_called_with(
@@ -164,7 +165,8 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
             self.info['ilo_username'],
             self.info['ilo_password'],
             self.info['client_timeout'],
-            self.info['client_port'])
+            self.info['client_port'],
+            cacert=self.info['ca_file'])
         self.assertEqual('ilo_object', returned_ilo_object)
 
     def test_get_ilo_object_cafile(self):
@@ -240,7 +242,7 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
         deploy_args = {'arg1': 'val1', 'arg2': 'val2'}
         swift_obj_mock.get_temp_url.return_value = 'temp-url'
         timeout = CONF.ilo.swift_object_expiry_timeout
-        object_headers = {'X-Delete-After': timeout}
+        object_headers = {'X-Delete-After': str(timeout)}
 
         with task_manager.acquire(self.context, self.node.uuid,
                                   shared=False) as task:
@@ -373,9 +375,22 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
             ilo_common.update_boot_mode(task)
             set_boot_mode_mock.assert_called_once_with(task.node, 'bios')
 
+    @mock.patch.object(ilo_common, 'set_boot_mode', spec_set=True,
+                       autospec=True)
+    def test_update_boot_mode_use_def_boot_mode(self,
+                                                set_boot_mode_mock):
+        self.config(default_boot_mode='bios', group='ilo')
+        with task_manager.acquire(self.context, self.node.uuid,
+                                  shared=False) as task:
+            ilo_common.update_boot_mode(task)
+            set_boot_mode_mock.assert_called_once_with(task.node, 'bios')
+            self.assertEqual('bios',
+                             task.node.instance_info['deploy_boot_mode'])
+
     @mock.patch.object(ilo_common, 'get_ilo_object', spec_set=True,
                        autospec=True)
     def test_update_boot_mode(self, get_ilo_object_mock):
+        self.config(default_boot_mode="auto", group='ilo')
         ilo_mock_obj = get_ilo_object_mock.return_value
         ilo_mock_obj.get_pending_boot_mode.return_value = 'LEGACY'
 
@@ -772,7 +787,7 @@ class IloCommonMethodsTestCase(db_base.DbTestCase):
         swift_obj_mock = swift_api_mock.return_value
         destination_object_name = 'destination_object_name'
         source_file_path = 'tmp_image_file'
-        object_headers = {'X-Delete-After': timeout}
+        object_headers = {'X-Delete-After': str(timeout)}
         # | WHEN |
         ilo_common.copy_image_to_swift(source_file_path,
                                        destination_object_name)

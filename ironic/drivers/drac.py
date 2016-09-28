@@ -20,8 +20,11 @@ from oslo_utils import importutils
 from ironic.common import exception
 from ironic.common.i18n import _
 from ironic.drivers import base
+from ironic.drivers.modules.drac import deploy
+from ironic.drivers.modules.drac import inspect as drac_inspect
 from ironic.drivers.modules.drac import management
 from ironic.drivers.modules.drac import power
+from ironic.drivers.modules.drac import raid
 from ironic.drivers.modules.drac import vendor_passthru
 from ironic.drivers.modules import inspector
 from ironic.drivers.modules import iscsi_deploy
@@ -30,7 +33,7 @@ from ironic.drivers import utils
 
 
 class PXEDracDriver(base.BaseDriver):
-    """Drac driver using PXE for deploy."""
+    """DRAC driver using PXE for deploy."""
 
     def __init__(self):
         if not importutils.try_import('dracclient'):
@@ -40,8 +43,9 @@ class PXEDracDriver(base.BaseDriver):
 
         self.power = power.DracPower()
         self.boot = pxe.PXEBoot()
-        self.deploy = iscsi_deploy.ISCSIDeploy()
+        self.deploy = deploy.DracDeploy()
         self.management = management.DracManagement()
+        self.raid = raid.DracRAID()
         self.iscsi_vendor = iscsi_deploy.VendorPassthru()
         self.drac_vendor = vendor_passthru.DracVendorPassthru()
         self.mapping = {'heartbeat': self.iscsi_vendor,
@@ -49,9 +53,18 @@ class PXEDracDriver(base.BaseDriver):
                         'set_bios_config': self.drac_vendor,
                         'commit_bios_config': self.drac_vendor,
                         'abandon_bios_config': self.drac_vendor,
+                        'list_unfinished_jobs': self.drac_vendor,
                         }
         self.driver_passthru_mapping = {'lookup': self.iscsi_vendor}
         self.vendor = utils.MixinVendorInterface(self.mapping,
                                                  self.driver_passthru_mapping)
+        self.inspect = drac_inspect.DracInspect()
+
+
+class PXEDracInspectorDriver(PXEDracDriver):
+    """Drac driver using PXE for deploy and OOB inspection interface."""
+
+    def __init__(self):
+        super(PXEDracInspectorDriver, self).__init__()
         self.inspect = inspector.Inspector.create_if_enabled(
-            'PXEDracDriver')
+            'PXEDracInspectorDriver')

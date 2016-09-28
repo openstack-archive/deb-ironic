@@ -22,9 +22,7 @@ from oslo_utils import timeutils
 import six
 
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import swift
 from ironic.conductor import utils
 from ironic.drivers import base
@@ -312,7 +310,7 @@ def store_ramdisk_logs(node, logs):
 
             # convert days to seconds
             timeout = CONF.agent.deploy_logs_swift_days_to_expire * 86400
-            object_headers = {'X-Delete-After': timeout}
+            object_headers = {'X-Delete-After': str(timeout)}
             swift_api = swift.SwiftAPI()
             swift_api.create_object(
                 CONF.agent.deploy_logs_swift_container, logs_file_name,

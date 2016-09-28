@@ -39,9 +39,7 @@ import retrying
 
 from ironic.common import boot_devices
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager
@@ -398,8 +396,8 @@ def _parse_driver_info(node):
     # precedence etc).
     if len([v for v in (password, key_filename, key_contents) if v]) != 1:
         raise exception.InvalidParameterValue(_(
-            "SSHPowerDriver requires one and only one of password, "
-            "key_contents and key_filename to be set."))
+            "SSHPowerDriver requires one and only one of ssh_password, "
+            "ssh_key_contents and ssh_key_filename to be set."))
     if password:
         res['password'] = password
     elif key_contents:

@@ -1,6 +1,3 @@
-# Copyright 2016 Intel Corporation
-# Copyright 2015, Cisco Systems.
-#
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
 #    a copy of the License at
@@ -13,21 +10,22 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
+"""add_standalone_ports_supported_to_portgroup
 
-from ironic.common.i18n import _
+Revision ID: 60cf717201bc
+Revises: c14cef6dfedf
+Create Date: 2016-08-25 07:00:56.662645
 
-opts = [
-    cfg.IntOpt('max_retry',
-               default=6,
-               help=_('Number of times a power operation needs to be '
-                      'retried')),
-    cfg.IntOpt('action_interval',
-               default=5,
-               help=_('Amount of time in seconds to wait in between power '
-                      'operations')),
-]
+"""
+
+# revision identifiers, used by Alembic.
+revision = '60cf717201bc'
+down_revision = 'c14cef6dfedf'
+
+from alembic import op
+import sqlalchemy as sa
 
 
-def register_opts(conf):
-    conf.register_opts(opts, group='cisco_ucs')
+def upgrade():
+    op.add_column('portgroups', sa.Column('standalone_ports_supported',
+                                          sa.Boolean))

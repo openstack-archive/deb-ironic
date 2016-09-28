@@ -1,9 +1,5 @@
 # Copyright 2013,2014 Cray Inc
 #
-# Authors: David Hewson <dhewson@cray.com>
-#          Stig Telfer <stelfer@cray.com>
-#          Mark Goddard <mgoddard@cray.com>
-#
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -36,8 +32,7 @@ from oslo_utils import importutils
 import six
 
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LW
 from ironic.common import states
 from ironic.common import utils
 from ironic.conductor import task_manager

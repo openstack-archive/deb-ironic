@@ -12,10 +12,7 @@
 
 import itertools
 
-import ironic.drivers.modules.amt.common
-import ironic.drivers.modules.amt.power
-import ironic.drivers.modules.iscsi_deploy
-import ironic.drivers.modules.pxe
+import ironic.conf
 
 _default_opt_lists = [
     ironic.conf.default.api_opts,
@@ -25,6 +22,7 @@ _default_opt_lists = [
     ironic.conf.default.image_opts,
     ironic.conf.default.img_cache_opts,
     ironic.conf.default.netconf_opts,
+    ironic.conf.default.notification_opts,
     ironic.conf.default.path_opts,
     ironic.conf.default.service_opts,
     ironic.conf.default.utils_opts,
@@ -33,33 +31,30 @@ _default_opt_lists = [
 _opts = [
     ('DEFAULT', itertools.chain(*_default_opt_lists)),
     ('agent', ironic.conf.agent.opts),
-    ('amt', itertools.chain(
-        ironic.drivers.modules.amt.common.opts,
-        ironic.drivers.modules.amt.power.opts)),
+    ('amt', ironic.conf.amt.opts),
     ('api', ironic.conf.api.opts),
     ('audit', ironic.conf.audit.opts),
-    ('cimc', ironic.conf.cimc.opts),
-    ('cisco_ucs', ironic.conf.cisco_ucs.opts),
+    ('cimc', ironic.conf.cisco.cimc_opts),
+    ('cisco_ucs', ironic.conf.cisco.ucsm_opts),
     ('conductor', ironic.conf.conductor.opts),
     ('console', ironic.conf.console.opts),
     ('database', ironic.conf.database.opts),
     ('deploy', ironic.conf.deploy.opts),
     ('dhcp', ironic.conf.dhcp.opts),
+    ('drac', ironic.conf.drac.opts),
     ('glance', ironic.conf.glance.list_opts()),
     ('iboot', ironic.conf.iboot.opts),
     ('ilo', ironic.conf.ilo.opts),
     ('inspector', ironic.conf.inspector.list_opts()),
     ('ipmi', ironic.conf.ipmi.opts),
     ('irmc', ironic.conf.irmc.opts),
-    ('iscsi', ironic.drivers.modules.iscsi_deploy.iscsi_opts),
+    ('iscsi', ironic.conf.iscsi.opts),
     ('keystone', ironic.conf.keystone.opts),
     ('metrics', ironic.conf.metrics.opts),
     ('metrics_statsd', ironic.conf.metrics_statsd.opts),
     ('neutron', ironic.conf.neutron.list_opts()),
     ('oneview', ironic.conf.oneview.opts),
-    ('pxe', itertools.chain(
-        ironic.drivers.modules.iscsi_deploy.pxe_opts,
-        ironic.drivers.modules.pxe.pxe_opts)),
+    ('pxe', ironic.conf.pxe.opts),
     ('seamicro', ironic.conf.seamicro.opts),
     ('service_catalog', ironic.conf.service_catalog.list_opts()),
     ('snmp', ironic.conf.snmp.opts),

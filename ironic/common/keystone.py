@@ -21,8 +21,7 @@ import six
 from six.moves.urllib import parse  # for legacy options loading only
 
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
+from ironic.common.i18n import _, _LE
 from ironic.conf import auth as ironic_auth
 from ironic.conf import CONF
 
@@ -90,6 +89,13 @@ def _get_legacy_auth():
     Used only to provide backward compatibility with old configs.
     """
     conf = getattr(CONF, ironic_auth.LEGACY_SECTION)
+    # NOTE(pas-ha) first try to load auth from legacy section
+    # using the new keystoneauth options that might be already set there
+    auth = ironic_auth.load_auth(CONF, ironic_auth.LEGACY_SECTION)
+    if auth:
+        return auth
+    # NOTE(pas-ha) now we surely have legacy config section for auth
+    # and with legacy options set in it, deal with it.
     legacy_loader = kaloading.get_plugin_loader('password')
     auth_params = {
         'auth_url': conf.auth_uri,
@@ -121,7 +127,7 @@ def get_service_url(session, service_type='baremetal',
     :returns: an http/https url for the desired endpoint.
     """
     return session.get_endpoint(service_type=service_type,
-                                interface_type=endpoint_type,
+                                interface=endpoint_type,
                                 region=CONF.keystone.region_name)
 
 

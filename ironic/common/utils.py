@@ -37,9 +37,7 @@ import pytz
 import six
 
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.conf import CONF
 
 LOG = logging.getLogger(__name__)
@@ -372,18 +370,6 @@ def read_cached_file(filename, cache_info, reload_func=None):
         if reload_func:
             reload_func(cache_info['data'])
     return cache_info['data']
-
-
-def file_open(*args, **kwargs):
-    """Open file
-
-    see built-in file() documentation for more details
-
-    Note: The reason this is kept in a separate module is to easily
-          be able to provide a stub module that doesn't alter system
-          state at all (for unit tests)
-    """
-    return file(*args, **kwargs)
 
 
 def _get_hash_object(hash_algo_name):

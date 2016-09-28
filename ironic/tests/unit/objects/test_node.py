@@ -14,7 +14,7 @@
 #    under the License.
 
 import mock
-from testtools.matchers import HasLength
+from testtools import matchers
 
 from ironic.common import context
 from ironic.common import exception
@@ -79,7 +79,7 @@ class TestNodeObject(base.DbTestCase):
                                    autospec=True) as mock_update_node:
 
                 n = objects.Node.get(self.context, uuid)
-                self.assertEqual({"foo": "bar", "fake_password": "fakepass"},
+                self.assertEqual({"private_state": "secret value"},
                                  n.driver_internal_info)
                 n.properties = {"fake": "property"}
                 n.driver = "fake-driver"
@@ -113,7 +113,7 @@ class TestNodeObject(base.DbTestCase):
                                autospec=True) as mock_get_list:
             mock_get_list.return_value = [self.fake_node]
             nodes = objects.Node.list(self.context)
-            self.assertThat(nodes, HasLength(1))
+            self.assertThat(nodes, matchers.HasLength(1))
             self.assertIsInstance(nodes[0], objects.Node)
             self.assertEqual(self.context, nodes[0]._context)
 

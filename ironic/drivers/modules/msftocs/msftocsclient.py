@@ -19,7 +19,7 @@ https://github.com/MSOpenTech/ChassisManager
 """
 
 import posixpath
-from xml.etree import ElementTree
+from xml import etree
 
 from oslo_log import log
 import requests
@@ -27,8 +27,7 @@ from requests import auth
 from requests import exceptions as requests_exceptions
 
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
+from ironic.common.i18n import _, _LE
 
 LOG = log.getLogger(__name__)
 
@@ -80,8 +79,8 @@ class MSFTOCSClientApi(object):
 
     def _check_completion_code(self, xml_response):
         try:
-            et = ElementTree.fromstring(xml_response)
-        except ElementTree.ParseError as ex:
+            et = etree.ElementTree.fromstring(xml_response)
+        except etree.ElementTree.ParseError as ex:
             LOG.exception(_LE("XML parsing failed: %s"), ex)
             raise exception.MSFTOCSClientApiException(
                 _("Invalid XML: %s") % xml_response)

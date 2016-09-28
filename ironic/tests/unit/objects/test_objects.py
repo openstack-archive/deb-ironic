@@ -306,15 +306,15 @@ class _TestObject(object):
     def test_get(self):
         obj = MyObj(self.context, foo=1)
         # Foo has value, should not get the default
-        self.assertEqual(obj.get('foo', 2), 1)
+        self.assertEqual(1, obj.get('foo', 2))
         # Foo has value, should return the value without error
-        self.assertEqual(obj.get('foo'), 1)
+        self.assertEqual(1, obj.get('foo'))
         # Bar is not loaded, so we should get the default
-        self.assertEqual(obj.get('bar', 'not-loaded'), 'not-loaded')
+        self.assertEqual('not-loaded', obj.get('bar', 'not-loaded'))
         # Bar without a default should lazy-load
-        self.assertEqual(obj.get('bar'), 'loaded!')
+        self.assertEqual('loaded!', obj.get('bar'))
         # Bar now has a default, but loaded value should be returned
-        self.assertEqual(obj.get('bar', 'not-loaded'), 'loaded!')
+        self.assertEqual('loaded!', obj.get('bar', 'not-loaded'))
         # Invalid attribute should raise AttributeError
         self.assertRaises(AttributeError, obj.get, 'nothing')
         # ...even with a default
@@ -371,8 +371,8 @@ class _TestObject(object):
         current_obj.foo = 2
         current_obj.bar = 'current.bar'
         obj.obj_refresh(current_obj)
-        self.assertEqual(obj.foo, 2)
-        self.assertEqual(obj.bar, 'current.bar')
+        self.assertEqual(2, obj.foo)
+        self.assertEqual('current.bar', obj.bar)
 
     def test_obj_constructor(self):
         obj = MyObj(self.context, foo=123, bar='abc')
@@ -408,8 +408,10 @@ expected_object_fingerprints = {
     'MyObj': '1.5-4f5efe8f0fcaf182bbe1c7fe3ba858db',
     'Chassis': '1.3-d656e039fd8ae9f34efc232ab3980905',
     'Port': '1.6-609504503d68982a10f495659990084b',
-    'Portgroup': '1.1-e57da9ca808d3696c34dad8125564696',
-    'Conductor': '1.1-5091f249719d4a465062a1b3dc7f860d'
+    'Portgroup': '1.2-37b374b19bfd25db7e86aebc364e611e',
+    'Conductor': '1.1-5091f249719d4a465062a1b3dc7f860d',
+    'EventType': '1.1-5d44b591d93189b2ea91a1af9b082df6',
+    'NotificationPublisher': '1.0-51a09397d6c0687771fb5be9a999605d',
 }
 
 
@@ -447,7 +449,7 @@ class TestObjectSerializer(test_base.TestCase):
             primitive = ser.serialize_entity(self.context, thing)
             self.assertEqual(1, len(primitive))
             for item in primitive:
-                self.assertFalse(isinstance(item, base.IronicObject))
+                self.assertNotIsInstance(item, base.IronicObject)
             thing2 = ser.deserialize_entity(self.context, primitive)
             self.assertEqual(1, len(thing2))
             for item in thing2:

@@ -21,10 +21,7 @@ import six.moves.urllib_parse as urlparse
 from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LI
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LI, _LW
 from ironic.common import image_service
 from ironic.common import images
 from ironic.common import raid
@@ -261,6 +258,7 @@ class AgentDeployMixin(agent_base_vendor.AgentDeployMixin):
             if no_proxy is not None:
                 image_info['no_proxy'] = no_proxy
 
+        image_info['node_uuid'] = node.uuid
         iwdi = node.driver_internal_info.get('is_whole_disk_image')
         if not iwdi:
             for label in PARTITION_IMAGE_LABELS:
@@ -275,7 +273,6 @@ class AgentDeployMixin(agent_base_vendor.AgentDeployMixin):
             disk_label = deploy_utils.get_disk_label(node)
             if disk_label is not None:
                 image_info['disk_label'] = disk_label
-            image_info['node_uuid'] = node.uuid
 
         # Tell the client to download and write the image with the given args
         self._client.prepare_image(node, image_info)
@@ -497,10 +494,6 @@ class AgentDeploy(AgentDeployMixin, base.DeployInterface):
     def take_over(self, task):
         """Take over management of this node from a dead conductor.
 
-        Since this deploy interface only does local boot, there's no need
-        for this conductor to do anything when it takes over management
-        of this node.
-
         :param task: a TaskManager instance.
         """
         pass
@@ -517,6 +510,8 @@ class AgentDeploy(AgentDeployMixin, base.DeployInterface):
         """
         new_priorities = {
             'erase_devices': CONF.deploy.erase_devices_priority,
+            'erase_devices_metadata':
+                CONF.deploy.erase_devices_metadata_priority,
         }
         return deploy_utils.agent_get_clean_steps(
             task, interface='deploy',

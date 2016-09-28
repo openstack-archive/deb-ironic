@@ -3,9 +3,11 @@ Author: Thomas Goirand <zigo@debian.org>
 Forwarded: not-needed
 Last-Update: 2016-06-30
 
---- ironic-6.0.0.orig/requirements.txt
-+++ ironic-6.0.0/requirements.txt
-@@ -15,7 +15,7 @@ python-glanceclient>=2.0.0 # Apache-2.0
+Index: deb-ironic/requirements.txt
+===================================================================
+--- deb-ironic.orig/requirements.txt
++++ deb-ironic/requirements.txt
+@@ -15,7 +15,7 @@ python-glanceclient!=2.4.0,>=2.3.0 # Apa
  keystoneauth1>=2.10.0 # Apache-2.0
  ironic-lib>=2.0.0 # Apache-2.0
  python-swiftclient>=2.2.0 # Apache-2.0
@@ -13,4 +15,4 @@ Last-Update: 2016-06-30
 +pytz
  stevedore>=1.16.0 # Apache-2.0
  pysendfile>=2.0.0 # MIT
- websockify>=0.8.0 # LGPLv3
+ oslo.concurrency>=3.8.0 # Apache-2.0

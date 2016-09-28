@@ -85,6 +85,9 @@ IRONIC_HW_ARCH=${IRONIC_HW_ARCH:-x86_64}
 # *_oneview:
 #   <Server Hardware URI> <Server Hardware Type URI> <Enclosure Group URI> <Server Profile Template URI> <MAC of primary connection> <Applied Server Profile URI>
 #
+# *_drac:
+#   <BMC address> <MAC address> <BMC username> <BMC password>
+#
 # IRONIC_IPMIINFO_FILE is deprecated, please use IRONIC_HWINFO_FILE. IRONIC_IPMIINFO_FILE will be removed in Ocata.
 IRONIC_IPMIINFO_FILE=${IRONIC_IPMIINFO_FILE:-""}
 if [ ! -z "$IRONIC_IPMIINFO_FILE" ]; then
@@ -121,7 +124,7 @@ IRONIC_VM_NETWORK_BRIDGE=${IRONIC_VM_NETWORK_BRIDGE:-brbm}
 IRONIC_VM_NETWORK_RANGE=${IRONIC_VM_NETWORK_RANGE:-192.0.2.0/24}
 IRONIC_VM_MACS_CSV_FILE=${IRONIC_VM_MACS_CSV_FILE:-$IRONIC_DATA_DIR/ironic_macs.csv}
 IRONIC_AUTHORIZED_KEYS_FILE=${IRONIC_AUTHORIZED_KEYS_FILE:-$HOME/.ssh/authorized_keys}
-IRONIC_CLEAN_NET_NAME=${IRONIC_CLEAN_NET_NAME:-$PRIVATE_NETWORK_NAME}
+IRONIC_CLEAN_NET_NAME=${IRONIC_CLEAN_NET_NAME:-${IRONIC_PROVISION_NETWORK_NAME:-${PRIVATE_NETWORK_NAME}}}
 IRONIC_EXTRA_PXE_PARAMS=${IRONIC_EXTRA_PXE_PARAMS:-}
 IRONIC_TTY_DEV=${IRONIC_TTY_DEV:-ttyS0}
 
@@ -186,8 +189,9 @@ IRONIC_DIB_RAMDISK_OPTIONS=${IRONIC_DIB_RAMDISK_OPTIONS:-'ubuntu'}
 # Set this variable to "true" to build an ISO for deploy ramdisk and
 # upload to Glance.
 IRONIC_DEPLOY_ISO_REQUIRED=$(trueorfalse False IRONIC_DEPLOY_ISO_REQUIRED)
-if $IRONIC_DEPLOY_ISO_REQUIRED = 'True' && $IRONIC_BUILD_DEPLOY_RAMDISK = 'False'\
-    && [ -n $IRONIC_DEPLOY_ISO ];  then
+if [[ "$IRONIC_DEPLOY_ISO_REQUIRED" = "True" \
+    && "$IRONIC_BUILD_DEPLOY_RAMDISK" = "False" \
+    && -n "$IRONIC_DEPLOY_ISO" ]];  then
     die "Prebuilt ISOs are not available, provide an ISO via IRONIC_DEPLOY_ISO \
         or set IRONIC_BUILD_DEPLOY_RAMDISK=True to use ISOs"
 fi
@@ -195,7 +199,8 @@ fi
 # are ``pxe_ssh``, ``pxe_ipmitool``, ``agent_ssh`` and ``agent_ipmitool``.
 #
 # Additional valid choices if IRONIC_IS_HARDWARE == true are:
-# ``pxe_iscsi_cimc``, ``pxe_agent_cimc``, ``pxe_ucs``, ``pxe_cimc`` and ``*_pxe_oneview``
+# ``pxe_iscsi_cimc``, ``pxe_agent_cimc``, ``pxe_ucs``, ``pxe_cimc``,
+# ``*_pxe_oneview`` and ``pxe_drac``
 IRONIC_DEPLOY_DRIVER=${IRONIC_DEPLOY_DRIVER:-pxe_ssh}
 
 # Support entry points installation of console scripts
@@ -208,6 +213,8 @@ IRONIC_HOSTPORT=${IRONIC_HOSTPORT:-$SERVICE_HOST:$IRONIC_SERVICE_PORT}
 
 # Enable iPXE
 IRONIC_IPXE_ENABLED=$(trueorfalse True IRONIC_IPXE_ENABLED)
+# Options below are only applied when IRONIC_IPXE_ENABLED is True
+IRONIC_IPXE_USE_SWIFT=$(trueorfalse False IRONIC_IPXE_USE_SWIFT)
 IRONIC_HTTP_DIR=${IRONIC_HTTP_DIR:-$IRONIC_DATA_DIR/httpboot}
 IRONIC_HTTP_SERVER=${IRONIC_HTTP_SERVER:-$IRONIC_TFTPSERVER_IP}
 IRONIC_HTTP_PORT=${IRONIC_HTTP_PORT:-3928}
@@ -274,6 +281,22 @@ IRONIC_PROVISION_SUBNET_GATEWAY=${IRONIC_PROVISION_SUBNET_GATEWAY:-}
 # Example: IRONIC_PROVISION_SUBNET_PREFIX=10.0.5.0/24
 IRONIC_PROVISION_SUBNET_PREFIX=${IRONIC_PROVISION_SUBNET_PREFIX:-}
 
+# Retrieving logs from the deploy ramdisk
+#
+# IRONIC_DEPLOY_LOGS_COLLECT possible values are:
+# * always: Collect the ramdisk logs from the deployment on success or
+#           failure (Default in DevStack for debugging purpose).
+# * on_failure: Collect the ramdisk logs upon a deployment failure
+#               (Default in Ironic).
+# * never: Never collect the ramdisk logs.
+IRONIC_DEPLOY_LOGS_COLLECT=${IRONIC_DEPLOY_LOGS_COLLECT:-always}
+# IRONIC_DEPLOY_LOGS_STORAGE_BACKEND possible values are:
+# * local: To store the logs in the local filesystem (Default in Ironic and DevStack).
+# * swift: To store the logs in Swift.
+IRONIC_DEPLOY_LOGS_STORAGE_BACKEND=${IRONIC_DEPLOY_LOGS_STORAGE_BACKEND:-local}
+# The path to the directory where Ironic should put the logs when IRONIC_DEPLOY_LOGS_STORAGE_BACKEND is set to "local"
+IRONIC_DEPLOY_LOGS_LOCAL_PATH=${IRONIC_DEPLOY_LOGS_LOCAL_PATH:-$IRONIC_VM_LOG_DIR/deploy_logs}
+
 # get_pxe_boot_file() - Get the PXE/iPXE boot file path
 function get_pxe_boot_file {
     local relpath=syslinux/pxelinux.0
@@ -333,6 +356,11 @@ function is_deployed_by_oneview {
 
 function is_deployed_by_ilo {
     [[ -z "${IRONIC_DEPLOY_DRIVER##*_ilo}" ]] && return 0
+    return 1
+}
+
+function is_deployed_by_drac {
+    [[ -z "${IRONIC_DEPLOY_DRIVER##*_drac}" ]] && return 0
     return 1
 }
 
@@ -474,6 +502,29 @@ function configure_ironic_dirs {
         # More info: http://www.syslinux.org/wiki/index.php/Library_modules
         cp -aR $(dirname $IRONIC_PXE_BOOT_IMAGE)/*.{c32,0} $IRONIC_TFTPBOOT_DIR
     fi
+
+    # Create the logs directory when saving the deploy logs to the filesystem
+    if [ "$IRONIC_DEPLOY_LOGS_STORAGE_BACKEND" = "local"] && [ "$IRONIC_DEPLOY_LOGS_COLLECT" != "never" ]; then
+        sudo install -d -o $STACK_USER $IRONIC_DEPLOY_LOGS_LOCAL_PATH
+    fi
+}
+
+function configure_ironic_networks {
+
+    if [[ -n "${IRONIC_PROVISION_NETWORK_NAME}" ]]; then
+        echo_summary "Configuring Ironic provisioning network"
+        configure_ironic_provision_network
+    fi
+
+    echo_summary "Configuring Ironic cleaning network"
+    configure_ironic_cleaning_network
+}
+
+function configure_ironic_cleaning_network {
+    local cleaning_network_uuid
+    cleaning_network_uuid=$(openstack network show  "$IRONIC_CLEAN_NET_NAME" -c id -f value)
+    die_if_not_set $LINENO cleaning_network_uuid "Failed to get ironic cleaning network id"
+    iniset $IRONIC_CONF_FILE neutron cleaning_network_uuid ${cleaning_network_uuid}
 }
 
 function configure_ironic_provision_network {
@@ -537,6 +588,13 @@ function configure_ironic {
     iniset $IRONIC_CONF_FILE database connection `database_connection_url ironic`
     iniset $IRONIC_CONF_FILE DEFAULT state_path $IRONIC_STATE_PATH
     iniset $IRONIC_CONF_FILE DEFAULT use_syslog $SYSLOG
+    # NOTE(vsaienko) with multinode each conductor should have its own host.
+    iniset $IRONIC_CONF_FILE DEFAULT host $LOCAL_HOSTNAME
+    # Retrieve deployment logs
+    iniset $IRONIC_CONF_FILE agent deploy_logs_collect $IRONIC_DEPLOY_LOGS_COLLECT
+    iniset $IRONIC_CONF_FILE agent deploy_logs_storage_backend $IRONIC_DEPLOY_LOGS_STORAGE_BACKEND
+    iniset $IRONIC_CONF_FILE agent deploy_logs_local_path $IRONIC_DEPLOY_LOGS_LOCAL_PATH
+
     # Configure Ironic conductor, if it was enabled.
     if is_service_enabled ir-cond; then
         configure_ironic_conductor
@@ -645,16 +703,6 @@ function configure_ironic_conductor {
 
     pxe_params+=" $IRONIC_EXTRA_PXE_PARAMS"
 
-    # When booting with less than 1GB, we need to switch from default tmpfs
-    # to ramfs for ramdisks to decompress successfully.
-    if ([[ "$IRONIC_IS_HARDWARE" == "True" ]] &&
-        [[ "$IRONIC_HW_NODE_RAM" -lt 1024 ]]) ||
-        ([[ "$IRONIC_IS_HARDWARE" == "False" ]] &&
-        [[ "$IRONIC_VM_SPECS_RAM" -lt 1024 ]]); then
-
-        pxe_params+=" rootfstype=ramfs"
-    fi
-
     if [[ -n "$pxe_params" ]]; then
         iniset $IRONIC_CONF_FILE pxe pxe_append_params "$pxe_params"
     fi
@@ -698,6 +746,9 @@ function configure_ironic_conductor {
         iniset $IRONIC_CONF_FILE pxe pxe_bootfile_name $pxebin
         iniset $IRONIC_CONF_FILE deploy http_root $IRONIC_HTTP_DIR
         iniset $IRONIC_CONF_FILE deploy http_url "http://$IRONIC_HTTP_SERVER:$IRONIC_HTTP_PORT"
+        if [[ "$IRONIC_IPXE_USE_SWIFT" == "True" ]]; then
+            iniset $IRONIC_CONF_FILE pxe ipxe_use_swift True
+        fi
     fi
 
     if [[ "$IRONIC_IS_HARDWARE" == "False" ]]; then
@@ -755,14 +806,6 @@ function create_ironic_accounts {
 
 # init_ironic() - Initialize databases, etc.
 function init_ironic {
-    if is_service_enabled neutron; then
-        # Save private network as cleaning network
-        local cleaning_network_uuid
-        cleaning_network_uuid=$(openstack network show  "$IRONIC_CLEAN_NET_NAME" -c id -f value)
-        die_if_not_set $LINENO cleaning_network_uuid "Failed to get ironic cleaning network id"
-        iniset $IRONIC_CONF_FILE neutron cleaning_network_uuid ${cleaning_network_uuid}
-    fi
-
     # (Re)create  ironic database
     recreate_database ironic
 
@@ -1057,9 +1100,17 @@ function enroll_nodes {
                 mac_address=$(echo $hardware_info |awk '{print $5}')
                 local applied_server_profile_uri
                 applied_server_profile_uri=$(echo $hardware_info |awk '{print $6}')
+                local dynamic_allocation
+                dynamic_allocation=$(echo $hardware_info |awk '{print $7}')
+                dynamic_allocation=$(trueorfalse False dynamic_allocation)
 
                 node_options+=" -i server_hardware_uri=$server_hardware_uri"
-                node_options+=" -i applied_server_profile_uri=$applied_server_profile_uri"
+                if [[ -n "$applied_server_profile_uri" ]]; then
+                    node_options+=" -i applied_server_profile_uri=$applied_server_profile_uri"
+                fi
+                if [[ "$dynamic_allocation" == "True" ]]; then
+                    node_options+=" -i dynamic_allocation=$dynamic_allocation"
+                fi
                 node_options+=" -p capabilities="
                 node_options+="server_hardware_type_uri:$server_hardware_type_uri,"
                 node_options+="enclosure_group_uri:$enclosure_group_uri,"
@@ -1070,6 +1121,9 @@ function enroll_nodes {
                 if [[ $IRONIC_DEPLOY_DRIVER -ne "pxe_ilo" ]]; then
                     node_options+=" -i ilo_deploy_iso=$IRONIC_DEPLOY_ISO_ID"
                 fi
+            elif is_deployed_by_drac; then
+                node_options+=" -i drac_host=$bmc_address -i drac_password=$bmc_passwd\
+                    -i drac_username=$bmc_username"
             fi
         fi
 
