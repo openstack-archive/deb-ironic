@@ -30,10 +30,7 @@ from six.moves.urllib.parse import urljoin
 from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LI
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LI, _LW
 from ironic.common import images
 from ironic.common import swift
 from ironic.common import utils
@@ -138,7 +135,7 @@ def copy_image_to_swift(source_file_path, destination_object_name):
     container = CONF.ilo.swift_ilo_container
     timeout = CONF.ilo.swift_object_expiry_timeout
 
-    object_headers = {'X-Delete-After': timeout}
+    object_headers = {'X-Delete-After': str(timeout)}
     swift_api = swift.SwiftAPI()
     swift_api.create_object(container, destination_object_name,
                             source_file_path, object_headers=object_headers)
@@ -437,12 +434,22 @@ def update_boot_mode(task):
     node = task.node
     boot_mode = deploy_utils.get_boot_mode_for_deploy(node)
 
-    if boot_mode is not None:
+    # No boot mode found. Check if default_boot_mode is defined
+    if not boot_mode and (CONF.ilo.default_boot_mode in ['bios', 'uefi']):
+        boot_mode = CONF.ilo.default_boot_mode
+        instance_info = node.instance_info
+        instance_info['deploy_boot_mode'] = boot_mode
+        node.instance_info = instance_info
+        node.save()
+
+    # Boot mode is computed, setting it for the deploy
+    if boot_mode:
         LOG.debug("Node %(uuid)s boot mode is being set to %(boot_mode)s",
                   {'uuid': node.uuid, 'boot_mode': boot_mode})
         set_boot_mode(node, boot_mode)
         return
 
+    # Computing boot mode based on boot mode settings on bare metal
     LOG.debug("Check pending boot mode for node %s.", node.uuid)
     ilo_object = get_ilo_object(node)
 

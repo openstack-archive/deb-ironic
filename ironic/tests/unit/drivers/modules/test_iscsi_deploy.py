@@ -386,6 +386,17 @@ class IscsiDeployMethodsTestCase(db_base.DbTestCase):
         ret_val = self._test_get_deploy_info()
         self.assertEqual(3266, ret_val['port'])
 
+    def test_get_deploy_info_whole_disk_image(self):
+        instance_info = self.node.instance_info
+        instance_info['configdrive'] = 'My configdrive'
+        self.node.instance_info = instance_info
+        self.node.driver_internal_info['is_whole_disk_image'] = True
+        kwargs = {'address': '1.1.1.1', 'iqn': 'target-iqn'}
+        ret_val = iscsi_deploy.get_deploy_info(self.node, **kwargs)
+        self.assertEqual('1.1.1.1', ret_val['address'])
+        self.assertEqual('target-iqn', ret_val['iqn'])
+        self.assertEqual('My configdrive', ret_val['configdrive'])
+
     @mock.patch.object(iscsi_deploy, 'continue_deploy', autospec=True)
     def test_do_agent_iscsi_deploy_okay(self, continue_deploy_mock):
         agent_client_mock = mock.MagicMock(spec_set=agent_client.AgentClient)
@@ -638,6 +649,7 @@ class ISCSIDeployTestCase(db_base.DbTestCase):
     def test_get_clean_steps(self, mock_get_clean_steps):
         # Test getting clean steps
         self.config(group='deploy', erase_devices_priority=10)
+        self.config(group='deploy', erase_devices_metadata_priority=5)
         mock_steps = [{'priority': 10, 'interface': 'deploy',
                        'step': 'erase_devices'}]
         self.node.driver_internal_info = {'agent_url': 'foo'}
@@ -648,7 +660,8 @@ class ISCSIDeployTestCase(db_base.DbTestCase):
             mock_get_clean_steps.assert_called_once_with(
                 task, interface='deploy',
                 override_priorities={
-                    'erase_devices': 10})
+                    'erase_devices': 10,
+                    'erase_devices_metadata': 5})
         self.assertEqual(mock_steps, steps)
 
     @mock.patch.object(deploy_utils, 'agent_execute_clean_step', autospec=True)

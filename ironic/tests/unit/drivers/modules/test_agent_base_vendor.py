@@ -94,10 +94,10 @@ class TestBaseAgentVendor(db_base.DbTestCase):
                               task.context,
                               **kwargs)
 
+    @mock.patch('ironic.common.policy.check', autospec=True)
     @mock.patch('ironic.drivers.modules.agent_base_vendor.BaseAgentVendor'
                 '._find_node_by_macs', autospec=True)
-    def _test_lookup_v2(self, find_mock, show_password=True):
-        self.context.show_password = show_password
+    def _test_lookup_v2(self, find_mock, check_mock, show_password=True):
         kwargs = {
             'version': '2',
             'inventory': {
@@ -116,7 +116,10 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         }
         # NOTE(jroll) apparently as_dict() returns a dict full of references
         expected = copy.deepcopy(self.node.as_dict())
-        if not show_password:
+        if show_password:
+            check_mock.return_value = True
+        else:
+            check_mock.return_value = False
             expected['driver_info']['ipmi_password'] = '******'
 
         self.config(agent_backend='statsd', group='metrics')
@@ -171,8 +174,8 @@ class TestBaseAgentVendor(db_base.DbTestCase):
 
     @mock.patch.object(objects.Node, 'get_by_uuid')
     def test_lookup_v2_with_node_uuid(self, mock_get_node):
-        self.context.show_password = True
         expected = copy.deepcopy(self.node.as_dict())
+        expected['driver_info']['ipmi_password'] = '******'
         kwargs = {
             'version': '2',
             'node_uuid': 'fake-uuid',
@@ -194,7 +197,9 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             node = self.passthru.lookup(task.context, **kwargs)
         self.assertEqual(expected, node['node'])
-        mock_get_node.assert_called_once_with(mock.ANY, 'fake-uuid')
+        self.assertEqual([mock.call(self.context, self.node.uuid),
+                         mock.call(self.context, 'fake-uuid')],
+                         mock_get_node.call_args_list)
 
     @mock.patch.object(objects.port.Port, 'get_by_address',
                        spec_set=types.FunctionType)
@@ -237,7 +242,7 @@ class TestBaseAgentVendor(db_base.DbTestCase):
         with task_manager.acquire(
                 self.context, self.node['uuid'], shared=True) as task:
             node = self.passthru._find_node_by_macs(task, macs)
-        self.assertEqual(node, node)
+        self.assertEqual(self.node, node)
 
     @mock.patch('ironic.drivers.modules.agent_base_vendor.BaseAgentVendor'
                 '._find_ports_by_macs', autospec=True)

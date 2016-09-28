@@ -186,72 +186,6 @@ class OneViewCommonTestCase(db_base.DbTestCase):
                           common.get_oneview_info,
                           self.node)
 
-    # TODO(gabriel-bezerra): Remove this after Mitaka
-    @mock.patch.object(common, 'LOG', autospec=True)
-    def test_deprecated_spt_in_driver_info(self, log_mock):
-        # the current model has server_profile_template_uri in
-        # properties/capabilities instead of driver_info
-
-        driver_info = db_utils.get_test_oneview_driver_info()
-        driver_info['server_profile_template_uri'] = 'fake_spt_uri'
-
-        properties = db_utils.get_test_oneview_properties()
-        properties["capabilities"] = ("server_hardware_type_uri:fake_sht_uri,"
-                                      "enclosure_group_uri:fake_eg_uri")
-
-        self.node.driver_info = driver_info
-        self.node.properties = properties
-
-        deprecated_node = self.node
-        expected_node_info = {
-            'server_hardware_uri': 'fake_sh_uri',
-            'server_hardware_type_uri': 'fake_sht_uri',
-            'enclosure_group_uri': 'fake_eg_uri',
-            'server_profile_template_uri': 'fake_spt_uri',
-            'applied_server_profile_uri': None,
-        }
-
-        self.assertEqual(
-            expected_node_info,
-            common.get_oneview_info(deprecated_node)
-        )
-
-        # must be valid
-        common.verify_node_info(deprecated_node)
-
-        log_mock.warning.assert_called_once_with(
-            "Using 'server_profile_template_uri' in driver_info is "
-            "now deprecated and will be ignored in future releases. "
-            "Node %s should have it in its properties/capabilities "
-            "instead.",
-            self.node.uuid
-        )
-
-    # TODO(gabriel-bezerra): Remove this after Mitaka
-    def test_deprecated_spt_in_driver_info_and_in_capabilites(self):
-        # information in capabilities precedes driver_info
-        driver_info = db_utils.get_test_oneview_driver_info()
-        driver_info['server_profile_template_uri'] = 'unused_fake_spt_uri'
-
-        self.node.driver_info = driver_info
-
-        deprecated_node = self.node
-        expected_node_info = {
-            'server_hardware_uri': 'fake_sh_uri',
-            'server_hardware_type_uri': 'fake_sht_uri',
-            'enclosure_group_uri': 'fake_eg_uri',
-            'server_profile_template_uri': 'fake_spt_uri',
-            'applied_server_profile_uri': None,
-        }
-
-        self.assertEqual(
-            expected_node_info,
-            common.get_oneview_info(deprecated_node)
-        )
-
-        # must be valid
-        common.verify_node_info(deprecated_node)
-
     def test__verify_node_info(self):
         common._verify_node_info("properties",
                                  {"a": True,
@@ -368,7 +302,7 @@ class OneViewCommonTestCase(db_base.DbTestCase):
                 oneview_client.
                 is_node_port_mac_compatible_with_server_profile.called)
 
-    def test_is_dynamic_allocation_enabled(self):
+    def test_is_dynamic_allocation_enabled_boolean(self):
         """Ensure Dynamic Allocation is enabled when flag is True.
 
         1) Set 'dynamic_allocation' flag as True on node's driver_info
@@ -384,7 +318,23 @@ class OneViewCommonTestCase(db_base.DbTestCase):
                 common.is_dynamic_allocation_enabled(task.node)
             )
 
-    def test_is_dynamic_allocation_enabled_false(self):
+    def test_is_dynamic_allocation_enabled_string(self):
+        """Ensure Dynamic Allocation is enabled when flag is 'True'.
+
+        1) Set 'dynamic_allocation' flag as True on node's driver_info
+        2) Check Dynamic Allocation is enabled for the given node
+
+        """
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            driver_info = task.node.driver_info
+            driver_info['dynamic_allocation'] = 'True'
+            task.node.driver_info = driver_info
+
+            self.assertTrue(
+                common.is_dynamic_allocation_enabled(task.node)
+            )
+
+    def test_is_dynamic_allocation_enabled_false_boolean(self):
         """Ensure Dynamic Allocation is disabled when flag is False.
 
         1) Set 'dynamic_allocation' flag as False on node's driver_info
@@ -400,7 +350,23 @@ class OneViewCommonTestCase(db_base.DbTestCase):
                 common.is_dynamic_allocation_enabled(task.node)
             )
 
-    def test_is_dynamic_allocation_enabled_none(self):
+    def test_is_dynamic_allocation_enabled_false_string(self):
+        """Ensure Dynamic Allocation is disabled when flag is 'False'.
+
+        1) Set 'dynamic_allocation' flag as False on node's driver_info
+        2) Check Dynamic Allocation is disabled for the given node
+
+        """
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            driver_info = task.node.driver_info
+            driver_info['dynamic_allocation'] = 'False'
+            task.node.driver_info = driver_info
+
+            self.assertFalse(
+                common.is_dynamic_allocation_enabled(task.node)
+            )
+
+    def test_is_dynamic_allocation_enabled_none_object(self):
         """Ensure Dynamic Allocation is disabled when flag is None.
 
         1) Set 'dynamic_allocation' flag as None on node's driver_info
@@ -426,4 +392,22 @@ class OneViewCommonTestCase(db_base.DbTestCase):
         with task_manager.acquire(self.context, self.node.uuid) as task:
             self.assertFalse(
                 common.is_dynamic_allocation_enabled(task.node)
+            )
+
+    def test_is_dynamic_allocation_enabled_with_invalid_value_for_flag(self):
+        """Ensure raises an InvalidParameterValue when flag is invalid.
+
+        1) Create a node with an invalid value for 'dynamic_allocation' flag
+        2) Check if method raises an InvalidParameterValue for the given node
+
+        """
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            driver_info = task.node.driver_info
+            driver_info['dynamic_allocation'] = 'invalid flag'
+            task.node.driver_info = driver_info
+
+            self.assertRaises(
+                exception.InvalidParameterValue,
+                common.is_dynamic_allocation_enabled,
+                task.node
             )

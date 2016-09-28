@@ -43,9 +43,9 @@ Prerequisites
   which contains set of modules for managing HPE ProLiant hardware.
 
   Install ``proliantutils`` module on the ironic conductor node. Minimum
-  version required is 2.1.7.::
+  version required is 2.1.11.::
 
-   $ pip install "proliantutils>=2.1.7"
+   $ pip install "proliantutils>=2.1.11"
 
 * ``ipmitool`` command must be present on the service node(s) where
   ``ironic-conductor`` is running. On most distros, this is provided as part
@@ -625,6 +625,11 @@ mode (Legacy BIOS or UEFI).
 * ``agent_ilo``
 
 * When boot mode capability is not configured:
+
+  - If config variable ``default_boot_mode`` in ``[ilo]`` section of
+    ironic configuration file is set to either 'bios' or 'uefi', then iLO
+    drivers use that boot mode for provisioning the baremetal ProLiant
+    servers.
 
   - If the pending boot mode is set on the node then iLO drivers use that boot
     mode for provisioning the baremetal ProLiant servers.

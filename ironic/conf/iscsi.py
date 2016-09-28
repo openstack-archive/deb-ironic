@@ -1,5 +1,6 @@
 # Copyright 2016 Intel Corporation
-# Copyright 2015, Cisco Systems.
+# Copyright 2013 Hewlett-Packard Development Company, L.P.
+# All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -18,16 +19,12 @@ from oslo_config import cfg
 from ironic.common.i18n import _
 
 opts = [
-    cfg.IntOpt('max_retry',
-               default=6,
-               help=_('Number of times a power operation needs to be '
-                      'retried')),
-    cfg.IntOpt('action_interval',
-               default=10,
-               help=_('Amount of time in seconds to wait in between power '
-                      'operations')),
+    cfg.PortOpt('portal_port',
+                default=3260,
+                help=_('The port number on which the iSCSI portal listens '
+                       'for incoming connections.')),
 ]
 
 
 def register_opts(conf):
-    conf.register_opts(opts, group='cimc')
+    conf.register_opts(opts, group='iscsi')

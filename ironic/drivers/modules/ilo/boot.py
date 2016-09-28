@@ -18,6 +18,7 @@ Boot Interface for iLO drivers and its supporting methods.
 import os
 import tempfile
 
+from ironic_lib import metrics_utils
 from ironic_lib import utils as ironic_utils
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -27,9 +28,7 @@ import six.moves.urllib.parse as urlparse
 from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import image_service
 from ironic.common import images
 from ironic.common import states
@@ -40,6 +39,8 @@ from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules.ilo import common as ilo_common
 
 LOG = logging.getLogger(__name__)
+
+METRICS = metrics_utils.get_metrics_logger(__name__)
 
 CONF = cfg.CONF
 
@@ -252,6 +253,7 @@ class IloVirtualMediaBoot(base.BootInterface):
     def get_properties(self):
         return COMMON_PROPERTIES
 
+    @METRICS.timer('IloVirtualMediaBoot.validate')
     def validate(self, task):
         """Validate the deployment information for the task's node.
 
@@ -274,6 +276,7 @@ class IloVirtualMediaBoot(base.BootInterface):
             props = ['kernel', 'ramdisk']
         deploy_utils.validate_image_properties(task.context, d_info, props)
 
+    @METRICS.timer('IloVirtualMediaBoot.prepare_ramdisk')
     def prepare_ramdisk(self, task, ramdisk_params):
         """Prepares the boot of deploy ramdisk using virtual media.
 
@@ -322,6 +325,7 @@ class IloVirtualMediaBoot(base.BootInterface):
 
         ilo_common.setup_vmedia(task, deploy_iso, ramdisk_params)
 
+    @METRICS.timer('IloVirtualMediaBoot.prepare_instance')
     def prepare_instance(self, task):
         """Prepares the boot of instance.
 
@@ -358,6 +362,7 @@ class IloVirtualMediaBoot(base.BootInterface):
                 LOG.warning(_LW("The UUID for the root partition could not "
                                 "be found for node %s"), node.uuid)
 
+    @METRICS.timer('IloVirtualMediaBoot.clean_up_instance')
     def clean_up_instance(self, task):
         """Cleans up the boot of instance.
 
@@ -379,6 +384,7 @@ class IloVirtualMediaBoot(base.BootInterface):
 
         ilo_common.cleanup_vmedia_boot(task)
 
+    @METRICS.timer('IloVirtualMediaBoot.clean_up_ramdisk')
     def clean_up_ramdisk(self, task):
         """Cleans up the boot of ironic ramdisk.
 

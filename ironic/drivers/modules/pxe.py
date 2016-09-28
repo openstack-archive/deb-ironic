@@ -15,12 +15,12 @@
 PXE Boot Interface
 """
 
+import filecmp
 import os
 import shutil
 
 from ironic_lib import metrics_utils
 from ironic_lib import utils as ironic_utils
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import fileutils
 
@@ -28,78 +28,20 @@ from ironic.common import boot_devices
 from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import image_service as service
-from ironic.common import paths
+from ironic.common import images
 from ironic.common import pxe_utils
 from ironic.common import states
+from ironic.conf import CONF
 from ironic.drivers import base
 from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import image_cache
 from ironic.drivers import utils as driver_utils
 
-
-pxe_opts = [
-    cfg.StrOpt('pxe_config_template',
-               default=paths.basedir_def(
-                   'drivers/modules/pxe_config.template'),
-               help=_('On ironic-conductor node, template file for PXE '
-                      'configuration.')),
-    cfg.StrOpt('uefi_pxe_config_template',
-               default=paths.basedir_def(
-                   'drivers/modules/elilo_efi_pxe_config.template'),
-               help=_('On ironic-conductor node, template file for PXE '
-                      'configuration for UEFI boot loader.')),
-    cfg.StrOpt('tftp_server',
-               default='$my_ip',
-               help=_("IP address of ironic-conductor node's TFTP server.")),
-    cfg.StrOpt('tftp_root',
-               default='/tftpboot',
-               help=_("ironic-conductor node's TFTP root path. The "
-                      "ironic-conductor must have read/write access to this "
-                      "path.")),
-    cfg.StrOpt('tftp_master_path',
-               default='/tftpboot/master_images',
-               help=_('On ironic-conductor node, directory where master TFTP '
-                      'images are stored on disk. '
-                      'Setting to <None> disables image caching.')),
-    # NOTE(dekehn): Additional boot files options may be created in the event
-    #  other architectures require different boot files.
-    cfg.StrOpt('pxe_bootfile_name',
-               default='pxelinux.0',
-               help=_('Bootfile DHCP parameter.')),
-    cfg.StrOpt('uefi_pxe_bootfile_name',
-               default='elilo.efi',
-               help=_('Bootfile DHCP parameter for UEFI boot mode.')),
-    cfg.BoolOpt('ipxe_enabled',
-                default=False,
-                help=_('Enable iPXE boot.')),
-    cfg.StrOpt('ipxe_boot_script',
-               default=paths.basedir_def(
-                   'drivers/modules/boot.ipxe'),
-               help=_('On ironic-conductor node, the path to the main iPXE '
-                      'script file.')),
-    cfg.IntOpt('ipxe_timeout',
-               default=0,
-               help=_('Timeout value (in seconds) for downloading an image '
-                      'via iPXE. Defaults to 0 (no timeout)')),
-    cfg.StrOpt('ip_version',
-               default='4',
-               choices=['4', '6'],
-               help=_('The IP version that will be used for PXE booting. '
-                      'Defaults to 4. EXPERIMENTAL')),
-]
-
 LOG = logging.getLogger(__name__)
 
 METRICS = metrics_utils.get_metrics_logger(__name__)
-
-CONF = cfg.CONF
-CONF.register_opts(pxe_opts, group='pxe')
-CONF.import_opt('deploy_callback_timeout', 'ironic.conductor.manager',
-                group='conductor')
 
 REQUIRED_PROPERTIES = {
     'deploy_kernel': _("UUID (from Glance) of the deployment kernel. "
@@ -140,11 +82,15 @@ def _get_instance_image_info(node, ctx):
     :param ctx: context
     :returns: a dictionary whose keys are the names of the images (kernel,
         ramdisk) and values are the absolute paths of them. If it's a whole
-        disk image, it returns an empty dictionary.
+        disk image or node is configured for localboot,
+        it returns an empty dictionary.
     """
     image_info = {}
-    if node.driver_internal_info.get('is_whole_disk_image'):
-        return image_info
+    # NOTE(pas-ha) do not report image kernel and ramdisk for
+    # local boot or whole disk images so that they are not cached
+    if (node.driver_internal_info.get('is_whole_disk_image') or
+        deploy_utils.get_boot_option(node) == 'local'):
+            return image_info
 
     root_dir = pxe_utils.get_root_dir()
     i_info = node.instance_info
@@ -184,6 +130,48 @@ def _get_deploy_image_info(node):
     return pxe_utils.get_deploy_kr_info(node.uuid, d_info)
 
 
+def _get_pxe_kernel_ramdisk(pxe_info):
+    pxe_opts = {}
+    pxe_opts['deployment_aki_path'] = pxe_info['deploy_kernel'][1]
+    pxe_opts['deployment_ari_path'] = pxe_info['deploy_ramdisk'][1]
+    # It is possible that we don't have kernel/ramdisk or even
+    # image_source to determine if it's a whole disk image or not.
+    # For example, when transitioning to 'available' state for first
+    # time from 'manage' state.
+    if 'kernel' in pxe_info:
+        pxe_opts['aki_path'] = pxe_info['kernel'][1]
+    if 'ramdisk' in pxe_info:
+        pxe_opts['ari_path'] = pxe_info['ramdisk'][1]
+    return pxe_opts
+
+
+def _get_ipxe_kernel_ramdisk(task, pxe_info):
+    pxe_opts = {}
+    node = task.node
+
+    for label, option in (('deploy_kernel', 'deployment_aki_path'),
+                          ('deploy_ramdisk', 'deployment_ari_path')):
+        image_href = pxe_info[label][0]
+        if (CONF.pxe.ipxe_use_swift and
+            service_utils.is_glance_image(image_href)):
+                pxe_opts[option] = images.get_temp_url_for_glance_image(
+                    task.context, image_href)
+        else:
+            pxe_opts[option] = '/'.join([CONF.deploy.http_url, node.uuid,
+                                         label])
+    # NOTE(pas-ha) do not use Swift TempURLs for kernel and ramdisk
+    # of user image when boot_option is not local,
+    # as this will break instance reboot later when temp urls have timed out.
+    if 'kernel' in pxe_info:
+        pxe_opts['aki_path'] = '/'.join(
+            [CONF.deploy.http_url, node.uuid, 'kernel'])
+    if 'ramdisk' in pxe_info:
+        pxe_opts['ari_path'] = '/'.join(
+            [CONF.deploy.http_url, node.uuid, 'ramdisk'])
+
+    return pxe_opts
+
+
 def _build_pxe_config_options(task, pxe_info):
     """Build the PXE config options for a node
 
@@ -198,47 +186,21 @@ def _build_pxe_config_options(task, pxe_info):
     :returns: A dictionary of pxe options to be used in the pxe bootfile
         template.
     """
-    node = task.node
-    is_whole_disk_image = node.driver_internal_info.get('is_whole_disk_image')
+    if CONF.pxe.ipxe_enabled:
+        pxe_options = _get_ipxe_kernel_ramdisk(task, pxe_info)
+    else:
+        pxe_options = _get_pxe_kernel_ramdisk(pxe_info)
 
     # These are dummy values to satisfy elilo.
     # image and initrd fields in elilo config cannot be blank.
-    kernel = 'no_kernel'
-    ramdisk = 'no_ramdisk'
+    pxe_options.setdefault('aki_path', 'no_kernel')
+    pxe_options.setdefault('ari_path', 'no_ramdisk')
 
-    if CONF.pxe.ipxe_enabled:
-        deploy_kernel = '/'.join([CONF.deploy.http_url, node.uuid,
-                                  'deploy_kernel'])
-        deploy_ramdisk = '/'.join([CONF.deploy.http_url, node.uuid,
-                                   'deploy_ramdisk'])
-        if not is_whole_disk_image:
-            kernel = '/'.join([CONF.deploy.http_url, node.uuid,
-                              'kernel'])
-            ramdisk = '/'.join([CONF.deploy.http_url, node.uuid,
-                               'ramdisk'])
-    else:
-        deploy_kernel = pxe_info['deploy_kernel'][1]
-        deploy_ramdisk = pxe_info['deploy_ramdisk'][1]
-        if not is_whole_disk_image:
-            # It is possible that we don't have kernel/ramdisk or even
-            # image_source to determine if it's a whole disk image or not.
-            # For example, when transitioning to 'available' state for first
-            # time from 'manage' state. Retain dummy values if we don't have
-            # kernel/ramdisk.
-            if 'kernel' in pxe_info:
-                kernel = pxe_info['kernel'][1]
-            if 'ramdisk' in pxe_info:
-                ramdisk = pxe_info['ramdisk'][1]
-
-    pxe_options = {
-        'deployment_aki_path': deploy_kernel,
-        'deployment_ari_path': deploy_ramdisk,
+    pxe_options.update({
         'pxe_append_params': CONF.pxe.pxe_append_params,
         'tftp_server': CONF.pxe.tftp_server,
-        'aki_path': kernel,
-        'ari_path': ramdisk,
         'ipxe_timeout': CONF.pxe.ipxe_timeout * 1000
-    }
+    })
 
     return pxe_options
 
@@ -383,7 +345,8 @@ class PXEBoot(base.BootInterface):
 
         _parse_driver_info(node)
         d_info = deploy_utils.get_image_instance_info(node)
-        if node.driver_internal_info.get('is_whole_disk_image'):
+        if (node.driver_internal_info.get('is_whole_disk_image') or
+                deploy_utils.get_boot_option(node) == 'local'):
             props = []
         elif service_utils.is_glance_image(d_info['image_source']):
             props = ['kernel_id', 'ramdisk_id']
@@ -413,13 +376,14 @@ class PXEBoot(base.BootInterface):
         """
         node = task.node
 
-        # TODO(deva): optimize this if rerun on existing files
         if CONF.pxe.ipxe_enabled:
             # Copy the iPXE boot script to HTTP root directory
             bootfile_path = os.path.join(
                 CONF.deploy.http_root,
                 os.path.basename(CONF.pxe.ipxe_boot_script))
-            shutil.copyfile(CONF.pxe.ipxe_boot_script, bootfile_path)
+            if (not os.path.isfile(bootfile_path) or
+                not filecmp.cmp(CONF.pxe.ipxe_boot_script, bootfile_path)):
+                    shutil.copyfile(CONF.pxe.ipxe_boot_script, bootfile_path)
 
         dhcp_opts = pxe_utils.dhcp_options_for_instance(task)
         provider = dhcp_factory.DHCPFactory()
@@ -444,9 +408,11 @@ class PXEBoot(base.BootInterface):
                                     pxe_config_template)
         deploy_utils.try_set_boot_device(task, boot_devices.PXE)
 
-        # FIXME(lucasagomes): If it's local boot we should not cache
-        # the image kernel and ramdisk (Or even require it).
-        _cache_ramdisk_kernel(task.context, node, pxe_info)
+        if CONF.pxe.ipxe_enabled and CONF.pxe.ipxe_use_swift:
+            pxe_info.pop('deploy_kernel', None)
+            pxe_info.pop('deploy_ramdisk', None)
+        if pxe_info:
+            _cache_ramdisk_kernel(task.context, node, pxe_info)
 
     @METRICS.timer('PXEBoot.clean_up_ramdisk')
     def clean_up_ramdisk(self, task):

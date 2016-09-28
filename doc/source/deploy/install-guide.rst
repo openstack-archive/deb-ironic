@@ -26,13 +26,14 @@ includes:
 - the OpenStack Image service (glance) from which to retrieve images and image meta-data
 - the OpenStack Networking service (neutron) for DHCP and network configuration
 - the OpenStack Compute service (nova) works with the Bare Metal service and acts as
-  a user-facing API for instance management, while the Bare Metal service provides
-  the admin/operator API for hardware management.
-  The OpenStack Compute service also provides scheduling facilities (matching
-  flavors <-> images <-> hardware), tenant quotas, IP assignment, and other
-  services which the Bare Metal service does not, in and of itself, provide.
+  a user-facing API for instance management, while the Bare Metal service
+  provides the admin/operator API for hardware management.  The OpenStack
+  Compute service also provides scheduling facilities (matching flavors <->
+  images <-> hardware), tenant quotas, IP assignment, and other services which
+  the Bare Metal service does not, in and of itself, provide.
 
-- the OpenStack Block Storage (cinder) provides volumes, but this aspect is not yet available.
+- the OpenStack Block Storage (cinder) provides volumes, but this aspect is not
+  yet available.
 
 The Bare Metal service includes the following components:
 
@@ -91,38 +92,82 @@ have already been set up.
 Configure the Identity service for the Bare Metal service
 ---------------------------------------------------------
 
-#. Create the Bare Metal service user (for example,``ironic``).
+#. Create the Bare Metal service user (for example, ``ironic``).
    The service uses this to authenticate with the Identity service.
    Use the ``service`` tenant and give the user the ``admin`` role::
 
     openstack user create --password IRONIC_PASSWORD \
-    --email ironic@example.com ironic
+      --email ironic@example.com ironic
     openstack role add --project service --user ironic admin
 
 #. You must register the Bare Metal service with the Identity service so that
    other OpenStack services can locate it. To register the service::
 
     openstack service create --name ironic --description \
-    "Ironic baremetal provisioning service" baremetal
+      "Ironic baremetal provisioning service" baremetal
 
 #. Use the ``id`` property that is returned from the Identity service when
    registering the service (above), to create the endpoint,
    and replace IRONIC_NODE with your Bare Metal service's API node::
 
     openstack endpoint create --region RegionOne \
-    baremetal admin http://IRONIC_NODE:6385
+      baremetal admin http://IRONIC_NODE:6385
     openstack endpoint create --region RegionOne \
-    baremetal public http://IRONIC_NODE:6385
+      baremetal public http://IRONIC_NODE:6385
     openstack endpoint create --region RegionOne \
-    baremetal internal http://IRONIC_NODE:6385
+      baremetal internal http://IRONIC_NODE:6385
 
    If only keystone v2 API is available, use this command instead::
 
     openstack endpoint create --region RegionOne \
-    --publicurl http://IRONIC_NODE:6385 \
-    --internalurl http://IRONIC_NODE:6385 \
-    --adminurl http://IRONIC_NODE:6385 \
-    baremetal
+      --publicurl http://IRONIC_NODE:6385 \
+      --internalurl http://IRONIC_NODE:6385 \
+      --adminurl http://IRONIC_NODE:6385 \
+      baremetal
+
+#. You may delegate limited privileges related to the Bare Metal service
+   to your Users by creating Roles with the OpenStack Identity service.  By
+   default, the Bare Metal service expects the "baremetal_admin" and
+   "baremetal_observer" Roles to exist, in addition to the default "admin"
+   Role. There is no negative consequence if you choose not to create these
+   Roles. They can be created with the following commands::
+
+    openstack role create baremetal_admin
+    openstack role create baremetal_observer
+
+   If you choose to customize the names of Roles used with the Bare Metal
+   service, do so by changing the "is_member", "is_observer", and "is_admin"
+   policy settings in ``/etc/ironic/policy.json``.
+
+   More complete documentation on managing Users and Roles within your
+   OpenStack deployment are outside the scope of this document, but may be
+   found here_.
+
+#. You can further restrict access to the Bare Metal service by creating a
+   separate "baremetal" Project, so that Bare Metal resources (Nodes, Ports,
+   etc) are only accessible to members of this Project::
+
+    openstack project create baremetal
+
+   At this point, you may grant read-only access to the Bare Metal service API
+   without granting any other access by issuing the following commands::
+
+    openstack user create \
+      --domain default --project-domain default --project baremetal \
+      --password PASSWORD USERNAME
+    openstack role add \
+      --user-domain default --project-domain default --project baremetal\
+      --user USERNAME baremetal_observer
+
+#. Further documentation is available elsewhere for the ``openstack``
+   `command-line client`_ and the Identity_ service. A policy.json.sample_
+   file, which enumerates the service's default policies, is provided for
+   your convenience with the Bare Metal Service.
+
+.. _Identity: http://docs.openstack.org/admin-guide/identity-management.html
+.. _`command-line client`: http://docs.openstack.org/admin-guide/cli-manage-projects-users-and-roles.html
+.. _here: http://docs.openstack.org/admin-guide/identity-concepts.html#user-management
+.. _policy.json.sample: https://github.com/openstack/ironic/blob/master/etc/ironic/policy.json.sample
 
 
 Set up the database for Bare Metal
@@ -138,9 +183,9 @@ MySQL database that is used by other OpenStack services.
     # mysql -u root -p
     mysql> CREATE DATABASE ironic CHARACTER SET utf8;
     mysql> GRANT ALL PRIVILEGES ON ironic.* TO 'ironic'@'localhost' \
-    IDENTIFIED BY 'IRONIC_DBPASSWORD';
+           IDENTIFIED BY 'IRONIC_DBPASSWORD';
     mysql> GRANT ALL PRIVILEGES ON ironic.* TO 'ironic'@'%' \
-    IDENTIFIED BY 'IRONIC_DBPASSWORD';
+           IDENTIFIED BY 'IRONIC_DBPASSWORD';
 
 Install the Bare Metal service
 ------------------------------
@@ -152,13 +197,13 @@ Install the Bare Metal service
 
     Fedora 21/RHEL7/CentOS7:
         sudo yum install openstack-ironic-api openstack-ironic-conductor \
-        python-ironicclient
+                         python-ironicclient
         sudo systemctl enable openstack-ironic-api openstack-ironic-conductor
         sudo systemctl start openstack-ironic-api openstack-ironic-conductor
 
     Fedora 22 or higher:
         sudo dnf install openstack-ironic-api openstack-ironic-conductor \
-        python-ironicclient
+                         python-ironicclient
         sudo systemctl enable openstack-ironic-api openstack-ironic-conductor
         sudo systemctl start openstack-ironic-api openstack-ironic-conductor
 
@@ -227,17 +272,18 @@ Configuring ironic-api service
     # "keystone" or "noauth". "noauth" should not be used in a
     # production environment because all authentication will be
     # disabled. (string value)
-    #auth_strategy=keystone
+    auth_strategy=keystone
 
     [keystone_authtoken]
     ...
-    # Complete public Identity API endpoint (string value)
-    auth_uri=http://IDENTITY_IP:5000/
+    # Authentication type to load (string value)
+    auth_type = v3password
 
-    # Complete admin Identity API endpoint. This should specify
-    # the unversioned root endpoint e.g. https://localhost:35357/
-    # (string value)
-    identity_uri=http://IDENTITY_IP:35357/
+    # Complete public Identity API endpoint (string value)
+    auth_uri=http://PUBLIC_IDENTITY_IP:5000/v3/
+
+    # Complete admin Identity API endpoint. (string value)
+    auth_url=http://PRIVATE_IDENTITY_IP:35357/v3/
 
     # Service username. (string value)
     admin_user=ironic
@@ -504,6 +550,14 @@ Compute service's controller nodes and compute nodes.*
     #scheduler_tracks_instance_changes=True
     scheduler_tracks_instance_changes=False
 
+    # New instances will be scheduled on a host chosen randomly from a subset
+    # of the N best hosts, where N is the value set by this option.  Valid
+    # values are 1 or greater. Any value less than one will be treated as 1.
+    # For ironic, this should be set to a number >= the number of ironic nodes
+    # to more evenly distribute instances across the nodes.
+    #scheduler_host_subset_size=1
+    scheduler_host_subset_size=9999999
+
 2. Change these configuration options in the ``ironic`` section.
    Replace:
 
@@ -571,9 +625,6 @@ An example of this is shown in the `Enrollment`_ section.
 
     [ml2_type_flat]
     flat_networks = physnet1
-
-    [ml2_type_vlan]
-    network_vlan_ranges = physnet1
 
     [securitygroup]
     firewall_driver = neutron.agent.linux.iptables_firewall.OVSHybridIptablesFirewallDriver
@@ -647,6 +698,11 @@ An example of this is shown in the `Enrollment`_ section.
     --ip-version=4 --gateway=$GATEWAY_IP --allocation-pool \
     start=$START_IP,end=$END_IP --enable-dhcp
 
+Configuring Tenant Networks
+===========================
+
+See :ref:`multitenancy`
+
 .. _CleaningNetworkSetup:
 
 Configure the Bare Metal service for cleaning
@@ -667,9 +723,6 @@ Configure the Bare Metal service for cleaning
     [neutron]
     ...
 
-    # UUID of the network to create Neutron ports on, when booting
-    # to a ramdisk for cleaning using Neutron DHCP. (string value)
-    #cleaning_network_uuid=<None>
     cleaning_network_uuid = NETWORK_UUID
 
 #. Restart the Bare Metal service's ironic-conductor::
@@ -915,17 +968,7 @@ PXE UEFI setup
 If you want to deploy on a UEFI supported bare metal, perform these additional
 steps on the ironic conductor node to configure the PXE UEFI environment.
 
-#. Download and untar the elilo bootloader version >= 3.16 from
-   http://sourceforge.net/projects/elilo/::
-
-    sudo tar zxvf elilo-3.16-all.tar.gz
-
-#. Copy the elilo boot loader image to ``/tftpboot`` directory::
-
-    sudo cp ./elilo-3.16-x86_64.efi /tftpboot/elilo.efi
-
-#. Grub2 is an alternate UEFI bootloader supported in Bare Metal service.
-   Install grub2 and shim packages::
+#. Install Grub2 and shim packages::
 
     Ubuntu: (14.04LTS and later)
         sudo apt-get install grub-efi-amd64-signed shim-signed
@@ -975,18 +1018,6 @@ steps on the ironic conductor node to configure the PXE UEFI environment.
 
     sudo chmod 644 $GRUB_DIR/grub.cfg
 
-#. Update bootfile and template file configuration parameters for UEFI PXE boot
-   in the Bare Metal Service's configuration file (/etc/ironic/ironic.conf)::
-
-    [pxe]
-
-    # Bootfile DHCP parameter for UEFI boot mode. (string value)
-    uefi_pxe_bootfile_name=bootx64.efi
-
-    # Template file for PXE configuration for UEFI boot loader.
-    # (string value)
-    uefi_pxe_config_template=$pybasedir/drivers/modules/pxe_grub_config.template
-
 #. Update the bare metal node with ``boot_mode`` capability in node's properties
    field::
 
@@ -999,7 +1030,37 @@ steps on the ironic conductor node to configure the PXE UEFI environment.
    boot device on the bare metal node. So this step is not required for
    ``pxe_ilo`` driver.
 
-For more information on configuring boot modes, refer boot_mode_support_.
+.. note::
+  For more information on configuring boot modes, see boot_mode_support_.
+
+
+Elilo: an alternative to Grub2
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Elilo is a UEFI bootloader. It is an alternative to Grub2, although it
+isn't recommended since it is not being supported.
+
+#. Download and untar the elilo bootloader version >= 3.16 from
+   http://sourceforge.net/projects/elilo/::
+
+    sudo tar zxvf elilo-3.16-all.tar.gz
+
+#. Copy the elilo boot loader image to ``/tftpboot`` directory::
+
+    sudo cp ./elilo-3.16-x86_64.efi /tftpboot/elilo.efi
+
+#. Update bootfile and template file configuration parameters for UEFI
+   PXE boot in the Bare Metal Service's configuration file
+   (/etc/ironic/ironic.conf)::
+
+    [pxe]
+
+    # Bootfile DHCP parameter for UEFI boot mode. (string value)
+    uefi_pxe_bootfile_name=elilo.efi
+
+    # Template file for PXE configuration for UEFI boot loader.
+    # (string value)
+    uefi_pxe_config_template=$pybasedir/drivers/modules/elilo_efi_pxe_config.template
 
 
 iPXE setup
@@ -1208,136 +1269,7 @@ Telemetry, they are:
 Configure node web console
 --------------------------
 
-The web console can be configured in Bare Metal service in the following way:
-
-* Install shellinabox in ironic conductor node. For RHEL/CentOS, shellinabox package
-  is not present in base repositories, user must enable EPEL repository, you can find
-  more from `FedoraProject page`_.
-
-  Installation example::
-
-    Ubuntu:
-        sudo apt-get install shellinabox
-
-    Fedora 21/RHEL7/CentOS7:
-        sudo yum install shellinabox
-
-    Fedora 22 or higher:
-         sudo dnf install shellinabox
-
-  You can find more about shellinabox on the `shellinabox page`_.
-
-  You can optionally use the SSL certificate in shellinabox. If you want to use the SSL
-  certificate in shellinabox, you should install openssl and generate the SSL certificate.
-
-  1. Install openssl, for example::
-
-        Ubuntu:
-             sudo apt-get install openssl
-
-        Fedora 21/RHEL7/CentOS7:
-             sudo yum install openssl
-
-        Fedora 22 or higher:
-             sudo dnf install openssl
-
-  2. Generate the SSL certificate, here is an example, you can find more about openssl on
-     the `openssl page`_::
-
-        cd /tmp/ca
-        openssl genrsa -des3 -out my.key 1024
-        openssl req -new -key my.key  -out my.csr
-        cp my.key my.key.org
-        openssl rsa -in my.key.org -out my.key
-        openssl x509 -req -days 3650 -in my.csr -signkey my.key -out my.crt
-        cat my.crt my.key > certificate.pem
-
-* Customize the console section in the Bare Metal service configuration
-  file (/etc/ironic/ironic.conf), if you want to use SSL certificate in
-  shellinabox, you should specify ``terminal_cert_dir``.
-  for example::
-
-   [console]
-
-   #
-   # Options defined in ironic.drivers.modules.console_utils
-   #
-
-   # Path to serial console terminal program (string value)
-   #terminal=shellinaboxd
-
-   # Directory containing the terminal SSL cert(PEM) for serial
-   # console access (string value)
-   terminal_cert_dir=/tmp/ca
-
-   # Directory for holding terminal pid files. If not specified,
-   # the temporary directory will be used. (string value)
-   #terminal_pid_dir=<None>
-
-   # Time interval (in seconds) for checking the status of
-   # console subprocess. (integer value)
-   #subprocess_checking_interval=1
-
-   # Time (in seconds) to wait for the console subprocess to
-   # start. (integer value)
-   #subprocess_timeout=10
-
-* Append console parameters for bare metal PXE boot in the Bare Metal service
-  configuration file (/etc/ironic/ironic.conf), including right serial port
-  terminal and serial speed, serial speed should be same serial configuration
-  with BIOS settings, so that os boot process can be seen in web console,
-  for example::
-
-   pxe_* driver:
-
-        [pxe]
-
-        #Additional append parameters for bare metal PXE boot. (string value)
-        pxe_append_params = nofb nomodeset vga=normal console=tty0 console=ttyS0,115200n8
-
-* Configure node web console.
-
-  Enable the web console, for example::
-
-   ironic node-update <node-uuid> add driver_info/<terminal_port>=<customized_port>
-   ironic node-set-console-mode <node-uuid> true
-
-  Check whether the console is enabled, for example::
-
-   ironic node-validate <node-uuid>
-
-  Disable the web console, for example::
-
-   ironic node-set-console-mode <node-uuid> false
-   ironic node-update <node-uuid> remove driver_info/<terminal_port>
-
-  The ``<terminal_port>`` is driver dependent. The actual name of this field can be
-  checked in driver properties, for example::
-
-   ironic driver-properties <driver>
-
-  For ``*_ipmitool`` and ``*_ipminative`` drivers, this option is ``ipmi_terminal_port``.
-  For ``seamicro`` driver, this option is ``seamicro_terminal_port``. Give a customized port
-  number to ``<customized_port>``, for example ``8023``, this customized port is used in
-  web console url.
-
-* Get web console information::
-
-   ironic node-get-console <node-uuid>
-   +-----------------+----------------------------------------------------------------------+
-   | Property        | Value                                                                |
-   +-----------------+----------------------------------------------------------------------+
-   | console_enabled | True                                                                 |
-   | console_info    | {u'url': u'http://<url>:<customized_port>', u'type': u'shellinabox'} |
-   +-----------------+----------------------------------------------------------------------+
-
-  You can open web console using above ``url`` through web browser. If ``console_enabled`` is
-  ``false``, ``console_info`` is ``None``, web console is disabled. If you want to launch web
-  console, refer to ``Enable web console`` part.
-
-.. _`shellinabox page`: https://code.google.com/p/shellinabox/
-.. _`openssl page`: https://www.openssl.org/
-.. _`FedoraProject page`: https://fedoraproject.org/wiki/Infrastructure/Mirroring
+See :ref:`console`.
 
 .. _boot_mode_support:
 

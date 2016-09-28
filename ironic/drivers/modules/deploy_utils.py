@@ -31,9 +31,7 @@ from six.moves.urllib import parse
 from ironic.common import dhcp_factory
 from ironic.common import exception
 from ironic.common.glance_service import service_utils
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import image_service
 from ironic.common import keystone
 from ironic.common import states
@@ -365,7 +363,7 @@ def deploy_partition_image(
 
 
 def deploy_disk_image(address, port, iqn, lun,
-                      image_path, node_uuid):
+                      image_path, node_uuid, configdrive=None):
     """All-in-one function to deploy a whole disk image to a node.
 
     :param address: The iSCSI IP address.
@@ -375,6 +373,8 @@ def deploy_disk_image(address, port, iqn, lun,
     :param image_path: Path for the instance's disk image.
     :param node_uuid: node's uuid. Used for logging. Currently not in use
         by this function but could be used in the future.
+    :param configdrive: Optional. Base64 encoded Gzipped configdrive content
+                        or configdrive HTTP URL.
     :returns: a dictionary containing the key 'disk identifier' to identify
         the disk which was used for deployment.
     """
@@ -382,6 +382,10 @@ def deploy_disk_image(address, port, iqn, lun,
                                         lun) as dev:
         disk_utils.populate_image(image_path, dev)
         disk_identifier = disk_utils.get_disk_identifier(dev)
+
+        if configdrive:
+            disk_utils.create_config_drive_partition(node_uuid, dev,
+                                                     configdrive)
 
     return {'disk identifier': disk_identifier}
 
@@ -463,7 +467,7 @@ def fetch_images(ctx, cache, images_info, force_raw=True):
         cache.fetch_image(href, path, ctx=ctx, force_raw=force_raw)
 
 
-def set_failed_state(task, msg):
+def set_failed_state(task, msg, collect_logs=True):
     """Sets the deploy status as failed with relevant messages.
 
     This method sets the deployment as fail with the given message.
@@ -472,10 +476,15 @@ def set_failed_state(task, msg):
 
     :param task: a TaskManager instance containing the node to act on.
     :param msg: the message to set in last_error of the node.
+    :param collect_logs: boolean indicating whether to attempt collect
+                         logs from IPA-based ramdisk. Defaults to True.
+                         Actual log collection is also affected by
+                         CONF.agent.deploy_logs_collect config option.
     """
     node = task.node
 
-    if CONF.agent.deploy_logs_collect in ('on_failure', 'always'):
+    if (collect_logs and
+            CONF.agent.deploy_logs_collect in ('on_failure', 'always')):
         driver_utils.collect_ramdisk_logs(node)
 
     try:
