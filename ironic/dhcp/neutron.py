@@ -21,9 +21,7 @@ from oslo_log import log as logging
 from oslo_utils import netutils
 
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import network
 from ironic.common import neutron
 from ironic.conf import CONF
@@ -70,6 +68,16 @@ class NeutronDHCPApi(base.BaseDHCP):
             LOG.exception(_LE("Failed to update Neutron port %s."), port_id)
             raise exception.FailedToUpdateDHCPOptOnPort(port_id=port_id)
 
+    def _get_binding(self, client, port_id):
+        """Get binding:host_id property from Neutron."""
+        try:
+            return client.show_port(port_id).get('port', {}).get(
+                'binding:host_id')
+        except neutron_client_exc.NeutronClientException:
+            LOG.exception(_LE('Failed to get the current binding on Neutron '
+                              'port %s.'), port_id)
+            raise exception.FailedToUpdateMacOnPort(port_id=port_id)
+
     def update_port_address(self, port_id, address, token=None):
         """Update a port's mac address.
 
@@ -78,7 +86,21 @@ class NeutronDHCPApi(base.BaseDHCP):
         :param token: optional auth token.
         :raises: FailedToUpdateMacOnPort
         """
+        client = neutron.get_client(token)
         port_req_body = {'port': {'mac_address': address}}
+
+        current_binding = self._get_binding(client, port_id)
+        if current_binding:
+            binding_clean_body = {'port': {'binding:host_id': ''}}
+            try:
+                client.update_port(port_id, binding_clean_body)
+            except neutron_client_exc.NeutronClientException:
+                LOG.exception(_LE("Failed to remove the current binding from "
+                                  "Neutron port %s."), port_id)
+                raise exception.FailedToUpdateMacOnPort(port_id=port_id)
+
+            port_req_body['port']['binding:host_id'] = current_binding
+
         try:
             neutron.get_client(token).update_port(port_id, port_req_body)
         except neutron_client_exc.NeutronClientException:

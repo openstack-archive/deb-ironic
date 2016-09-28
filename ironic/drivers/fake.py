@@ -27,8 +27,11 @@ from ironic.drivers.modules.amt import management as amt_mgmt
 from ironic.drivers.modules.amt import power as amt_power
 from ironic.drivers.modules.cimc import management as cimc_mgmt
 from ironic.drivers.modules.cimc import power as cimc_power
+from ironic.drivers.modules.drac import deploy as drac_deploy
+from ironic.drivers.modules.drac import inspect as drac_inspect
 from ironic.drivers.modules.drac import management as drac_mgmt
 from ironic.drivers.modules.drac import power as drac_power
+from ironic.drivers.modules.drac import raid as drac_raid
 from ironic.drivers.modules.drac import vendor_passthru as drac_vendor
 from ironic.drivers.modules import fake
 from ironic.drivers.modules import iboot
@@ -114,6 +117,8 @@ class FakePXEDriver(base.BaseDriver):
 class FakeSSHDriver(base.BaseDriver):
     """Example implementation of a Driver."""
 
+    supported = False
+
     def __init__(self):
         self.power = ssh.SSHPower()
         self.deploy = fake.FakeDeploy()
@@ -123,6 +128,8 @@ class FakeSSHDriver(base.BaseDriver):
 
 class FakeIPMINativeDriver(base.BaseDriver):
     """Fake IPMINative driver."""
+
+    supported = False
 
     def __init__(self):
         if not importutils.try_import('pyghmi'):
@@ -138,6 +145,8 @@ class FakeIPMINativeDriver(base.BaseDriver):
 
 class FakeSeaMicroDriver(base.BaseDriver):
     """Fake SeaMicro driver."""
+
+    supported = False
 
     def __init__(self):
         if not importutils.try_import('seamicroclient'):
@@ -164,6 +173,8 @@ class FakeAgentDriver(base.BaseDriver):
 
 class FakeIBootDriver(base.BaseDriver):
     """Fake iBoot driver."""
+
+    supported = False
 
     def __init__(self):
         if not importutils.try_import('iboot'):
@@ -198,13 +209,17 @@ class FakeDracDriver(base.BaseDriver):
                 reason=_('Unable to import python-dracclient library'))
 
         self.power = drac_power.DracPower()
-        self.deploy = fake.FakeDeploy()
+        self.deploy = drac_deploy.DracDeploy()
         self.management = drac_mgmt.DracManagement()
+        self.raid = drac_raid.DracRAID()
         self.vendor = drac_vendor.DracVendorPassthru()
+        self.inspect = drac_inspect.DracInspect()
 
 
 class FakeSNMPDriver(base.BaseDriver):
     """Fake SNMP driver."""
+
+    supported = False
 
     def __init__(self):
         if not importutils.try_import('pysnmp'):
@@ -231,6 +246,8 @@ class FakeIRMCDriver(base.BaseDriver):
 
 class FakeVirtualBoxDriver(base.BaseDriver):
     """Fake VirtualBox driver."""
+
+    supported = False
 
     def __init__(self):
         if not importutils.try_import('pyremotevbox'):
@@ -260,6 +277,8 @@ class FakeIPMIToolInspectorDriver(base.BaseDriver):
 class FakeAMTDriver(base.BaseDriver):
     """Fake AMT driver."""
 
+    supported = False
+
     def __init__(self):
         if not importutils.try_import('pywsman'):
             raise exception.DriverLoadError(
@@ -272,6 +291,8 @@ class FakeAMTDriver(base.BaseDriver):
 
 class FakeMSFTOCSDriver(base.BaseDriver):
     """Fake MSFT OCS driver."""
+
+    supported = False
 
     def __init__(self):
         self.power = msftocs_power.MSFTOCSPower()
@@ -307,6 +328,8 @@ class FakeCIMCDriver(base.BaseDriver):
 
 class FakeWakeOnLanDriver(base.BaseDriver):
     """Fake Wake-On-Lan driver."""
+
+    supported = False
 
     def __init__(self):
         self.power = wol.WakeOnLanPower()

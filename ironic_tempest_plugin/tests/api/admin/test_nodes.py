@@ -30,7 +30,7 @@ class TestNodes(base.BaseBaremetalTest):
 
     def _assertExpected(self, expected, actual):
         # Check if not expected keys/values exists in actual response body
-        for key, value in six.iteritems(expected):
+        for key, value in expected.items():
             if key not in ('created_at', 'updated_at'):
                 self.assertIn(key, actual)
                 self.assertEqual(value, actual[key])
@@ -165,5 +165,5 @@ class TestNodes(base.BaseBaremetalTest):
     def test_get_node_by_instance_uuid(self):
         instance_uuid = self._associate_node_with_instance()
         _, body = self.client.show_node_by_instance_uuid(instance_uuid)
-        self.assertEqual(len(body['nodes']), 1)
+        self.assertEqual(1, len(body['nodes']))
         self.assertIn(self.node['uuid'], [n['uuid'] for n in body['nodes']])

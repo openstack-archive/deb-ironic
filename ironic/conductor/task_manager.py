@@ -104,9 +104,7 @@ import six
 
 from ironic.common import driver_factory
 from ironic.common import exception
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
-from ironic.common.i18n import _LW
+from ironic.common.i18n import _, _LE, _LW
 from ironic.common import states
 from ironic import objects
 
@@ -194,7 +192,7 @@ class TaskManager(object):
         self._on_error_method = None
 
         self.context = context
-        self.node = None
+        self._node = None
         self.node_id = node_id
         self.shared = shared
 
@@ -203,15 +201,16 @@ class TaskManager(object):
         self._debug_timer = timeutils.StopWatch()
 
         try:
+            node = objects.Node.get(context, node_id)
             LOG.debug("Attempting to get %(type)s lock on node %(node)s (for "
                       "%(purpose)s)",
                       {'type': 'shared' if shared else 'exclusive',
-                       'node': node_id, 'purpose': purpose})
+                       'node': node.uuid, 'purpose': purpose})
             if not self.shared:
                 self._lock()
             else:
                 self._debug_timer.restart()
-                self.node = objects.Node.get(context, node_id)
+                self.node = node
 
             self.ports = objects.Port.list_by_node_id(context, self.node.id)
             self.portgroups = objects.Portgroup.list_by_node_id(context,
@@ -219,18 +218,20 @@ class TaskManager(object):
             self.driver = driver_factory.build_driver_for_task(
                 self, driver_name=driver_name)
 
-            # NOTE(deva): this handles the Juno-era NOSTATE state
-            #             and should be deleted after Kilo is released
-            if self.node.provision_state is states.NOSTATE:
-                self.node.provision_state = states.AVAILABLE
-                self.node.save()
-
-            self.fsm.initialize(start_state=self.node.provision_state,
-                                target_state=self.node.target_provision_state)
-
         except Exception:
             with excutils.save_and_reraise_exception():
                 self.release_resources()
+
+    @property
+    def node(self):
+        return self._node
+
+    @node.setter
+    def node(self, node):
+        self._node = node
+        if node is not None:
+            self.fsm.initialize(start_state=self.node.provision_state,
+                                target_state=self.node.target_provision_state)
 
     def _lock(self):
         self._debug_timer.restart()
@@ -253,15 +254,19 @@ class TaskManager(object):
 
         reserve_node()
 
-    def upgrade_lock(self):
+    def upgrade_lock(self, purpose=None):
         """Upgrade a shared lock to an exclusive lock.
 
         Also reloads node object from the database.
-        Does nothing if lock is already exclusive.
+        If lock is already exclusive only changes the lock purpose
+        when provided with one.
 
+        :param purpose: optionally change the purpose of the lock
         :raises: NodeLocked if an exclusive lock remains on the node after
                             "node_locked_retry_attempts"
         """
+        if purpose is not None:
+            self._purpose = purpose
         if self.shared:
             LOG.debug('Upgrading shared lock on node %(uuid)s for %(purpose)s '
                       'to an exclusive one (shared lock was held %(time).2f '

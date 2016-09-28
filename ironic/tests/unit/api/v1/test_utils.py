@@ -19,7 +19,7 @@ from oslo_config import cfg
 from oslo_utils import uuidutils
 import pecan
 from six.moves import http_client
-from webob.static import FileIter
+from webob import static
 import wsme
 
 from ironic.api.controllers.v1 import node as api_node
@@ -36,7 +36,7 @@ class TestApiUtils(base.TestCase):
 
     def test_validate_limit(self):
         limit = utils.validate_limit(10)
-        self.assertEqual(10, 10)
+        self.assertEqual(10, limit)
 
         # max limit
         limit = utils.validate_limit(999999999)
@@ -443,7 +443,7 @@ class TestVendorPassthru(base.TestCase):
             'fake-data', 'fake-topic')
 
         # Assert file was attached to the response object
-        self.assertIsInstance(mock_response.app_iter, FileIter)
+        self.assertIsInstance(mock_response.app_iter, static.FileIter)
         self.assertEqual(expct_return_value,
                          mock_response.app_iter.file.read())
         # Assert response message is none
@@ -462,7 +462,7 @@ class TestVendorPassthru(base.TestCase):
         self._test_vendor_passthru_attach(b'\x00\x01', b'\x00\x01')
 
     def test_get_controller_reserved_names(self):
-        expected = ['maintenance', 'management', 'ports', 'states',
+        expected = ['maintenance', 'management', 'states',
                     'vendor_passthru', 'validate', 'detail']
         self.assertEqual(sorted(expected),
                          sorted(utils.get_controller_reserved_names(

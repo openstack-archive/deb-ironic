@@ -11,7 +11,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import six
 from tempest.lib.common.utils import data_utils
 from tempest.lib import exceptions as lib_exc
 from tempest import test
@@ -29,7 +28,7 @@ class TestChassis(base.BaseBaremetalTest):
 
     def _assertExpected(self, expected, actual):
         # Check if not expected keys/values exists in actual response body
-        for key, value in six.iteritems(expected):
+        for key, value in expected.items():
             if key not in ('created_at', 'updated_at'):
                 self.assertIn(key, actual)
                 self.assertEqual(value, actual[key])
@@ -38,7 +37,7 @@ class TestChassis(base.BaseBaremetalTest):
     def test_create_chassis(self):
         descr = data_utils.rand_name('test-chassis')
         _, chassis = self.create_chassis(description=descr)
-        self.assertEqual(chassis['description'], descr)
+        self.assertEqual(descr, chassis['description'])
 
     @test.idempotent_id('cabe9c6f-dc16-41a7-b6b9-0a90c212edd5')
     def test_create_chassis_unicode_description(self):
@@ -46,7 +45,7 @@ class TestChassis(base.BaseBaremetalTest):
         # 'We ♡ OpenStack in Ukraine'
         descr = u'В Україні ♡ OpenStack!'
         _, chassis = self.create_chassis(description=descr)
-        self.assertEqual(chassis['description'], descr)
+        self.assertEqual(descr, chassis['description'])
 
     @test.idempotent_id('c84644df-31c4-49db-a307-8942881f41c0')
     def test_show_chassis(self):
@@ -76,7 +75,7 @@ class TestChassis(base.BaseBaremetalTest):
         _, body = (self.client.update_chassis(uuid,
                    description=new_description))
         _, chassis = self.client.show_chassis(uuid)
-        self.assertEqual(chassis['description'], new_description)
+        self.assertEqual(new_description, chassis['description'])
 
     @test.idempotent_id('76305e22-a4e2-4ab3-855c-f4e2368b9335')
     def test_chassis_node_list(self):

@@ -25,7 +25,7 @@ from oslo_utils import uuidutils
 import six
 from six.moves import http_client
 from six.moves.urllib import parse as urlparse
-from testtools.matchers import HasLength
+from testtools import matchers
 from wsme import types as wtypes
 
 from ironic.api.controllers import base as api_base
@@ -128,6 +128,10 @@ class TestListNodes(test_api_base.BaseApiTest):
         self.assertEqual('******', data['driver_info']['fake_password'])
         self.assertEqual('bar', data['driver_info']['foo'])
         self.assertIn('driver_internal_info', data)
+        self.assertIn('instance_info', data)
+        self.assertEqual('******', data['instance_info']['configdrive'])
+        self.assertEqual('******', data['instance_info']['image_url'])
+        self.assertEqual('bar', data['instance_info']['foo'])
         self.assertIn('extra', data)
         self.assertIn('properties', data)
         self.assertIn('chassis_uuid', data)
@@ -477,13 +481,21 @@ class TestListNodes(test_api_base.BaseApiTest):
         obj_utils.create_test_port(self.context, node_id=node.id)
         # No node id specified
         response = self.get_json('/nodes/ports', expect_errors=True)
-        self.assertEqual(http_client.BAD_REQUEST, response.status_int)
+        self.assertEqual(http_client.NOT_FOUND, response.status_int)
 
     def test_ports_subresource_node_not_found(self):
         non_existent_uuid = 'eeeeeeee-cccc-aaaa-bbbb-cccccccccccc'
         response = self.get_json('/nodes/%s/ports' % non_existent_uuid,
                                  expect_errors=True)
         self.assertEqual(http_client.NOT_FOUND, response.status_int)
+
+    def test_ports_subresource_invalid_ident(self):
+        invalid_ident = '123~123'
+        response = self.get_json('/nodes/%s/ports' % invalid_ident,
+                                 expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_int)
+        self.assertIn('Expected a logical name or UUID',
+                      response.json['error_message'])
 
     @mock.patch.object(timeutils, 'utcnow')
     def _test_node_states(self, mock_utcnow, api_version=None):
@@ -560,7 +572,7 @@ class TestListNodes(test_api_base.BaseApiTest):
         data = self.get_json('/nodes?instance_uuid=%s' % instance_uuid,
                              headers={api_base.Version.string: "1.5"})
 
-        self.assertThat(data['nodes'], HasLength(1))
+        self.assertThat(data['nodes'], matchers.HasLength(1))
         self.assertEqual(node['instance_uuid'],
                          data['nodes'][0]["instance_uuid"])
 
@@ -572,7 +584,7 @@ class TestListNodes(test_api_base.BaseApiTest):
 
         data = self.get_json('/nodes?instance_uuid=%s' % wrong_uuid)
 
-        self.assertThat(data['nodes'], HasLength(0))
+        self.assertThat(data['nodes'], matchers.HasLength(0))
 
     def test_node_by_instance_uuid_invalid_uuid(self):
         response = self.get_json('/nodes?instance_uuid=fake',
@@ -618,13 +630,13 @@ class TestListNodes(test_api_base.BaseApiTest):
 
         data = self.get_json('/nodes?associated=False&limit=2')
 
-        self.assertThat(data['nodes'], HasLength(2))
+        self.assertThat(data['nodes'], matchers.HasLength(2))
         self.assertIn(data['nodes'][0]['uuid'], unassociated_nodes)
 
     def test_next_link_with_association(self):
         self._create_association_test_nodes()
         data = self.get_json('/nodes/?limit=3&associated=True')
-        self.assertThat(data['nodes'], HasLength(3))
+        self.assertThat(data['nodes'], matchers.HasLength(3))
         self.assertIn('associated=True', data['next'])
 
     def test_detail_with_association_filter(self):
@@ -637,7 +649,7 @@ class TestListNodes(test_api_base.BaseApiTest):
     def test_next_link_with_association_with_detail(self):
         self._create_association_test_nodes()
         data = self.get_json('/nodes/detail?limit=3&associated=true')
-        self.assertThat(data['nodes'], HasLength(3))
+        self.assertThat(data['nodes'], matchers.HasLength(3))
         self.assertIn('driver', data['nodes'][0])
         self.assertIn('associated=True', data['next'])
 
@@ -1184,10 +1196,18 @@ class TestPatch(test_api_base.BaseApiTest):
         self.mock_update_node.assert_called_once_with(
             mock.ANY, mock.ANY, 'test-topic')
 
-    def test_patch_ports_subresource(self):
+    def test_patch_ports_subresource_no_port_id(self):
         response = self.patch_json('/nodes/%s/ports' % self.node.uuid,
                                    [{'path': '/extra/foo', 'value': 'bar',
                                      'op': 'add'}], expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_int)
+
+    def test_patch_ports_subresource(self):
+        response = self.patch_json(
+            '/nodes/%s/ports/9bb50f13-0b8d-4ade-ad2d-d91fefdef9cc' %
+            self.node.uuid,
+            [{'path': '/extra/foo', 'value': 'bar',
+              'op': 'add'}], expect_errors=True)
         self.assertEqual(http_client.FORBIDDEN, response.status_int)
 
     def test_remove_uuid(self):
@@ -1876,11 +1896,19 @@ class TestPost(test_api_base.BaseApiTest):
         self.assertEqual(http_client.BAD_REQUEST, response.status_code)
         self.assertTrue(response.json['error_message'])
 
-    def test_post_ports_subresource(self):
+    def test_post_ports_subresource_no_node_id(self):
         node = obj_utils.create_test_node(self.context)
         pdict = test_api_utils.port_post_data(node_id=None)
         pdict['node_uuid'] = node.uuid
         response = self.post_json('/nodes/ports', pdict,
+                                  expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_int)
+
+    def test_post_ports_subresource(self):
+        node = obj_utils.create_test_node(self.context)
+        pdict = test_api_utils.port_post_data(node_id=None)
+        pdict['node_uuid'] = node.uuid
+        response = self.post_json('/nodes/%s/ports' % node.uuid, pdict,
                                   expect_errors=True)
         self.assertEqual(http_client.FORBIDDEN, response.status_int)
 
@@ -2074,10 +2102,19 @@ class TestDelete(test_api_base.BaseApiTest):
         self.assertTrue(response.json['error_message'])
         mock_gbn.assert_called_once_with(mock.ANY, node.name)
 
-    def test_delete_ports_subresource(self):
+    def test_delete_ports_subresource_no_port_id(self):
         node = obj_utils.create_test_node(self.context)
         response = self.delete('/nodes/%s/ports' % node.uuid,
                                expect_errors=True)
+        self.assertEqual(http_client.BAD_REQUEST, response.status_int)
+
+    def test_delete_ports_subresource(self):
+        node = obj_utils.create_test_node(self.context)
+        port = obj_utils.create_test_port(self.context, node_id=node.id)
+        response = self.delete(
+            '/nodes/%(node_uuid)s/ports/%(port_uuid)s' %
+            {'node_uuid': node.uuid, 'port_uuid': port.uuid},
+            expect_errors=True)
         self.assertEqual(http_client.FORBIDDEN, response.status_int)
 
     @mock.patch.object(rpcapi.ConductorAPI, 'destroy_node')

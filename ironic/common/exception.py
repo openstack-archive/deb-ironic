@@ -24,8 +24,7 @@ from oslo_log import log as logging
 import six
 from six.moves import http_client
 
-from ironic.common.i18n import _
-from ironic.common.i18n import _LE
+from ironic.common.i18n import _, _LE
 from ironic.conf import CONF
 
 LOG = logging.getLogger(__name__)
@@ -63,10 +62,9 @@ class IronicException(Exception):
             except Exception as e:
                 # kwargs doesn't match a variable in self._msg_fmt
                 # log the issue and the kwargs
-                LOG.exception(_LE('Exception in string format operation'))
-                for name, value in kwargs.items():
-                    LOG.error("%s: %s" % (name, value))
-
+                prs = ', '.join('%s: %s' % pair for pair in kwargs.items())
+                LOG.exception(_LE('Exception in string format operation '
+                                  '(arguments %s)'), prs)
                 if CONF.fatal_exception_format_errors:
                     raise e
                 else:
@@ -79,13 +77,13 @@ class IronicException(Exception):
     def __str__(self):
         """Encode to utf-8 then wsme api can consume it as well."""
         if not six.PY3:
-            return unicode(self.args[0]).encode('utf-8')
+            return six.text_type(self.args[0]).encode('utf-8')
 
         return self.args[0]
 
     def __unicode__(self):
         """Return a unicode representation of the exception message."""
-        return unicode(self.args[0])
+        return six.text_type(self.args[0])
 
 
 class NotAuthorized(IronicException):
@@ -611,3 +609,19 @@ class NetworkError(IronicException):
 class IncompleteLookup(Invalid):
     _msg_fmt = _("At least one of 'addresses' and 'node_uuid' parameters "
                  "is required")
+
+
+class NotificationSchemaObjectError(IronicException):
+    _msg_fmt = _("Expected object %(obj)s when populating notification payload"
+                 " but got object %(source)s")
+
+
+class NotificationSchemaKeyError(IronicException):
+    _msg_fmt = _("Object %(obj)s doesn't have the field \"%(field)s\" "
+                 "required for populating notification schema key "
+                 "\"%(key)s\"")
+
+
+class NotificationPayloadError(IronicException):
+    _msg_fmt = _("Payload not populated when trying to send notification "
+                 "\"%(class_name)s\"")

@@ -29,6 +29,7 @@ from ironic.common import exception
 from ironic.common import states
 from ironic.conductor import task_manager
 from ironic.drivers.modules import console_utils
+from ironic.drivers.modules import deploy_utils
 from ironic.drivers.modules import ipminative
 from ironic.drivers import utils as driver_utils
 from ironic.tests.unit.conductor import mgr_utils
@@ -344,7 +345,8 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                                   self.node.uuid) as task:
             self.driver.management.set_boot_device(task, boot_devices.PXE)
         # PXE is converted to 'network' internally by ipminative
-        ipmicmd.set_bootdev.assert_called_once_with('network', persist=False)
+        ipmicmd.set_bootdev.assert_called_once_with('network', persist=False,
+                                                    uefiboot=False)
 
     @mock.patch('pyghmi.ipmi.command.Command', autospec=True)
     def test_force_set_boot_device_ok(self, ipmi_mock):
@@ -361,7 +363,8 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                 task.node.driver_internal_info['is_next_boot_persistent']
             )
         # PXE is converted to 'network' internally by ipminative
-        ipmicmd.set_bootdev.assert_called_once_with('network', persist=False)
+        ipmicmd.set_bootdev.assert_called_once_with('network', persist=False,
+                                                    uefiboot=False)
 
     @mock.patch('pyghmi.ipmi.command.Command', autospec=True)
     def test_set_boot_device_with_persistent(self, ipmi_mock):
@@ -378,7 +381,8 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                 boot_devices.PXE,
                 task.node.driver_internal_info['persistent_boot_device'])
         # PXE is converted to 'network' internally by ipminative
-        ipmicmd.set_bootdev.assert_called_once_with('network', persist=False)
+        ipmicmd.set_bootdev.assert_called_once_with('network', persist=False,
+                                                    uefiboot=False)
 
     def test_set_boot_device_bad_device(self):
         with task_manager.acquire(self.context, self.node.uuid) as task:
@@ -386,6 +390,32 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                               self.driver.management.set_boot_device,
                               task,
                               'fake-device')
+
+    @mock.patch.object(deploy_utils, 'get_boot_mode_for_deploy')
+    @mock.patch('pyghmi.ipmi.command.Command', autospec=True)
+    def test_set_boot_device_uefi(self, ipmi_mock, boot_mode_mock):
+        ipmicmd = ipmi_mock.return_value
+        boot_mode_mock.return_value = 'uefi'
+
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.driver.management.set_boot_device(task, boot_devices.PXE)
+        # PXE is converted to 'network' internally by ipminative
+        ipmicmd.set_bootdev.assert_called_once_with('network', persist=False,
+                                                    uefiboot=True)
+
+    @mock.patch.object(deploy_utils, 'get_boot_mode_for_deploy')
+    @mock.patch('pyghmi.ipmi.command.Command', autospec=True)
+    def test_set_boot_device_uefi_and_persistent(
+            self, ipmi_mock, boot_mode_mock):
+        ipmicmd = ipmi_mock.return_value
+        boot_mode_mock.return_value = 'uefi'
+
+        with task_manager.acquire(self.context, self.node.uuid) as task:
+            self.driver.management.set_boot_device(task, boot_devices.PXE,
+                                                   persistent=True)
+        # PXE is converted to 'network' internally by ipminative
+        ipmicmd.set_bootdev.assert_called_once_with('network', persist=True,
+                                                    uefiboot=True)
 
     @mock.patch.object(driver_utils, 'ensure_next_boot_device', autospec=True)
     @mock.patch.object(ipminative, '_reboot', autospec=True)
@@ -495,22 +525,22 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
 
     @mock.patch.object(console_utils, 'start_shellinabox_console',
                        autospec=True)
-    def test_start_console(self, mock_exec):
-        mock_exec.return_value = None
+    def test_start_console(self, mock_start):
+        mock_start.return_value = None
 
         with task_manager.acquire(self.context,
                                   self.node.uuid) as task:
             self.driver.console.start_console(task)
 
-        mock_exec.assert_called_once_with(self.info['uuid'],
-                                          self.info['port'],
-                                          mock.ANY)
-        self.assertTrue(mock_exec.called)
+        mock_start.assert_called_once_with(self.info['uuid'],
+                                           self.info['port'],
+                                           mock.ANY)
+        self.assertTrue(mock_start.called)
 
     @mock.patch.object(console_utils, 'start_shellinabox_console',
                        autospec=True)
-    def test_start_console_fail(self, mock_exec):
-        mock_exec.side_effect = exception.ConsoleSubprocessFailed(
+    def test_start_console_fail(self, mock_start):
+        mock_start.side_effect = exception.ConsoleSubprocessFailed(
             error='error')
 
         with task_manager.acquire(self.context,
@@ -519,17 +549,18 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
                               self.driver.console.start_console,
                               task)
 
+        self.assertTrue(mock_start.called)
+
     @mock.patch.object(console_utils, 'stop_shellinabox_console',
                        autospec=True)
-    def test_stop_console(self, mock_exec):
-        mock_exec.return_value = None
+    def test_stop_console(self, mock_stop):
+        mock_stop.return_value = None
 
         with task_manager.acquire(self.context,
                                   self.node['uuid']) as task:
             self.driver.console.stop_console(task)
 
-        mock_exec.assert_called_once_with(self.info['uuid'])
-        self.assertTrue(mock_exec.called)
+        mock_stop.assert_called_once_with(self.info['uuid'])
 
     @mock.patch.object(console_utils, 'stop_shellinabox_console',
                        autospec=True)
@@ -546,9 +577,9 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
 
     @mock.patch.object(console_utils, 'get_shellinabox_console_url',
                        autospec=True)
-    def test_get_console(self, mock_exec):
+    def test_get_console(self, mock_get_url):
         url = 'http://localhost:4201'
-        mock_exec.return_value = url
+        mock_get_url.return_value = url
         expected = {'type': 'shellinabox', 'url': url}
 
         with task_manager.acquire(self.context,
@@ -556,8 +587,7 @@ class IPMINativeDriverTestCase(db_base.DbTestCase):
             console_info = self.driver.console.get_console(task)
 
         self.assertEqual(expected, console_info)
-        mock_exec.assert_called_once_with(self.info['port'])
-        self.assertTrue(mock_exec.called)
+        mock_get_url.assert_called_once_with(self.info['port'])
 
     @mock.patch.object(ipminative, '_parse_driver_info', autospec=True)
     @mock.patch.object(ipminative, '_parse_raw_bytes', autospec=True)

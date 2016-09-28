@@ -1,4 +1,3 @@
 adds-alembic.ini-in-MANIFEST.in.patch
 allow-any-pytz-version.patch
 allow-any-fixtures-version.patch
-Fix-broken-unit-tests-for-get_ilo_object.patch
