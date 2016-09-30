@@ -5,5 +5,5 @@ Abstract: Sphinx documentation for Ironic
 Section: Programming/Python
 
 Format: HTML
-Index: /usr/share/doc/ironic-doc/html/index.html
-Files: /usr/share/doc/ironic-doc/html/*
+Index: /usr/share/doc/ironic-doc/dev-doc-html/index.html
+Files: /usr/share/doc/ironic-doc/dev-doc-html/* /usr/share/doc/ironic-doc/install-guide-html
