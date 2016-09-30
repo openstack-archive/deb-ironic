@@ -1,0 +1,9 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 30 Sep 2016 14:06:17 +0000
+Reviewed-on: https://review.openstack.org/377653
+Project: openstack/deb-ironic
+Branch: refs/heads/master

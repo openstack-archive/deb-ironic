@@ -1,0 +1,9 @@
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 30 Sep 2016 17:28:15 +0000
+Reviewed-on: https://review.openstack.org/376214
+Project: openstack/deb-ironic
+Branch: refs/heads/master
