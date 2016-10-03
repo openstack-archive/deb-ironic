@@ -1,0 +1,10 @@
+Code-Review+1: Varun Gadiraju <varun.gadiraju@intel.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 01 Oct 2016 03:13:06 +0000
+Reviewed-on: https://review.openstack.org/380024
+Project: openstack/deb-ironic
+Branch: refs/heads/master
