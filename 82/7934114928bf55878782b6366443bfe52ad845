@@ -1,0 +1,10 @@
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Code-Review+1: Stenio Araujo <stenioaraujo@lsd.ufcg.edu.br>
+Code-Review+2: Haomeng,Wang <wanghaomeng@gmail.com>
+Workflow+1: Haomeng,Wang <wanghaomeng@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 04 Oct 2016 06:10:22 +0000
+Reviewed-on: https://review.openstack.org/379159
+Project: openstack/deb-ironic
+Branch: refs/heads/master
