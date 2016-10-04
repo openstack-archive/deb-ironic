@@ -1,4 +1,4 @@
-ironic (1:6.2.0-1) experimental; urgency=medium
+ironic (1:6.2.0-1) unstable; urgency=medium
 
   [ Ondřej Nový ]
   * d/s/options: extend-diff-ignore of .gitreview
@@ -6,6 +6,7 @@ ironic (1:6.2.0-1) experimental; urgency=medium
 
   [ Thomas Goirand ]
   * New upstream release.
+  * Uploading to unstable.
   * Fixed (build-)depends for this release.
   * Fixed oslotest EPOCH.
   * Removed Fix-broken-unit-tests-for-get_ilo_object.patch applied upstream.
