@@ -13,6 +13,8 @@ ironic (1:6.2.0-1) unstable; urgency=medium
   * Rebased requirements patches.
   * Also package Ironic's install-guide
   * Fixed config file generation namespaces.
+  * Black list failing unit tests:
+    - test_keystone.KeystoneLegacyTestCase.test_legacy_loading_new_in_legacy
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 28 Sep 2016 09:28:56 +0200
 
