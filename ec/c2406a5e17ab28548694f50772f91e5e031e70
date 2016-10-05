@@ -1,0 +1,11 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Ramamani Yeleswarapu <ramamani.yeleswarapu@intel.com>
+Code-Review+1: Varun Gadiraju <varun.gadiraju@intel.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 05 Oct 2016 01:38:33 +0000
+Reviewed-on: https://review.openstack.org/376564
+Project: openstack/deb-ironic
+Branch: refs/heads/master
