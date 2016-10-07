@@ -1,0 +1,11 @@
+Code-Review+1: Mathieu Mitchell <mmitchell@iweb.com>
+Code-Review+1: Gerald LONLAS <g.lonlas@gmail.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Oct 2016 19:56:00 +0000
+Reviewed-on: https://review.openstack.org/383217
+Project: openstack/deb-ironic
+Branch: refs/heads/master
