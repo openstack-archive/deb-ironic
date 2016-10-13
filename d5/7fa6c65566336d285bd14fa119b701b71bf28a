@@ -1,0 +1,11 @@
+Code-Review+1: Hironori Shiina <shiina.hironori@jp.fujitsu.com>
+Code-Review+2: Devananda van der Veen <devananda.vdv@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 11 Oct 2016 13:23:24 +0000
+Reviewed-on: https://review.openstack.org/365392
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/mitaka
