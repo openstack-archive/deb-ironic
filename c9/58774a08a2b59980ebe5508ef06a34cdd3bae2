@@ -1,0 +1,11 @@
+Code-Review+1: Ruby Loo <ruby.loo@intel.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Tony Breeds <tony@bakeyournoodle.com>
+Workflow+1: Tony Breeds <tony@bakeyournoodle.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 11 Oct 2016 23:47:01 +0000
+Reviewed-on: https://review.openstack.org/382478
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/newton
