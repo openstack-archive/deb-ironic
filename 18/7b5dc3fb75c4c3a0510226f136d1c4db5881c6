@@ -1,0 +1,12 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Hugo Nicodemos <nicodemos@lsd.ufcg.edu.br>
+Code-Review+1: Caio Oliveira <caiobo@lsd.ufcg.edu.br>
+Code-Review+1: Stenio Araujo <stenioaraujo@lsd.ufcg.edu.br>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 13 Oct 2016 11:32:39 +0000
+Reviewed-on: https://review.openstack.org/372735
+Project: openstack/deb-ironic
+Branch: refs/heads/master

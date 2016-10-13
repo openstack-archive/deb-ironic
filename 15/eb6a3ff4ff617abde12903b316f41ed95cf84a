@@ -1,0 +1,10 @@
+Code-Review+1: Tang Chen <chen.tang@easystack.cn>
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 13 Oct 2016 16:26:33 +0000
+Reviewed-on: https://review.openstack.org/385919
+Project: openstack/deb-ironic
+Branch: refs/heads/master
