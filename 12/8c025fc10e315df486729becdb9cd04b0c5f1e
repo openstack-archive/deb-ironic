@@ -1,0 +1,11 @@
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+1: Prudhvi Rao Shedimbi <prudhvi.rao.shedimbi@intel.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 18 Oct 2016 04:06:57 +0000
+Reviewed-on: https://review.openstack.org/387652
+Project: openstack/deb-ironic
+Branch: refs/heads/master
