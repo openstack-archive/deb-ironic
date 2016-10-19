@@ -1,0 +1,9 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Workflow+1: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Eric Lei <leiyashuai@inspur.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 18 Oct 2016 10:53:13 +0000
+Reviewed-on: https://review.openstack.org/387860
+Project: openstack/deb-ironic
+Branch: refs/heads/master
