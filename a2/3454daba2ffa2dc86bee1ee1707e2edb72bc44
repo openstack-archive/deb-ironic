@@ -1,0 +1,9 @@
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 21 Oct 2016 13:41:34 +0000
+Reviewed-on: https://review.openstack.org/389550
+Project: openstack/deb-ironic
+Branch: refs/heads/master

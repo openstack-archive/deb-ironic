@@ -1,0 +1,14 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Hironori Shiina <shiina.hironori@jp.fujitsu.com>
+Code-Review+1: Dao Cong Tien <tiendc@vn.fujitsu.com>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+1: Naohiro Tamura <naohirot.openstack@gmail.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Prudhvi Rao Shedimbi <prudhvi.rao.shedimbi@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 20 Oct 2016 21:16:06 +0000
+Reviewed-on: https://review.openstack.org/363647
+Project: openstack/deb-ironic
+Branch: refs/heads/master
