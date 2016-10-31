@@ -1,0 +1,14 @@
+Code-Review+1: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+1: Ian Wienand <iwienand@redhat.com>
+Code-Review+1: octopuszhang <zhang.yufei@99cloud.net>
+Code-Review+1: Oksana Voshchana <ovoshchana@mirantis.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 26 Oct 2016 11:05:49 +0000
+Reviewed-on: https://review.openstack.org/390664
+Project: openstack/deb-ironic
+Branch: refs/heads/master
