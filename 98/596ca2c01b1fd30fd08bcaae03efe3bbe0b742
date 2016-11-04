@@ -1,0 +1,15 @@
+Code-Review+1: Caio Oliveira <caiobo@lsd.ufcg.edu.br>
+Code-Review+1: Igor Pukha <ipukha@mirantis.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Oksana Voshchana <ovoshchana@mirantis.com>
+Code-Review+1: Kyrylo Romanenko <kromanenko@mirantis.com>
+Workflow+1: Vladyslav Drok <vdrok@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 04 Nov 2016 12:51:31 +0000
+Reviewed-on: https://review.openstack.org/353303
+Project: openstack/deb-ironic
+Branch: refs/heads/master
