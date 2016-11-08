@@ -1,0 +1,11 @@
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 08 Nov 2016 12:54:01 +0000
+Reviewed-on: https://review.openstack.org/394087
+Project: openstack/deb-ironic
+Branch: refs/heads/master
