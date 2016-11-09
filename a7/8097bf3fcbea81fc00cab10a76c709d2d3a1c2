@@ -1,0 +1,9 @@
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 08 Nov 2016 14:54:17 +0000
+Reviewed-on: https://review.openstack.org/394608
+Project: openstack/deb-ironic
+Branch: refs/heads/master
