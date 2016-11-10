@@ -1,0 +1,8 @@
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 09 Nov 2016 14:40:22 +0000
+Reviewed-on: https://review.openstack.org/382358
+Project: openstack/deb-ironic
+Branch: refs/heads/master
