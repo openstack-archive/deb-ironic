@@ -1,0 +1,11 @@
+Code-Review+1: Mathieu Mitchell <mmitchell@iweb.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Rajini Ram <rajini.ram@dell.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 10 Nov 2016 22:08:20 +0000
+Reviewed-on: https://review.openstack.org/353102
+Project: openstack/deb-ironic
+Branch: refs/heads/master
