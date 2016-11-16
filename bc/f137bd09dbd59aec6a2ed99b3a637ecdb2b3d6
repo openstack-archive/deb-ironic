@@ -1,0 +1,11 @@
+Code-Review+1: Naohiro Tamura <naohirot.openstack@gmail.com>
+Code-Review+1: Aline Bousquet <albousque@gmail.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 15 Nov 2016 18:00:04 +0000
+Reviewed-on: https://review.openstack.org/379619
+Project: openstack/deb-ironic
+Branch: refs/heads/master
