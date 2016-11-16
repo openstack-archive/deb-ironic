@@ -1,0 +1,8 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 15 Nov 2016 19:08:11 +0000
+Reviewed-on: https://review.openstack.org/397824
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/newton
