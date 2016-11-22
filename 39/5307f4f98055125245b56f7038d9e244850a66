@@ -1,0 +1,11 @@
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Joanna Taryma <joanna.taryma@intel.com>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 22 Nov 2016 00:52:12 +0000
+Reviewed-on: https://review.openstack.org/374881
+Project: openstack/deb-ironic
+Branch: refs/heads/master
