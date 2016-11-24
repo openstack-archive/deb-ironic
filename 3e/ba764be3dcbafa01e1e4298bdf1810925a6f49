@@ -1,0 +1,9 @@
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 23 Nov 2016 14:24:54 +0000
+Reviewed-on: https://review.openstack.org/295371
+Project: openstack/deb-ironic
+Branch: refs/heads/master

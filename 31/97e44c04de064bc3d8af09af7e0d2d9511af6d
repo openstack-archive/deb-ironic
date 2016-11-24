@@ -1,0 +1,10 @@
+Code-Review+1: Pavlo Shchelokovskyy <pshchelokovskyy@mirantis.com>
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 23 Nov 2016 13:28:06 +0000
+Reviewed-on: https://review.openstack.org/361451
+Project: openstack/deb-ironic
+Branch: refs/heads/master
