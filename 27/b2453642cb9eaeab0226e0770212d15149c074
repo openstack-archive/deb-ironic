@@ -1,0 +1,12 @@
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Pavlo Shchelokovskyy <pshchelokovskyy@mirantis.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+1: Anup Navare <anup.d.navare@intel.com>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 08 Dec 2016 22:05:05 +0000
+Reviewed-on: https://review.openstack.org/393962
+Project: openstack/deb-ironic
+Branch: refs/heads/master
