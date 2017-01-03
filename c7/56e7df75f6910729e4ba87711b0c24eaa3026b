@@ -1,0 +1,13 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Galyna Zholtkevych <gzholtkevych@mirantis.com>
+Code-Review+1: Madhuri Kumari <madhuri.kumari@intel.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+1: JingLiu <liu.jing5@zte.com.cn>
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Workflow+1: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 30 Dec 2016 11:28:52 +0000
+Reviewed-on: https://review.openstack.org/413450
+Project: openstack/deb-ironic
+Branch: refs/heads/master
