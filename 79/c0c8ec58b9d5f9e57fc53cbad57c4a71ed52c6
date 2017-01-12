@@ -1,0 +1,11 @@
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Ruby Loo <ruby.loo@intel.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 11 Jan 2017 20:55:44 +0000
+Reviewed-on: https://review.openstack.org/418814
+Project: openstack/deb-ironic
+Branch: refs/heads/master
