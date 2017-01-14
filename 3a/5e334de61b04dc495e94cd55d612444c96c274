@@ -1,0 +1,11 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review-1: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 13 Jan 2017 12:21:57 +0000
+Reviewed-on: https://review.openstack.org/419612
+Project: openstack/deb-ironic
+Branch: refs/heads/master
