@@ -1,0 +1,9 @@
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 16 Jan 2017 11:27:52 +0000
+Reviewed-on: https://review.openstack.org/420203
+Project: openstack/deb-ironic
+Branch: refs/heads/master
