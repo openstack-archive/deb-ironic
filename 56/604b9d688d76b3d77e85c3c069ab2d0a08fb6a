@@ -1,0 +1,10 @@
+Code-Review+1: Clif Houck <me@clifhouck.com>
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 17 Jan 2017 20:44:27 +0000
+Reviewed-on: https://review.openstack.org/416232
+Project: openstack/deb-ironic
+Branch: refs/heads/master
