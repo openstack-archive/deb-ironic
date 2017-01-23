@@ -1,0 +1,9 @@
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 20 Jan 2017 20:51:43 +0000
+Reviewed-on: https://review.openstack.org/423509
+Project: openstack/deb-ironic
+Branch: refs/heads/master
