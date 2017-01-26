@@ -1,0 +1,14 @@
+Code-Review+1: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+1: hongkai <hongkai@awcloud.com>
+Code-Review+1: Ricardo Araújo Santos <ricardo@lsd.ufcg.edu.br>
+Code-Review+1: Joanna Taryma <joanna.taryma@intel.com>
+Code-Review+1: wanghongtaozz <wanghongtaozz@inspur.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 25 Jan 2017 19:08:46 +0000
+Reviewed-on: https://review.openstack.org/340596
+Project: openstack/deb-ironic
+Branch: refs/heads/master
