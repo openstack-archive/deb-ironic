@@ -1,0 +1,10 @@
+Code-Review+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 01 Feb 2017 23:08:34 +0000
+Reviewed-on: https://review.openstack.org/425124
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/newton
