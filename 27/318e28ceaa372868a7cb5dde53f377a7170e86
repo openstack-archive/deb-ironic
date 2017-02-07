@@ -1,0 +1,11 @@
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Rushil Chugh <rushil.chugh@gmail.com>
+Code-Review+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 06 Feb 2017 13:05:30 +0000
+Reviewed-on: https://review.openstack.org/428998
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/newton
