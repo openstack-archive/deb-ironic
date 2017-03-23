@@ -1,0 +1,9 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 15 Feb 2017 00:33:46 +0000
+Reviewed-on: https://review.openstack.org/433930
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/ocata

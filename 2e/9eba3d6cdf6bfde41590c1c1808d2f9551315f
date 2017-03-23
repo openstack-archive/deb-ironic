@@ -1,0 +1,14 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: John L. Villalovos <openstack.org@sodarock.com>
+Code-Review+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Pavlo Shchelokovskyy <pshchelokovskyy@mirantis.com>
+Code-Review+1: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 23 Mar 2017 10:16:27 +0000
+Reviewed-on: https://review.openstack.org/443800
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/ocata
