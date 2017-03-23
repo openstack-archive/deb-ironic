@@ -1,0 +1,13 @@
+Code-Review+2: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+1: Rushil Chugh <rushil.chugh@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+1: Charlle Daniel <charlledaniel@lsd.ufcg.edu.br>
+Workflow+1: Jay Faulkner <jay@jvf.cc>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 21 Feb 2017 20:34:58 +0000
+Reviewed-on: https://review.openstack.org/429009
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/newton
