@@ -1,0 +1,9 @@
+Code-Review+2: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 06 Mar 2017 23:39:20 +0000
+Reviewed-on: https://review.openstack.org/442113
+Project: openstack/deb-ironic
+Branch: refs/heads/master

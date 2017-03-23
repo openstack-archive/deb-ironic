@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+2: Mario Villaplana <mario.villaplana@gmail.com>
+Workflow+1: Mario Villaplana <mario.villaplana@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 02 Mar 2017 23:07:45 +0000
+Reviewed-on: https://review.openstack.org/439054
+Project: openstack/deb-ironic
+Branch: refs/heads/master

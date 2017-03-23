@@ -1,0 +1,11 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+1: kangyufei <kangyf@inspur.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 14 Mar 2017 11:44:59 +0000
+Reviewed-on: https://review.openstack.org/388092
+Project: openstack/deb-ironic
+Branch: refs/heads/master

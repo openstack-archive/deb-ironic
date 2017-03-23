@@ -1,0 +1,12 @@
+Code-Review+2: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+1: Kyrylo Romanenko <kromanenko@mirantis.com>
+Code-Review+1: Serge Kovaleff <skovaleff@mirantis.com>
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Workflow+1: Ruby Loo <ruby.loo@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 22 Mar 2017 14:50:57 +0000
+Reviewed-on: https://review.openstack.org/440715
+Project: openstack/deb-ironic
+Branch: refs/heads/master

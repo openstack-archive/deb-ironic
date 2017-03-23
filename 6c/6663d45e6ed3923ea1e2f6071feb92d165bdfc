@@ -1,0 +1,11 @@
+Code-Review+1: Joanna Taryma <joanna.taryma@intel.com>
+Code-Review+1: kangyufei <kangyf@inspur.com>
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 14 Mar 2017 09:55:50 +0000
+Reviewed-on: https://review.openstack.org/445182
+Project: openstack/deb-ironic
+Branch: refs/heads/master
