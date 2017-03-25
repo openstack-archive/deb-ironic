@@ -177,6 +177,7 @@ Description: bare metal hypervisor API for OpenStack - common files
 Package: ironic-api
 Architecture: all
 Depends: ironic-common,
+         net-tools,
          python-openstackclient,
          q-text-as-data,
          ${misc:Depends},
