@@ -1,0 +1,10 @@
+Code-Review+2: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 29 Mar 2017 21:29:36 +0000
+Reviewed-on: https://review.openstack.org/451008
+Project: openstack/deb-ironic
+Branch: refs/heads/master
