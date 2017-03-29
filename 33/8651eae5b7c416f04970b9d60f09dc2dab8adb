@@ -1,0 +1,14 @@
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+2: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+1: John L. Villalovos <openstack.org@sodarock.com>
+Code-Review+2: Vasyl Saienko <vsaienko@mirantis.com>
+Workflow+1: Lucas Alvares Gomes <lucasagomes@gmail.com>
+Code-Review+1: Tuan Luong-Anh <tuanla@vn.fujitsu.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 29 Mar 2017 12:02:42 +0000
+Reviewed-on: https://review.openstack.org/449577
+Project: openstack/deb-ironic
+Branch: refs/heads/master
