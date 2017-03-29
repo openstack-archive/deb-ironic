@@ -1,0 +1,13 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Kyrylo Romanenko <kromanenko@mirantis.com>
+Code-Review+1: Tuan Luong-Anh <tuanla@vn.fujitsu.com>
+Code-Review+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+2: Mario Villaplana <mario.villaplana@gmail.com>
+Workflow+1: Mario Villaplana <mario.villaplana@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 29 Mar 2017 20:28:32 +0000
+Reviewed-on: https://review.openstack.org/424723
+Project: openstack/deb-ironic
+Branch: refs/heads/master
