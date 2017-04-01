@@ -6,7 +6,7 @@ Uploaders: Thomas Goirand <zigo@debian.org>,
 Build-Depends: debhelper (>= 10),
                dh-python,
                dh-systemd,
-               openstack-pkg-tools (>= 52~),
+               openstack-pkg-tools (>= 54~),
                po-debconf,
                python-all,
                python-pbr (>= 1.8),
@@ -177,7 +177,6 @@ Description: bare metal hypervisor API for OpenStack - common files
 Package: ironic-api
 Architecture: all
 Depends: ironic-common,
-         net-tools,
          python-openstackclient,
          q-text-as-data,
          ${misc:Depends},
