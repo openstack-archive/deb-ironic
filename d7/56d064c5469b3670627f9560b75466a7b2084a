@@ -1,0 +1,10 @@
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+2: Mario Villaplana <mario.villaplana@gmail.com>
+Workflow+1: Mario Villaplana <mario.villaplana@gmail.com>
+Code-Review+1: Rajini Ram <rajini.ram@dell.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 04 Apr 2017 23:04:18 +0000
+Reviewed-on: https://review.openstack.org/453300
+Project: openstack/deb-ironic
+Branch: refs/heads/master
