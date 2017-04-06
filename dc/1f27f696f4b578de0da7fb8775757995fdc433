@@ -1,0 +1,10 @@
+Code-Review+2: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Apr 2017 16:49:01 +0000
+Reviewed-on: https://review.openstack.org/453878
+Project: openstack/deb-ironic
+Branch: refs/heads/master
