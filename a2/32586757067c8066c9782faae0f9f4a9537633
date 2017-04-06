@@ -1,0 +1,10 @@
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Code-Review+1: Solio Sarabia <solio.sarabia@intel.com>
+Code-Review+2: Mario Villaplana <mario.villaplana@gmail.com>
+Workflow+1: Mario Villaplana <mario.villaplana@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Apr 2017 22:36:56 +0000
+Reviewed-on: https://review.openstack.org/447642
+Project: openstack/deb-ironic
+Branch: refs/heads/master
