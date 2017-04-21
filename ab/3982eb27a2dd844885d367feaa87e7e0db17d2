@@ -1,0 +1,9 @@
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Workflow+1: Vladyslav Drok <vdrok@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 21 Apr 2017 15:12:22 +0000
+Reviewed-on: https://review.openstack.org/458747
+Project: openstack/deb-ironic
+Branch: refs/heads/master
