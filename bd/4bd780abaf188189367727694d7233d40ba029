@@ -1,0 +1,11 @@
+Code-Review+1: Ricardo Araújo Santos <ricardo@lsd.ufcg.edu.br>
+Code-Review+2: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 25 Apr 2017 16:28:10 +0000
+Reviewed-on: https://review.openstack.org/455427
+Project: openstack/deb-ironic
+Branch: refs/heads/master
