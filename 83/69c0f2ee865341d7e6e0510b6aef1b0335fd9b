@@ -1,0 +1,11 @@
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Tuan Luong-Anh <tuanla@vn.fujitsu.com>
+Code-Review+1: Rushil Chugh <rushil.chugh@gmail.com>
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 27 Apr 2017 06:13:31 +0000
+Reviewed-on: https://review.openstack.org/459985
+Project: openstack/deb-ironic
+Branch: refs/heads/master
