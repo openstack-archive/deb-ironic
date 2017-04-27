@@ -1,0 +1,13 @@
+Code-Review+2: Yuriy Zveryanskyy <yzveryanskyy@mirantis.com>
+Code-Review+1: Madhuri Kumari <madhuri.kumari@intel.com>
+Code-Review+1: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Rushil Chugh <rushil.chugh@gmail.com>
+Code-Review+1: Tuan Luong-Anh <tuanla@vn.fujitsu.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 27 Apr 2017 09:10:52 +0000
+Reviewed-on: https://review.openstack.org/442537
+Project: openstack/deb-ironic
+Branch: refs/heads/master
