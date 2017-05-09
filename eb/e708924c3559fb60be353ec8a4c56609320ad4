@@ -1,0 +1,13 @@
+Code-Review+1: Ricardo Araújo Santos <ricardo@lsd.ufcg.edu.br>
+Code-Review+1: Fellype Cavalcante <fellypefca@lsd.ufcg.edu.br>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: John L. Villalovos <openstack.org@sodarock.com>
+Code-Review+1: Stenio Araujo <stenioaraujo@lsd.ufcg.edu.br>
+Code-Review+2: Jim Rollenhagen <jim@jimrollenhagen.com>
+Workflow+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 09 May 2017 20:31:49 +0000
+Reviewed-on: https://review.openstack.org/463557
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/newton
