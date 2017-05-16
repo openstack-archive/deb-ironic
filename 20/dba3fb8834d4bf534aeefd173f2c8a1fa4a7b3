@@ -1,0 +1,10 @@
+Code-Review+1: Rushil Chugh <rushil.chugh@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 16 May 2017 15:47:02 +0000
+Reviewed-on: https://review.openstack.org/464383
+Project: openstack/deb-ironic
+Branch: refs/heads/master
