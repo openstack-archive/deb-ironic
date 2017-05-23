@@ -1,0 +1,11 @@
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+1: Ricardo Araújo Santos <ricardo@lsd.ufcg.edu.br>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 23 May 2017 14:02:22 +0000
+Reviewed-on: https://review.openstack.org/459325
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/ocata
