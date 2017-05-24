@@ -1,0 +1,10 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Fellype Cavalcante <fellypefca@lsd.ufcg.edu.br>
+Workflow+1: Vladyslav Drok <vdrok@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 24 May 2017 22:49:17 +0000
+Reviewed-on: https://review.openstack.org/467148
+Project: openstack/deb-ironic
+Branch: refs/heads/master
