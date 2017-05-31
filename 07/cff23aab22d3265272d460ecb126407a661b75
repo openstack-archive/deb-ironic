@@ -1,0 +1,10 @@
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Tuan Luong-Anh <tuanla@vn.fujitsu.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 31 May 2017 14:55:12 +0000
+Reviewed-on: https://review.openstack.org/468925
+Project: openstack/deb-ironic
+Branch: refs/heads/stable/newton
