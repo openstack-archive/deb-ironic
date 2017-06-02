@@ -1,0 +1,12 @@
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Hironori Shiina <shiina.hironori@jp.fujitsu.com>
+Code-Review+1: Nisha Agarwal <agarwalnisha1980@gmail.com>
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Workflow+1: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+1: Fellype Cavalcante <fellypefca@lsd.ufcg.edu.br>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Jun 2017 03:33:07 +0000
+Reviewed-on: https://review.openstack.org/465484
+Project: openstack/deb-ironic
+Branch: refs/heads/master
