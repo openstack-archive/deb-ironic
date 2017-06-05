@@ -1,0 +1,9 @@
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 05 Jun 2017 12:13:28 +0000
+Reviewed-on: https://review.openstack.org/470807
+Project: openstack/deb-ironic
+Branch: refs/heads/master
