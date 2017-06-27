@@ -1,0 +1,9 @@
+Code-Review+2: John L. Villalovos <openstack.org@sodarock.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: John L. Villalovos <openstack.org@sodarock.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 27 Jun 2017 22:43:18 +0000
+Reviewed-on: https://review.openstack.org/477936
+Project: openstack/deb-ironic
+Branch: refs/heads/master
