@@ -25,7 +25,7 @@ from oslo_utils import uuidutils
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.conductor import base_manager
-from ironic.conductor import manager
+from ironic.conductor import os_primary
 from ironic.conductor import notification_utils
 from ironic.conductor import task_manager
 from ironic.drivers import fake_hardware
@@ -318,7 +318,7 @@ class KeepAliveTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
 class ManagerSpawnWorkerTestCase(tests_base.TestCase):
     def setUp(self):
         super(ManagerSpawnWorkerTestCase, self).setUp()
-        self.service = manager.ConductorManager('hostname', 'test-topic')
+        self.service = os_primary.ConductorManager('hostname', 'test-topic')
         self.executor = mock.Mock(spec=futurist.GreenThreadPoolExecutor)
         self.service._executor = self.executor
 

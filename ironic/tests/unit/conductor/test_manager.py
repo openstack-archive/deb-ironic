@@ -36,7 +36,7 @@ from ironic.common import exception
 from ironic.common import images
 from ironic.common import states
 from ironic.common import swift
-from ironic.conductor import manager
+from ironic.conductor import os_primary
 from ironic.conductor import notification_utils
 from ironic.conductor import task_manager
 from ironic.conductor import utils as conductor_utils
@@ -844,7 +844,7 @@ class VendorPassthruTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
                          exc.exc_info[0])
 
     @mock.patch.object(driver_factory, 'get_interface')
-    @mock.patch.object(manager.ConductorManager, '_spawn_worker')
+    @mock.patch.object(os_primary.ConductorManager, '_spawn_worker')
     def _test_driver_vendor_passthru_sync(self, is_hw_type, mock_spawn,
                                           mock_get_if):
         expected = {'foo': 'bar'}
@@ -888,7 +888,7 @@ class VendorPassthruTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
     def test_driver_vendor_passthru_sync_hw_type(self):
         self._test_driver_vendor_passthru_sync(True)
 
-    @mock.patch.object(manager.ConductorManager, '_spawn_worker')
+    @mock.patch.object(os_primary.ConductorManager, '_spawn_worker')
     def test_driver_vendor_passthru_async(self, mock_spawn):
         self.driver.vendor = mock.Mock(spec=drivers_base.VendorInterface)
         test_method = mock.MagicMock()
@@ -1160,7 +1160,7 @@ class ServiceDoNodeDeployTestCase(mgr_utils.ServiceSetUpMixin,
 
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy')
     def test_do_node_deploy_rebuild_active_state(self, mock_deploy, mock_iwdi):
-        # This tests manager.do_node_deploy(), the 'else' path of
+        # This tests os_primary.do_node_deploy(), the 'else' path of
         # 'if new_state == states.DEPLOYDONE'. The node's states
         # aren't changed in this case.
         mock_iwdi.return_value = True
@@ -1351,7 +1351,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         task = task_manager.TaskManager(self.context, node.uuid)
 
         self.assertRaises(exception.InstanceDeployFailure,
-                          manager.do_node_deploy, task,
+                          os_primary.do_node_deploy, task,
                           self.service.conductor.id)
         node.refresh()
         self.assertEqual(states.DEPLOYFAIL, node.provision_state)
@@ -1374,7 +1374,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         task = task_manager.TaskManager(self.context, node.uuid)
 
         self.assertRaises(exception.InstanceDeployFailure,
-                          manager.do_node_deploy, task,
+                          os_primary.do_node_deploy, task,
                           self.service.conductor.id)
         node.refresh()
         self.assertEqual(states.DEPLOYFAIL, node.provision_state)
@@ -1385,7 +1385,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertIsNotNone(node.last_error)
         mock_deploy.assert_called_once_with(mock.ANY)
 
-    @mock.patch.object(manager, '_store_configdrive')
+    @mock.patch.object(os_primary, '_store_configdrive')
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy')
     def test__do_node_deploy_ok(self, mock_deploy, mock_store):
         self._start_service()
@@ -1396,7 +1396,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
                                           target_provision_state=states.ACTIVE)
         task = task_manager.TaskManager(self.context, node.uuid)
 
-        manager.do_node_deploy(task, self.service.conductor.id)
+        os_primary.do_node_deploy(task, self.service.conductor.id)
         node.refresh()
         self.assertEqual(states.ACTIVE, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
@@ -1405,7 +1405,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         # assert _store_configdrive wasn't invoked
         self.assertFalse(mock_store.called)
 
-    @mock.patch.object(manager, '_store_configdrive')
+    @mock.patch.object(os_primary, '_store_configdrive')
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.deploy')
     def test__do_node_deploy_ok_configdrive(self, mock_deploy, mock_store):
         self._start_service()
@@ -1417,7 +1417,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         task = task_manager.TaskManager(self.context, node.uuid)
         configdrive = 'foo'
 
-        manager.do_node_deploy(task, self.service.conductor.id,
+        os_primary.do_node_deploy(task, self.service.conductor.id,
                                configdrive=configdrive)
         node.refresh()
         self.assertEqual(states.ACTIVE, node.provision_state)
@@ -1442,7 +1442,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
 
         mock_swift.side_effect = exception.SwiftOperationError('error')
         self.assertRaises(exception.SwiftOperationError,
-                          manager.do_node_deploy, task,
+                          os_primary.do_node_deploy, task,
                           self.service.conductor.id,
                           configdrive=b'fake config drive')
         node.refresh()
@@ -1462,7 +1462,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         task = task_manager.TaskManager(self.context, node.uuid)
         task.process_event('deploy')
 
-        manager.do_node_deploy(task, self.service.conductor.id)
+        os_primary.do_node_deploy(task, self.service.conductor.id)
         node.refresh()
         self.assertEqual(states.ACTIVE, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
@@ -1568,7 +1568,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertEqual({}, node.instance_info)
         mock_tear_down.assert_called_once_with(mock.ANY)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._do_node_clean')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._do_node_clean')
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.tear_down')
     def test__do_node_tear_down_ok(self, mock_tear_down, mock_clean):
         # test when driver.deploy.tear_down succeeds
@@ -1594,7 +1594,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         mock_tear_down.assert_called_once_with(mock.ANY)
         mock_clean.assert_called_once_with(mock.ANY)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._do_node_clean')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._do_node_clean')
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.tear_down')
     def _test_do_node_tear_down_from_state(self, init_state, mock_tear_down,
                                            mock_clean):
@@ -1629,7 +1629,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
     #             deletion -- not that such a node's deletion could later be
     #             completed.
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_do_node_tear_down_worker_pool_full(self, mock_spawn):
         prv_state = states.ACTIVE
         tgt_prv_state = states.NOSTATE
@@ -1661,7 +1661,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_do_provisioning_action_worker_pool_full(self, mock_spawn):
         prv_state = states.MANAGEABLE
         tgt_prv_state = states.NOSTATE
@@ -1687,7 +1687,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_do_provision_action_provide(self, mock_spawn):
         # test when a node is cleaned going from manageable to available
         node = obj_utils.create_test_node(
@@ -1704,7 +1704,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertIsNone(node.last_error)
         mock_spawn.assert_called_with(self.service._do_node_clean, mock.ANY)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_do_provision_action_manage(self, mock_spawn):
         # test when a node is verified going from enroll to manageable
         node = obj_utils.create_test_node(
@@ -1721,7 +1721,7 @@ class DoNodeDeployTearDownTestCase(mgr_utils.ServiceSetUpMixin,
         self.assertIsNone(node.last_error)
         mock_spawn.assert_called_with(self.service._do_node_verify, mock.ANY)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def _do_provision_action_abort(self, mock_spawn, manual=False):
         tgt_prov_state = states.MANAGEABLE if manual else states.AVAILABLE
         node = obj_utils.create_test_node(
@@ -1878,7 +1878,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         node.refresh()
         self.assertNotIn('clean_steps', node.driver_internal_info)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.validate')
     @mock.patch('ironic.drivers.modules.fake.FakePower.validate')
     def test_do_node_clean_ok(self, mock_power_valid, mock_network_valid,
@@ -1900,7 +1900,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         self.assertNotIn('clean_steps', node.driver_internal_info)
         self.assertIsNone(node.last_error)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.validate')
     @mock.patch('ironic.drivers.modules.fake.FakePower.validate')
     def test_do_node_clean_worker_pool_full(self, mock_power_valid,
@@ -1931,7 +1931,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         self.assertIsNotNone(node.last_error)
         self.assertIsNone(node.reservation)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_continue_node_clean_worker_pool_full(self, mock_spawn):
         # Test the appropriate exception is raised if the worker pool is full
         prv_state = states.CLEANWAIT
@@ -1948,7 +1948,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
                           self.service.continue_node_clean,
                           self.context, node.uuid)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_continue_node_clean_wrong_state(self, mock_spawn):
         # Test the appropriate exception is raised if node isn't already
         # in CLEANWAIT state
@@ -1972,7 +1972,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         # Verify reservation has been cleared.
         self.assertIsNone(node.reservation)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def _continue_node_clean(self, return_state, mock_spawn, manual=False):
         # test a node can continue cleaning via RPC
         prv_state = return_state
@@ -2000,7 +2000,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
     def test_continue_node_clean_manual(self):
         self._continue_node_clean(states.CLEANWAIT, manual=True)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def _continue_node_clean_skip_step(self, mock_spawn, skip=True):
         # test that skipping current step mechanism works
         driver_info = {'clean_steps': self.clean_steps,
@@ -2226,7 +2226,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
                                             invalid_exc=invalid)
 
     @mock.patch.object(conductor_utils, 'set_node_cleaning_steps')
-    @mock.patch('ironic.conductor.manager.ConductorManager.'
+    @mock.patch('ironic.conductor.os_primary.ConductorManager.'
                 '_do_next_clean_step')
     @mock.patch('ironic.drivers.modules.network.flat.FlatNetwork.validate')
     @mock.patch('ironic.drivers.modules.fake.FakePower.validate')
@@ -2477,7 +2477,7 @@ class DoNodeCleanTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
     def test__do_next_clean_step_manual_execute_fail(self):
         self._do_next_clean_step_execute_fail(manual=True)
 
-    @mock.patch.object(manager, 'LOG', autospec=True)
+    @mock.patch.object(os_primary, 'LOG', autospec=True)
     @mock.patch('ironic.drivers.modules.fake.FakeDeploy.execute_clean_step',
                 autospec=True)
     @mock.patch('ironic.drivers.modules.fake.FakePower.execute_clean_step',
@@ -2824,9 +2824,9 @@ class MiscTestCase(mgr_utils.ServiceSetUpMixin, mgr_utils.CommonMixIn,
 
             mock_iwdi.assert_called_once_with(self.context, node.instance_info)
 
-    @mock.patch.object(manager.ConductorManager, '_fail_if_in_state',
+    @mock.patch.object(os_primary.ConductorManager, '_fail_if_in_state',
                        autospec=True)
-    @mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+    @mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
     @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
     def test_iter_nodes(self, mock_nodeinfo_list, mock_mapped,
                         mock_fail_if_state):
@@ -3533,8 +3533,8 @@ class UpdatePortTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         self.assertFalse(get_sensors_data_mock.called)
         self.assertFalse(validate_mock.called)
 
-    @mock.patch.object(manager.ConductorManager, '_spawn_worker')
-    @mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+    @mock.patch.object(os_primary.ConductorManager, '_spawn_worker')
+    @mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
     @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
     def test___send_sensor_data(self, get_nodeinfo_list_mock,
                                 _mapped_to_this_conductor_mock,
@@ -3552,8 +3552,8 @@ class UpdatePortTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
                                       self.context,
                                       mock.ANY)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
-    @mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
+    @mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
     @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
     def test___send_sensor_data_multiple_workers(
             self, get_nodeinfo_list_mock, _mapped_to_this_conductor_mock,
@@ -3576,13 +3576,13 @@ class UpdatePortTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         self.assertEqual(number_of_workers,
                          mock_spawn.call_count)
 
-    @mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+    @mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
     @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
     def test___send_sensor_data_disabled(self, get_nodeinfo_list_mock,
                                          _mapped_to_this_conductor_mock):
         self._start_service()
         get_nodeinfo_list_mock.reset_mock()
-        with mock.patch.object(manager.ConductorManager,
+        with mock.patch.object(os_primary.ConductorManager,
                                '_spawn_worker') as _spawn_mock:
             self.service._send_sensor_data(self.context)
             self.assertFalse(get_nodeinfo_list_mock.called)
@@ -4112,7 +4112,7 @@ class RaidHardwareTypeTestCases(RaidTestCases):
 class ManagerDoSyncPowerStateTestCase(db_base.DbTestCase):
     def setUp(self):
         super(ManagerDoSyncPowerStateTestCase, self).setUp()
-        self.service = manager.ConductorManager('hostname', 'test-topic')
+        self.service = os_primary.ConductorManager('hostname', 'test-topic')
         self.driver = mock.Mock(spec_set=drivers_base.BaseDriver)
         self.power = self.driver.power
         self.node = obj_utils.create_test_node(
@@ -4140,7 +4140,7 @@ class ManagerDoSyncPowerStateTestCase(db_base.DbTestCase):
                 self.power.get_power_state.side_effect = new_power_state
             else:
                 self.power.get_power_state.return_value = new_power_state
-            count = manager.do_sync_power_state(
+            count = os_primary.do_sync_power_state(
                 self.task, self.service.power_state_sync_count[self.node.uuid])
             self.service.power_state_sync_count[self.node.uuid] = count
 
@@ -4388,15 +4388,15 @@ class ManagerDoSyncPowerStateTestCase(db_base.DbTestCase):
         self.task.upgrade_lock.assert_called_once_with()
 
 
-@mock.patch.object(manager, 'do_sync_power_state')
+@mock.patch.object(os_primary, 'do_sync_power_state')
 @mock.patch.object(task_manager, 'acquire')
-@mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+@mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
 @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
 class ManagerSyncPowerStatesTestCase(mgr_utils.CommonMixIn,
                                      db_base.DbTestCase):
     def setUp(self):
         super(ManagerSyncPowerStatesTestCase, self).setUp()
-        self.service = manager.ConductorManager('hostname', 'test-topic')
+        self.service = os_primary.ConductorManager('hostname', 'test-topic')
         self.service.dbapi = self.dbapi
         self.node = self._create_node()
         self.filters = {'maintenance': False}
@@ -4620,14 +4620,14 @@ class ManagerSyncPowerStatesTestCase(mgr_utils.CommonMixIn,
 
 
 @mock.patch.object(task_manager, 'acquire')
-@mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+@mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
 @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
 class ManagerCheckDeployTimeoutsTestCase(mgr_utils.CommonMixIn,
                                          db_base.DbTestCase):
     def setUp(self):
         super(ManagerCheckDeployTimeoutsTestCase, self).setUp()
         self.config(deploy_callback_timeout=300, group='conductor')
-        self.service = manager.ConductorManager('hostname', 'test-topic')
+        self.service = os_primary.ConductorManager('hostname', 'test-topic')
         self.service.dbapi = self.dbapi
 
         self.node = self._create_node(provision_state=states.DEPLOYWAIT,
@@ -4862,7 +4862,7 @@ class ManagerTestProperties(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
 
     def setUp(self):
         super(ManagerTestProperties, self).setUp()
-        self.service = manager.ConductorManager('test-host', 'test-topic')
+        self.service = os_primary.ConductorManager('test-host', 'test-topic')
 
     def _check_driver_properties(self, driver, expected):
         mgr_utils.mock_the_extension_manager(driver=driver)
@@ -4987,14 +4987,14 @@ class ManagerTestHardwareTypeProperties(mgr_utils.ServiceSetUpMixin,
 
 
 @mock.patch.object(task_manager, 'acquire')
-@mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+@mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
 @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
 class ManagerSyncLocalStateTestCase(mgr_utils.CommonMixIn, db_base.DbTestCase):
 
     def setUp(self):
         super(ManagerSyncLocalStateTestCase, self).setUp()
 
-        self.service = manager.ConductorManager('hostname', 'test-topic')
+        self.service = os_primary.ConductorManager('hostname', 'test-topic')
 
         self.service.conductor = mock.Mock()
         self.service.dbapi = self.dbapi
@@ -5156,7 +5156,7 @@ class StoreConfigDriveTestCase(tests_base.TestCase):
                                             instance_info=None)
 
     def test_store_configdrive(self, mock_swift):
-        manager._store_configdrive(self.node, 'foo')
+        os_primary._store_configdrive(self.node, 'foo')
         expected_instance_info = {'configdrive': 'foo'}
         self.assertEqual(expected_instance_info, self.node.instance_info)
         self.assertFalse(mock_swift.called)
@@ -5177,7 +5177,7 @@ class StoreConfigDriveTestCase(tests_base.TestCase):
                           group='conductor')
         mock_swift.return_value.get_temp_url.return_value = 'http://1.2.3.4'
 
-        manager._store_configdrive(self.node, b'foo')
+        os_primary._store_configdrive(self.node, b'foo')
 
         mock_swift.assert_called_once_with()
         mock_swift.return_value.create_object.assert_called_once_with(
@@ -5198,7 +5198,7 @@ class NodeInspectHardware(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
                                           provision_state=states.INSPECTING)
         task = task_manager.TaskManager(self.context, node.uuid)
         mock_inspect.return_value = states.MANAGEABLE
-        manager._do_inspect_hardware(task)
+        os_primary._do_inspect_hardware(task)
         node.refresh()
         self.assertEqual(states.MANAGEABLE, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
@@ -5212,14 +5212,14 @@ class NodeInspectHardware(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
                                           provision_state=states.INSPECTING)
         task = task_manager.TaskManager(self.context, node.uuid)
         mock_inspect.return_value = states.INSPECTING
-        manager._do_inspect_hardware(task)
+        os_primary._do_inspect_hardware(task)
         node.refresh()
         self.assertEqual(states.INSPECTING, node.provision_state)
         self.assertEqual(states.NOSTATE, node.target_provision_state)
         self.assertIsNone(node.last_error)
         mock_inspect.assert_called_once_with(mock.ANY)
 
-    @mock.patch.object(manager, 'LOG')
+    @mock.patch.object(os_primary, 'LOG')
     @mock.patch('ironic.drivers.modules.fake.FakeInspect.inspect_hardware')
     def test_inspect_hardware_return_other_state(self, mock_inspect, log_mock):
         self._start_service()
@@ -5228,7 +5228,7 @@ class NodeInspectHardware(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         task = task_manager.TaskManager(self.context, node.uuid)
         mock_inspect.return_value = None
         self.assertRaises(exception.HardwareInspectionFailure,
-                          manager._do_inspect_hardware, task)
+                          os_primary._do_inspect_hardware, task)
         node.refresh()
         self.assertEqual(states.INSPECTFAIL, node.provision_state)
         self.assertEqual(states.MANAGEABLE, node.target_provision_state)
@@ -5253,7 +5253,7 @@ class NodeInspectHardware(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         self.assertEqual(states.MANAGEABLE, node.target_provision_state)
         self.assertIsNotNone(node.last_error)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_inspect_hardware_worker_pool_full(self, mock_spawn):
         prv_state = states.MANAGEABLE
         tgt_prv_state = states.NOSTATE
@@ -5311,7 +5311,7 @@ class NodeInspectHardware(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         task = task_manager.TaskManager(self.context, node.uuid)
 
         self.assertRaisesRegex(exception.HardwareInspectionFailure, '^test$',
-                               manager._do_inspect_hardware, task)
+                               os_primary._do_inspect_hardware, task)
         node.refresh()
         self.assertEqual(states.INSPECTFAIL, node.provision_state)
         self.assertEqual(states.MANAGEABLE, node.target_provision_state)
@@ -5330,7 +5330,7 @@ class NodeInspectHardware(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
 
         self.assertRaisesRegex(exception.HardwareInspectionFailure,
                                'Unexpected exception of type RuntimeError: x',
-                               manager._do_inspect_hardware, task)
+                               os_primary._do_inspect_hardware, task)
         node.refresh()
         self.assertEqual(states.INSPECTFAIL, node.provision_state)
         self.assertEqual(states.MANAGEABLE, node.target_provision_state)
@@ -5340,14 +5340,14 @@ class NodeInspectHardware(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
 
 
 @mock.patch.object(task_manager, 'acquire')
-@mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+@mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
 @mock.patch.object(dbapi.IMPL, 'get_nodeinfo_list')
 class ManagerCheckInspectTimeoutsTestCase(mgr_utils.CommonMixIn,
                                           db_base.DbTestCase):
     def setUp(self):
         super(ManagerCheckInspectTimeoutsTestCase, self).setUp()
         self.config(inspect_timeout=300, group='conductor')
-        self.service = manager.ConductorManager('hostname', 'test-topic')
+        self.service = os_primary.ConductorManager('hostname', 'test-topic')
         self.service.dbapi = self.dbapi
 
         self.node = self._create_node(provision_state=states.INSPECTING,
@@ -5608,8 +5608,8 @@ class DestroyPortgroupTestCase(mgr_utils.ServiceSetUpMixin,
 
 
 @mgr_utils.mock_record_keepalive
-@mock.patch.object(manager.ConductorManager, '_fail_if_in_state')
-@mock.patch.object(manager.ConductorManager, '_mapped_to_this_conductor')
+@mock.patch.object(os_primary.ConductorManager, '_fail_if_in_state')
+@mock.patch.object(os_primary.ConductorManager, '_mapped_to_this_conductor')
 @mock.patch.object(dbapi.IMPL, 'get_offline_conductors')
 class ManagerCheckDeployingStatusTestCase(mgr_utils.ServiceSetUpMixin,
                                           db_base.DbTestCase):
@@ -5706,7 +5706,7 @@ class TestIndirectionApiConductor(db_base.DbTestCase):
 
     def setUp(self):
         super(TestIndirectionApiConductor, self).setUp()
-        self.conductor = manager.ConductorManager('test-host', 'test-topic')
+        self.conductor = os_primary.ConductorManager('test-host', 'test-topic')
 
     def _test_object_action(self, is_classmethod, raise_exception,
                             return_object=False):
@@ -5976,7 +5976,7 @@ class DoNodeAdoptionTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         self.assertFalse(mock_start_console.called)
         self.assertTrue(mock_boot_validate.called)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_do_provisioning_action_adopt_node(self, mock_spawn):
         """Test an adoption request results in the node in ADOPTING"""
         node = obj_utils.create_test_node(
@@ -5992,7 +5992,7 @@ class DoNodeAdoptionTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         self.assertIsNone(node.last_error)
         mock_spawn.assert_called_with(self.service._do_adoption, mock.ANY)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_do_provisioning_action_adopt_node_retry(self, mock_spawn):
         """Test a retried adoption from ADOPTFAIL results in ADOPTING state"""
         node = obj_utils.create_test_node(
@@ -6023,7 +6023,7 @@ class DoNodeAdoptionTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         self.assertEqual(states.NOSTATE, node.target_provision_state)
         self.assertIsNone(node.last_error)
 
-    @mock.patch('ironic.conductor.manager.ConductorManager._spawn_worker')
+    @mock.patch('ironic.conductor.os_primary.ConductorManager._spawn_worker')
     def test_heartbeat(self, mock_spawn):
         """Test heartbeating."""
         node = obj_utils.create_test_node(
