@@ -24,7 +24,7 @@ from tempest.lib import exceptions as lib_exc
 from ironic_tempest_plugin import clients
 from ironic_tempest_plugin.common import utils
 from ironic_tempest_plugin.common import waiters as ironic_waiters
-from ironic_tempest_plugin import manager
+from ironic_tempest_plugin import os_primary
 
 CONF = config.CONF
 
@@ -71,7 +71,7 @@ class BaremetalProvisionStates(object):
     MANAGEABLE = 'manageable'
 
 
-class BaremetalScenarioTest(manager.ScenarioTest):
+class BaremetalScenarioTest(os_primary.ScenarioTest):
 
     credentials = ['primary', 'admin']
     min_microversion = None
@@ -93,7 +93,7 @@ class BaremetalScenarioTest(manager.ScenarioTest):
     def setup_clients(cls):
         super(BaremetalScenarioTest, cls).setup_clients()
 
-        cls.baremetal_client = clients.Manager().baremetal_client
+        cls.baremetal_client = clients.os_primary().baremetal_client
 
     @classmethod
     def resource_setup(cls):
