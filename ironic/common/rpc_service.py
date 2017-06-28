@@ -35,8 +35,8 @@ class RPCService(service.Service):
         self.host = host
         manager_module = importutils.try_import(manager_module)
         manager_class = getattr(manager_module, manager_class)
-        self.manager = manager_class(host, manager_module.MANAGER_TOPIC)
-        self.topic = self.manager.topic
+        self.os_primary = manager_class(host, manager_module.MANAGER_TOPIC)
+        self.topic = self.os_primary.topic
         self.rpcserver = None
         self.deregister = True
 
@@ -45,13 +45,13 @@ class RPCService(service.Service):
         admin_context = context.get_admin_context()
 
         target = messaging.Target(topic=self.topic, server=self.host)
-        endpoints = [self.manager]
+        endpoints = [self.os_primary]
         serializer = objects_base.IronicObjectSerializer()
         self.rpcserver = rpc.get_server(target, endpoints, serializer)
         self.rpcserver.start()
 
         self.handle_signal()
-        self.manager.init_host(admin_context)
+        self.os_primary.init_host(admin_context)
 
         LOG.info('Created RPC server for service %(service)s on host '
                  '%(host)s.',

@@ -27,7 +27,7 @@ from stevedore import dispatch
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.common import states
-from ironic.conductor import manager
+from ironic.conductor import os_primary
 from ironic import objects
 
 
@@ -177,7 +177,7 @@ class ServiceSetUpMixin(object):
         self.config(enabled_raid_interfaces=['fake', 'no-raid'])
         self.config(enabled_vendor_interfaces=['fake', 'no-vendor'])
 
-        self.service = manager.ConductorManager(self.hostname, 'test-topic')
+        self.service = os_primary.ConductorManager(self.hostname, 'test-topic')
         mock_the_extension_manager()
         self.driver = driver_factory.get_driver("fake")
 
@@ -199,6 +199,6 @@ class ServiceSetUpMixin(object):
 
 def mock_record_keepalive(func_or_class):
     return mock.patch.object(
-        manager.ConductorManager,
+        os_primary.ConductorManager,
         '_conductor_service_record_keepalive',
         lambda _: None)(func_or_class)

@@ -27,7 +27,7 @@ from ironic.common import hash_ring
 from ironic.common.i18n import _
 from ironic.common import release_mappings as versions
 from ironic.common import rpc
-from ironic.conductor import manager
+from ironic.conductor import os_primary
 from ironic.conf import CONF
 from ironic.objects import base as objects_base
 
@@ -102,7 +102,7 @@ class ConductorAPI(object):
         super(ConductorAPI, self).__init__()
         self.topic = topic
         if self.topic is None:
-            self.topic = manager.MANAGER_TOPIC
+            self.topic = os_primary.MANAGER_TOPIC
 
         target = messaging.Target(topic=self.topic,
                                   version='1.0')
