@@ -18,14 +18,14 @@ from tempest.lib.common.utils import data_utils
 from tempest.lib import decorators
 from tempest import test
 
-from ironic_tempest_plugin import manager
+from ironic_tempest_plugin import os_primary
 from ironic_tempest_plugin.tests.scenario import baremetal_manager
 
 CONF = config.CONF
 
 
 class BaremetalMultitenancy(baremetal_manager.BaremetalScenarioTest,
-                            manager.NetworkScenarioTest):
+                            os_primary.NetworkScenarioTest):
     """Check L2 isolation of baremetal instances in different tenants:
 
     * Create a keypair, network, subnet and router for the primary tenant
@@ -90,12 +90,12 @@ class BaremetalMultitenancy(baremetal_manager.BaremetalScenarioTest,
         fixed_ip2 = '10.0.100.5'
         keypair = self.create_keypair()
         network, subnet, router = self.create_tenant_network(
-            self.manager, tenant_cidr)
+            self.os_primary, tenant_cidr)
 
         # Boot 2 instances in the primary tenant network
         # and check L2 connectivity between them
         instance1, node1 = self.boot_instance(
-            clients=self.manager,
+            clients=self.os_primary,
             keypair=keypair,
             net_id=network['id'],
             fixed_ip=fixed_ip1

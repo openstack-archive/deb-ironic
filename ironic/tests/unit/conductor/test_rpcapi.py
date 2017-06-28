@@ -29,7 +29,7 @@ from ironic.common import boot_devices
 from ironic.common import exception
 from ironic.common import release_mappings
 from ironic.common import states
-from ironic.conductor import manager as conductor_manager
+from ironic.conductor import os_primary as conductor_manager
 from ironic.conductor import rpcapi as conductor_rpcapi
 from ironic import objects
 from ironic.tests import base as tests_base

@@ -25,7 +25,7 @@ from oslo_utils import uuidutils
 from ironic.common import driver_factory
 from ironic.common import exception
 from ironic.conductor import base_manager
-from ironic.conductor import manager
+from ironic.conductor import os_primary
 from ironic.conductor import notification_utils
 from ironic.conductor import task_manager
 from ironic.drivers import fake_hardware
@@ -76,7 +76,7 @@ class StartStopTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
         res = objects.Conductor.get_by_hostname(self.context, self.hostname)
         self.assertEqual(self.hostname, res['hostname'])
 
-    @mock.patch.object(manager.ConductorManager, 'init_host')
+    @mock.patch.object(os_primary.ConductorManager, 'init_host')
     def test_stop_uninitialized_conductor(self, mock_init):
         self._start_service()
         self.service.del_host()
@@ -318,7 +318,7 @@ class KeepAliveTestCase(mgr_utils.ServiceSetUpMixin, db_base.DbTestCase):
 class ManagerSpawnWorkerTestCase(tests_base.TestCase):
     def setUp(self):
         super(ManagerSpawnWorkerTestCase, self).setUp()
-        self.service = manager.ConductorManager('hostname', 'test-topic')
+        self.service = os_primary.ConductorManager('hostname', 'test-topic')
         self.executor = mock.Mock(spec=futurist.GreenThreadPoolExecutor)
         self.service._executor = self.executor
 
