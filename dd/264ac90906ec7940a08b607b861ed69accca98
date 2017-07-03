@@ -1,0 +1,13 @@
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+1: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Tuan Luong-Anh <tuanla@vn.fujitsu.com>
+Code-Review+1: Nisha Agarwal <agarwalnisha1980@gmail.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 03 Jul 2017 16:52:16 +0000
+Reviewed-on: https://review.openstack.org/470883
+Project: openstack/deb-ironic
+Branch: refs/heads/master
