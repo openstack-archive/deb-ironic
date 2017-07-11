@@ -1,0 +1,11 @@
+Code-Review+2: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+1: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 11 Jul 2017 12:19:10 +0000
+Reviewed-on: https://review.openstack.org/470406
+Project: openstack/deb-ironic
+Branch: refs/heads/master
