@@ -1,0 +1,14 @@
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Kyrylo Romanenko <kromanenko@mirantis.com>
+Code-Review+1: Tuan Luong-Anh <tuanla@vn.fujitsu.com>
+Workflow+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 13 Jul 2017 16:46:11 +0000
+Reviewed-on: https://review.openstack.org/482080
+Project: openstack/deb-ironic
+Branch: refs/heads/master
