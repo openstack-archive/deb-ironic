@@ -1,0 +1,11 @@
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Code-Review+1: Ricardo Araújo Santos <ricardo@lsd.ufcg.edu.br>
+Code-Review+1: Shivanand Tendulker <stendulker@gmail.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 14 Jul 2017 13:19:16 +0000
+Reviewed-on: https://review.openstack.org/479927
+Project: openstack/deb-ironic
+Branch: refs/heads/master
