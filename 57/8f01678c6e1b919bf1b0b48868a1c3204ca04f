@@ -1,0 +1,10 @@
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Code-Review+1: Rodrigo Farias de Macedo <rodrigofm@lsd.ufcg.edu.br>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Workflow+1: Dmitry Tantsur <divius.inside@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 15 Jul 2017 18:04:06 +0000
+Reviewed-on: https://review.openstack.org/482631
+Project: openstack/deb-ironic
+Branch: refs/heads/master
