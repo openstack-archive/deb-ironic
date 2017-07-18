@@ -1,0 +1,10 @@
+Code-Review+2: Ruby Loo <ruby.loo@intel.com>
+Code-Review+1: Madhuri Kumari <madhuri.kumari@intel.com>
+Code-Review+2: Julia Kreger <juliaashleykreger@gmail.com>
+Workflow+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 18 Jul 2017 18:58:29 +0000
+Reviewed-on: https://review.openstack.org/467734
+Project: openstack/deb-ironic
+Branch: refs/heads/master
