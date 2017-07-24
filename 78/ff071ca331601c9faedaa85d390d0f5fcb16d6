@@ -1,0 +1,11 @@
+Code-Review+1: Wang KaiFeng <kaifeng.w@gmail.com>
+Code-Review+2: Dmitry Tantsur <divius.inside@gmail.com>
+Code-Review+2: Sam Betts <sam@code-smash.net>
+Workflow+1: Sam Betts <sam@code-smash.net>
+Code-Review+2: Vladyslav Drok <vdrok@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 24 Jul 2017 20:30:03 +0000
+Reviewed-on: https://review.openstack.org/486124
+Project: openstack/deb-ironic
+Branch: refs/heads/master
