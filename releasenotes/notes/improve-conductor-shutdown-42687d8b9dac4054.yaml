@@ -1,4 +1,0 @@
----
-fixes:
-  - Shutdown of conductor process should take less time, as we do not wait for
-    completion of all periodic tasks.

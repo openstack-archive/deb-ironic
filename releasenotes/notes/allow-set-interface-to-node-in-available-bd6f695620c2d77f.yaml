@@ -1,4 +1,0 @@
----
-features:
-   - |
-     Allows updating hardware interfaces on nodes in the ``available`` state.

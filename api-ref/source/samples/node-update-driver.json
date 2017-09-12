@@ -1,7 +1,0 @@
-[
-   {
-      "op" : "replace",
-      "path" : "/driver",
-      "value" : "fake"
-   }
-]

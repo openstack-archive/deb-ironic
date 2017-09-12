@@ -1,6 +1,0 @@
----
-fixes:
-  - Fixes bug where ironic reboots the node
-    with deploy image instead of the user image
-    during second reboot in uefi boot mode when
-    ipxe is enabled.

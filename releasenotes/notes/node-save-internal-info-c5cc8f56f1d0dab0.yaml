@@ -1,5 +1,0 @@
----
-fixes:
-  - |
-    Fixes an issue where some internal information for a node was not being
-    saved to the database.

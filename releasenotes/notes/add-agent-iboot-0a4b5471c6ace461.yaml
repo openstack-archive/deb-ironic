@@ -1,4 +1,0 @@
----
-features:
-  - Adds an `agent_iboot` driver to allow use of the
-    Iboot power driver with the Agent deploy driver.

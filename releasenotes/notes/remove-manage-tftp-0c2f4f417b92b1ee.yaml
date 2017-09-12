@@ -1,4 +1,0 @@
----
-upgrade:
-  - Removes deprecated option "[agent]/manage_tftp". Configuration
-    files should instead use the "[agent]/manage_agent_boot" option.

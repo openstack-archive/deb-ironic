@@ -1,3 +1,0 @@
-fixes:
-  - The API now returns an appropriate error message when a chassis
-    description over 255 characters is specified.

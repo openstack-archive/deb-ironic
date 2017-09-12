@@ -1,3 +1,0 @@
-fixes:
-  - Fixes a bug with incorrect base socat command,
-    which prevented the usage of console.

@@ -1,5 +1,0 @@
----
-features:
-  - Adds an `agent_wol` driver that combines the
-    Agent deploy interface with the Wake-On-LAN
-    power driver.

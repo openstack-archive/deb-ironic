@@ -1,4 +1,0 @@
----
-features:
-  - Adds inspection support for the `agent_ipmitool` and
-    `agent_ssh` drivers.

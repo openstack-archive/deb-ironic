@@ -1,5 +1,0 @@
----
-fixes:
-  - Ensure node's target_provision_state is cleared when the node
-    is moved to a stable state, indicating that the state transition
-    is done.

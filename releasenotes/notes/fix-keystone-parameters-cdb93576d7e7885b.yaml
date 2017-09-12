@@ -1,4 +1,0 @@
----
-fixes:
-  - Fixes multi-region issue when region specified in config file
-    was ignored when getting keystone service url.

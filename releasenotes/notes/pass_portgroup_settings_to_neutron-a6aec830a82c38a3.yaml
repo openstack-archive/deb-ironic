@@ -1,5 +1,0 @@
----
-features:
-  - Passes port group information (``portgroup.mode`` and
-    ``portgroup.properties``) to Neutron via Neutron ``port.binding:profile``
-    field.

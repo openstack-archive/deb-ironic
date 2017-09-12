@@ -1,5 +1,0 @@
----
-fixes:
-  - Fixes a problem which causes the conductor to error out on startup
-    in case there's a duplicated entry in the enabled_drivers configuration
-    option.

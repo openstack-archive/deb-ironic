@@ -1,4 +1,0 @@
----
-deprecations:
-  - The ``agent_last_heartbeat`` field of ``driver_internal_info`` has been
-    removed from all agent drivers, since this field was unused by ironic.

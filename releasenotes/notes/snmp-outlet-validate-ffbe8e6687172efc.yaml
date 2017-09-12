@@ -1,3 +1,0 @@
----
-fixes:
-  - Adds validation of ``snmp_outlet`` parameter to SNMP driver.

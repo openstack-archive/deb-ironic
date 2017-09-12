@@ -1,4 +1,0 @@
----
-features:
-  - Add ``hctl`` to root device hints. HCTL is the SCSI address and
-    stands for Host, Channel, Target and Lun.

@@ -1,4 +1,0 @@
----
-features:
-  - Extend the root device hints to identify whether a disk is rotational
-    or not.

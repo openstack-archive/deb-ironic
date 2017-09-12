@@ -1,4 +1,0 @@
----
-features:
-  - Append request_id as ``Openstack-Request-Id`` header to the response.
-

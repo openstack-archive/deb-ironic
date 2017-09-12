@@ -1,5 +1,0 @@
----
-upgrade:
-  - Removes the deprecated decorator "driver_periodic_task",
-    Drivers should use the "periodics.periodic" decorator
-    from the futurist library instead.

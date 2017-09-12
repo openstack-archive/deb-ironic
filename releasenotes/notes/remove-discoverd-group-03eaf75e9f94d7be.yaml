@@ -1,5 +1,0 @@
----
-upgrade:
-  - Removes support for the deprecated "discoverd" group
-    for inspection options. Configuration files should use
-    the "inspector" group instead.
